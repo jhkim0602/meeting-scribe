@@ -1,0 +1,73 @@
+import { useEffect, useState } from 'react'
+import { MeetingPage } from './components/MeetingPage'
+import { SettingsDialog } from './components/SettingsDialog'
+import { Sidebar } from './components/Sidebar'
+import { Toasts } from './components/Toasts'
+import { Welcome } from './components/Welcome'
+import { useStore } from './lib/store'
+import { api } from './lib/api'
+
+function parseHash(): string | null {
+  const m = location.hash.match(/^#\/m\/([\w-]+)/)
+  return m ? m[1] : null
+}
+
+export default function App() {
+  const selectedId = useStore((s) => s.selectedId)
+  const sidebarOpen = useStore((s) => s.sidebarOpen)
+  const theme = useStore((s) => s.theme)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme === 'system' ? '' : theme
+  }, [theme])
+
+  useEffect(() => {
+    const st = useStore.getState()
+    st.loadHealth()
+    st.loadSettings()
+    st.loadMeetings().then(() => st.select(parseHash()))
+    const onHash = () => useStore.getState().select(parseHash())
+    window.addEventListener('hashchange', onHash)
+    return () => window.removeEventListener('hashchange', onHash)
+  }, [])
+
+  // 작업 진행률/엔진 상태 갱신
+  useEffect(() => {
+    let lastStatus: string | null = null
+    const tick = async () => {
+      const st = useStore.getState()
+      const { job, meeting, meetings, health } = st
+      if (meeting) {
+        const running = job && (job.status === 'queued' || job.status === 'running')
+        if (running || meeting.status === 'processing') {
+          const { job: j } = await api.job(meeting.id).catch(() => ({ job: null }))
+          if (j && useStore.getState().selectedId === meeting.id) {
+            useStore.setState({ job: j })
+            if ((j.status === 'done' || j.status === 'error' || j.status === 'cancelled') && lastStatus !== j.status) {
+              await st.refreshMeeting()
+              await st.refreshFinal()
+              await st.loadMeetings()
+              if (j.status === 'done') st.toast('원본이 준비됐어요. 회의 중 남긴 첨삭을 같은 자리에 옮겨 놓았어요.', 'success')
+              if (j.status === 'error') st.toast(`원본을 만들지 못했어요: ${j.error}`, 'error')
+            }
+            lastStatus = j.status
+          }
+        }
+      }
+      if (meetings.some((m) => m.status === 'processing')) st.loadMeetings()
+      if (!health || health.live.state === 'loading' || health.live.state === 'idle') st.loadHealth()
+    }
+    const id = setInterval(tick, 1500)
+    return () => clearInterval(id)
+  }, [])
+
+  return (
+    <div className={`app ${sidebarOpen ? '' : 'side-closed'}`}>
+      {sidebarOpen && <Sidebar onSettings={() => setSettingsOpen(true)} />}
+      <main className="main">{selectedId ? <MeetingPage /> : <Welcome />}</main>
+      {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
+      <Toasts />
+    </div>
+  )
+}
