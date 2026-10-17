@@ -56,6 +56,9 @@ class LiveSegmenter:
         self._incoming: list[np.ndarray] = []
         self._in_lock = threading.Lock()
         self._last_db = np.zeros(0)
+        # 진행 중 문장: 다시 받아 적는 데 걸린 시간(평균)과 그때의 말소리 양
+        self._partial_cost = 0.0
+        self._partial_mark: tuple[int, int] = (-1, -1)
 
     @property
     def pending_s(self) -> float:
@@ -164,17 +167,26 @@ class LiveSegmenter:
                 break
             cut_f = self._find_cut(speech) if len(speech) else None
 
+        # 진행 중 문장 다시 받아 적기 (가볍게):
+        # - 새 말소리가 없으면 건너뛴다 (말이 끝나 조용해지는 동안)
+        # - 받아 적는 데 오래 걸리면(긴 문장, 느린 기계) 그만큼 간격을 늘린다
         now = time.monotonic()
+        speech_frames = int(speech.sum()) if len(speech) else 0
+        interval = max(self.cfg.partial_every_s, min(4.0, self._partial_cost * 2.5))
         if (
             not force
             and self.engine is not None
             and self.pending_s >= self.cfg.min_partial_s
             and len(speech)
-            and float(speech.sum()) * FRAME_S >= self.cfg.min_speech_s
-            and now - self._last_partial >= self.cfg.partial_every_s
+            and speech_frames * FRAME_S >= self.cfg.min_speech_s
+            and now - self._last_partial >= interval
+            and (self.buf_start, speech_frames) != self._partial_mark
         ):
             self._last_partial = now
+            self._partial_mark = (self.buf_start, speech_frames)
             text = self._asr(self.buf, self._t(0))
+            cost = time.monotonic() - now
+            self._partial_cost = cost if self._partial_cost == 0 else 0.7 * self._partial_cost + 0.3 * cost
             if text:
                 events.append(LiveEvent("partial", self._t(0), self._t(len(self.buf)), text))
                 self._partial_shown = True

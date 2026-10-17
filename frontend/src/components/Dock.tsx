@@ -6,7 +6,7 @@ import { listMics, pauseRecording, resumeRecording, startRecording, stopRecordin
 import type { Meeting } from '../lib/api'
 import { getPrefStr, HINT_SEEN } from '../lib/prefs'
 import { bridges, useStore } from '../lib/store'
-import { fmtDuration, fmtTime } from '../lib/time'
+import { fmtDownload, fmtDuration, fmtTime } from '../lib/time'
 
 function useMicChoice() {
   const [mics, setMics] = useState<MediaDeviceInfo[]>([])
@@ -143,7 +143,7 @@ function MicPanel({ rect, onClose, choice, recording }: { rect: DOMRect; onClose
       {recording && health && (
         <dl className="mic-panel-status">
           <dt>실시간 받아쓰기</dt>
-          <dd>{health.live.state === 'ready' ? '준비됨' : health.live.state === 'error' ? '오류 · 녹음은 저장 중' : '준비 중 · 녹음은 저장 중'}</dd>
+          <dd>{health.live.state === 'ready' ? '준비됨' : health.live.state === 'error' ? '오류 · 녹음은 저장 중' : '준비 중 · 녹음은 저장 중'}{health.power === 'battery' ? ' · 배터리 절약' : ''}</dd>
           <dt>서버 연결</dt>
           <dd>{net === 'ok' ? '연결됨' : '다시 연결 중 · 소리는 모아 두는 중'}</dd>
           <dt>저장 공간</dt>
@@ -253,7 +253,12 @@ function Recorder({ choice }: { choice: MicChoice }) {
         </button>
       </div>
       <div className="rec-right">
-        {engine?.state === 'loading' && <span className="engine-note"><Loader2 size={12} className="spin" />모델 준비 중 · 녹음은 계속 저장돼요</span>}
+        {engine?.state === 'loading' && (
+          <span className="engine-note">
+            <Loader2 size={12} className="spin" />
+            {engine.download ? `모델 내려받는 중 ${fmtDownload(engine.download)} (처음 한 번만)` : '모델 준비 중'} · 녹음은 계속 저장돼요
+          </span>
+        )}
         {engine?.state === 'error' && <span className="engine-note err" title={engine.error || ''}>실시간 받아쓰기 오류 · 녹음은 저장 중</span>}
         {engine?.state === 'ready' && rec.status === 'recording' && showHint && <span className="engine-note ok">글자를 드래그하고 C를 누르면 댓글 · ? 단축키</span>}
         {rec.status === 'paused' && <span className="engine-note ok">일시정지 중에는 기록되지 않아요</span>}

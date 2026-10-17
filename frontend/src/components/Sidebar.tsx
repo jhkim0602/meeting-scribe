@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { createAndRecord } from '../hooks/recorder'
 import { api, type MeetingSummary, type SearchHit } from '../lib/api'
 import { useStore, type Theme } from '../lib/store'
-import { dateGroup, fmtDuration, fmtTime } from '../lib/time'
+import { dateGroup, fmtDuration, fmtTime, fmtDownload } from '../lib/time'
 
 export async function uploadFiles(files: FileList | File[]) {
   const st = useStore.getState()
@@ -173,7 +173,7 @@ export function Sidebar({ onSettings }: { onSettings: () => void }) {
         >
           <span className="dot" />
           {live ? (live.kind === 'mock' ? '시연용 엔진' : live.model.split('/').pop()) : '서버 연결 중'}
-          <em>{live?.state === 'ready' ? '준비됨' : live?.state === 'loading' ? '준비 중' : live?.state === 'error' ? '오류' : ''}</em>
+          <em>{live?.state === 'ready' ? '준비됨' : live?.state === 'loading' ? (live.download ? `내려받는 중 ${fmtDownload(live.download)}` : '준비 중') : live?.state === 'error' ? '오류' : live?.state === 'idle' ? '쉬는 중' : ''}</em>
         </button>
         <div className="foot-row">
           <div className="theme-switch">

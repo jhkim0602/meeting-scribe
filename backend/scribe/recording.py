@@ -16,7 +16,8 @@ from .config import settings
 from .db import Store
 from .engines import LiveEngineHolder
 from .live import LiveEvent, LiveSegmenter
-from .system import disk_free_seconds, keep_awake
+from .storage import M4A, WAV, restore_wav
+from .system import disk_free_seconds, keep_awake, power_source
 
 _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="live-asr")
 
@@ -29,6 +30,10 @@ DISK_CHECK_EVERY_S = 30.0
 DISK_WARN_S = 600.0
 DISK_STOP_S = 20.0
 DISK_START_MIN_S = 60.0
+
+# 배터리로 쓸 때는 진행 중 문장을 덜 자주 다시 받아 적는다 (초)
+PARTIAL_EVERY_AC_S = 1.0
+PARTIAL_EVERY_BATTERY_S = 2.0
 
 
 def make_break_divider(store: Store, meeting_id: str, t: float, wall_from: float, wall_to: float) -> Optional[dict]:
@@ -144,6 +149,7 @@ class RecordingSession:
             self._task = asyncio.create_task(self._step())
 
     async def _step(self, force: bool = False) -> None:
+        self.seg.cfg.partial_every_s = PARTIAL_EVERY_BATTERY_S if power_source() == "battery" else PARTIAL_EVERY_AC_S
         loop = asyncio.get_running_loop()
         events: list[LiveEvent] = await loop.run_in_executor(_executor, lambda: self.seg.step(force=force))
         for ev in events:
@@ -201,6 +207,16 @@ async def handle_recording(
     # 원본을 만드는 중이면(예: 실수로 녹음 종료) 그 작업을 멈추고 이어서 녹음한다
     cancelled_job = bool(on_resume(meeting_id)) if on_resume and meeting["status"] == "processing" else False
     holder.start_loading()
+    mdir = settings.meeting_dir(meeting_id)
+    if not (mdir / WAV).exists() and (mdir / M4A).exists():
+        # 다 만든 뒤 줄여 둔 회의: 이어 붙이려고 먼저 WAV로 푼다 (5시간이면 수십 초)
+        await ws.send_text(json.dumps({"type": "preparing", "message": "이전 녹음을 여는 중이에요"}))
+        try:
+            await asyncio.to_thread(restore_wav, mdir)
+        except Exception as exc:  # noqa: BLE001
+            await ws.send_text(json.dumps({"type": "error", "message": f"이전 녹음을 열지 못했어요: {exc}"}))
+            await ws.close()
+            return
     session = RecordingSession(store, holder, meeting_id, ws)
     sessions[meeting_id] = session
     keep_awake.acquire()
@@ -263,6 +279,7 @@ async def handle_recording(
             duration = session.close()
             sessions.pop(meeting_id, None)
             keep_awake.release()
+            holder.mark_used()
             store.update_meeting(meeting_id, duration=duration, status="recorded")
             # 녹음이 끝나거나 끊긴 시각 → 다시 이어서 녹음하면 그 사이를 쉬는 시간으로 표시
             mark_paused(store, meeting_id, duration, time.time())

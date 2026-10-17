@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 import shutil
@@ -27,13 +28,15 @@ from .notes_md import blocks_to_markdown
 from .recording import handle_recording
 from .search import search_all
 from .security import LocalOnlyMiddleware
-from .system import KeepAwake, disk_free_bytes, disk_free_seconds
+from .storage import audio_file, media_type
+from .system import KeepAwake, disk_free_bytes, disk_free_seconds, power_source
 from .views import Views
 
 settings.ensure_dirs()
 store = Store(settings.db_path)
 views = Views(store)
 jobs = JobManager(store)
+jobs.is_recording = lambda mid: mid in sessions
 holder = LiveEngineHolder()
 sessions: dict[str, Any] = {}
 
@@ -47,7 +50,16 @@ async def lifespan(app: FastAPI):
     jobs.start()
     if os.environ.get("SCRIBE_PRELOAD", "1") == "1":
         holder.start_loading()
+    idle = asyncio.get_event_loop().create_task(_unload_idle_model())
     yield
+    idle.cancel()
+
+
+async def _unload_idle_model() -> None:
+    """녹음이 없는 채로 오래(기본 30분) 지나면 실시간 모델을 메모리에서 내린다."""
+    while True:
+        await asyncio.sleep(60)
+        holder.unload_if_idle(busy=bool(sessions))
 
 
 app = FastAPI(title="Meeting Scribe", version=__version__, lifespan=lifespan)
@@ -63,15 +75,16 @@ def _meeting_or_404(meeting_id: str) -> dict:
     return m
 
 
-def _audio_path(meeting_id: str) -> Path:
-    return settings.meetings_dir / meeting_id / "audio.wav"
+def _audio_path(meeting_id: str) -> Optional[Path]:
+    """재생할 녹음 파일 (WAV, 다 만든 뒤 줄였으면 m4a)"""
+    return audio_file(settings.meetings_dir / meeting_id)
 
 
 def _meeting_detail(m: dict) -> dict:
     out = dict(m)
     job = store.latest_job(m["id"])
     out["job"] = job
-    out["has_audio"] = _audio_path(m["id"]).exists()
+    out["has_audio"] = _audio_path(m["id"]) is not None
     out["recording"] = m["id"] in sessions
     out["has_summary"] = bool(m.get("summary_md"))
     return out
@@ -90,9 +103,17 @@ def health() -> dict:
         "disk_free_s": round(disk_free_seconds(settings.data_dir)),
         # 서버가 녹음 중 잠자기를 막는지 (맥: caffeinate). 아니면 브라우저가 화면 꺼짐을 막는다.
         "keep_awake": KeepAwake.available(),
+        "power": power_source(),
         "project_root": str(Path(__file__).resolve().parents[2]),
         "language": settings.language,
     }
+
+
+@app.post("/api/warmup")
+def warmup() -> dict:
+    """앱을 다시 보면 실시간 모델을 미리 올려 둔다 (녹음 시작을 기다리지 않게)."""
+    holder.start_loading()
+    return holder.info()
 
 
 @app.get("/api/storage")
@@ -247,7 +268,7 @@ def process(meeting_id: str) -> dict:
     if meeting_id in sessions:
         raise HTTPException(409, "녹음을 먼저 종료해 주세요")
     mdir = settings.meetings_dir / meeting_id
-    if not _audio_path(meeting_id).exists() and not any(mdir.glob("source.*")):
+    if _audio_path(meeting_id) is None and not any(mdir.glob("source.*")):
         raise HTTPException(400, "처리할 오디오가 없습니다")
     return {"job": jobs.enqueue(m["id"])}
 
@@ -271,13 +292,14 @@ RANGE_RE = re.compile(r"bytes=(\d*)-(\d*)")
 @app.get("/api/meetings/{meeting_id}/audio")
 def audio(meeting_id: str, request: Request) -> Response:
     path = _audio_path(meeting_id)
-    if not path.exists():
+    if path is None:
         raise HTTPException(404, "오디오가 아직 없습니다")
+    mtype = media_type(path)
     size = path.stat().st_size
     rng = request.headers.get("range")
     headers = {"Accept-Ranges": "bytes", "Cache-Control": "no-cache"}
     if not rng:
-        return FileResponse(path, media_type="audio/wav", headers=headers)
+        return FileResponse(path, media_type=mtype, headers=headers)
     m = RANGE_RE.match(rng)
     if not m:
         raise HTTPException(416, "잘못된 Range")
@@ -302,7 +324,7 @@ def audio(meeting_id: str, request: Request) -> Response:
                 yield chunk
 
     headers.update({"Content-Range": f"bytes {start}-{end}/{size}", "Content-Length": str(length)})
-    return StreamingResponse(body(), status_code=206, media_type="audio/wav", headers=headers)
+    return StreamingResponse(body(), status_code=206, media_type=mtype, headers=headers)
 
 
 # ---------------- 노트 / 요약 ----------------

@@ -35,6 +35,22 @@ export default function App() {
     return () => window.removeEventListener('hashchange', onHash)
   }, [])
 
+  // 앱으로 돌아오면 실시간 모델을 미리 올려 둔다 (오래 쓰지 않아 내려 두었을 때)
+  useEffect(() => {
+    let last = 0
+    const warm = () => {
+      if (document.visibilityState !== 'visible' || Date.now() - last < 5 * 60000) return
+      last = Date.now()
+      api.warmup().then(() => useStore.getState().loadHealth()).catch(() => undefined)
+    }
+    window.addEventListener('focus', warm)
+    document.addEventListener('visibilitychange', warm)
+    return () => {
+      window.removeEventListener('focus', warm)
+      document.removeEventListener('visibilitychange', warm)
+    }
+  }, [])
+
   // 작업 진행률/엔진 상태 갱신
   useEffect(() => {
     let lastStatus: string | null = null

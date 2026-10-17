@@ -115,7 +115,9 @@ export interface FinalView {
 export interface Health {
   ok: boolean
   version: string
-  live: { kind: string; model: string; state: 'idle' | 'loading' | 'ready' | 'error'; error: string | null }
+  live: { kind: string; model: string; state: 'idle' | 'loading' | 'ready' | 'error'; error: string | null; download?: { done: number; total: number } | null }
+  precision: string
+  power: 'ac' | 'battery' | null
   final: { kind: string; model: string }
   diarizer: string
   apple_silicon: boolean
@@ -189,6 +191,7 @@ export const api = {
     req<{ updated: number; exported_at: Record<string, number | null> }>('POST', `/api/meetings/${id}/annotations/exported`, { ids, exported }),
   deleteAnnotation: (annId: string) => req<{ ok: boolean }>('DELETE', `/api/annotations/${annId}`),
   storage: () => req<StorageInfo>('GET', '/api/storage'),
+  warmup: () => req<Health['live']>('POST', '/api/warmup'),
   search: (q: string) => req<SearchHit[]>('GET', `/api/search?q=${encodeURIComponent(q)}`),
   exportMd: async (id: string) => (await fetch(`/api/meetings/${id}/export.md`)).text(),
   upload: async (file: File, title = ''): Promise<Meeting> => {

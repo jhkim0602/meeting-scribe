@@ -10,9 +10,9 @@ import os
 import sys
 
 from .config import settings
-from .engines import DEFAULT_MODELS, resolve_diarizer_kind, resolve_engine_kind
+from .engines import repos_for, resolve_diarizer_kind
+from .engines.download import MODEL_SIZES
 
-ALIGNER = "Qwen/Qwen3-ForcedAligner-0.6B"
 PYANNOTE = "pyannote/speaker-diarization-community-1"
 
 
@@ -21,12 +21,11 @@ def main() -> int:
 
     targets: list[str] = []
     for role in ("live", "final"):
-        kind = resolve_engine_kind(settings.live_engine if role == "live" else settings.final_engine)
-        model = (settings.live_model if role == "live" else settings.final_model) or DEFAULT_MODELS.get(kind, {}).get(role, "")
-        if kind in ("qwen3", "whisper") and model and model not in targets:
-            targets.append(model)
-        if kind == "qwen3" and role == "final":
-            targets.append(ALIGNER)
+        for repo in repos_for(role):
+            if repo not in targets:
+                targets.append(repo)
+    total = sum(MODEL_SIZES.get(r, 0) for r in targets)
+    print(f"받을 모델: {len(targets)}개, 약 {total / 1024 ** 3:.1f}GB (정밀도 {settings.precision})")
     ok = True
     for repo in targets:
         print(f"↓ {repo}")

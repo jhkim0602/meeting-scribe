@@ -215,12 +215,13 @@ function openSocket(s: Session, query: string): Promise<Ready> {
     const ws = new WebSocket(wsUrl(s.meetingId, query))
     ws.binaryType = 'arraybuffer'
     let ready = false
-    const timer = setTimeout(() => {
+    const expire = () => {
       if (!ready) {
         ws.close()
         reject(new Error('서버 연결 시간 초과'))
       }
-    }, 12000)
+    }
+    let timer = setTimeout(expire, 12000)
     ws.onmessage = (ev) => {
       const msg = JSON.parse(ev.data as string)
       const st = store()
@@ -231,6 +232,12 @@ function openSocket(s: Session, query: string): Promise<Ready> {
           clearTimeout(timer)
           s.ws = ws
           resolve(msg as Ready)
+          break
+        case 'preparing':
+          // 줄여 둔 녹음 파일을 다시 푸는 중 (긴 회의는 수십 초)
+          clearTimeout(timer)
+          timer = setTimeout(expire, 180000)
+          st.toast(`${msg.message}…`, 'info', undefined, 6000)
           break
         case 'segment':
           if (here) st.addLiveSegment(msg.segment as Unit)

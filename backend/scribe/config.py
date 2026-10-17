@@ -29,6 +29,10 @@ class Settings:
     # 모델 ID (엔진별 기본값은 engines/__init__.py 참고)
     live_model: str = field(default_factory=lambda: _env("SCRIBE_LIVE_MODEL", ""))
     final_model: str = field(default_factory=lambda: _env("SCRIBE_FINAL_MODEL", ""))
+    # Qwen3-ASR 정밀도: 8bit(기본, 받는 양·메모리 절반 이하) | fp16(원래 모델)
+    precision: str = field(default_factory=lambda: _env("SCRIBE_PRECISION", "8bit"))
+    # 녹음이 없을 때 실시간 모델을 메모리에서 내리는 시간(분, 0이면 내리지 않음)
+    live_idle_unload_min: float = field(default_factory=lambda: float(_env("SCRIBE_LIVE_IDLE_UNLOAD_MIN", "30")))
     # 화자 분리: auto | speakrs | pyannote | none | mock
     diarizer: str = field(default_factory=lambda: _env("SCRIBE_DIARIZER", "auto"))
     hf_token: str = field(default_factory=lambda: _env("HF_TOKEN", os.environ.get("HUGGINGFACE_TOKEN", "")))

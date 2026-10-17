@@ -88,6 +88,7 @@ CREATE TABLE IF NOT EXISTS settings(
 """
 
 JSON_FIELDS_MEETING = ("speakers", "clock")
+KEEP_FINAL_VERSIONS = 2
 
 
 def new_id() -> str:
@@ -231,6 +232,8 @@ class Store:
                 (meeting_id, version, time.time(), engine, diarizer, json.dumps(data, ensure_ascii=False)),
             )
             c.execute("UPDATE meetings SET final_version=?, updated_at=? WHERE id=?", (version, time.time(), meeting_id))
+            # 원본은 최근 KEEP_FINAL_VERSIONS개만 남긴다 (첨삭은 시간+인용문으로 묶여 있어 옛 버전이 없어도 된다)
+            c.execute("DELETE FROM final_versions WHERE meeting_id=? AND version<=?", (meeting_id, version - KEEP_FINAL_VERSIONS))
             c.execute("COMMIT")
         return version
 

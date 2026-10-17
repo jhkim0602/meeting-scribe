@@ -93,3 +93,39 @@ def test_forced_flush_of_backlog_still_cuts_at_silences():
     assert len(finals) >= 4, finals
     assert all(e.t1 - e.t0 <= 15.0 for e in finals)
     assert finals[-1].t1 >= 33.0
+
+
+def test_partials_back_off_when_decoding_is_slow(monkeypatch):
+    """받아 적기가 느리면 진행 중 문장 간격을 늘리고, 새 말소리가 없으면 다시 받아 적지 않는다."""
+    import scribe.live as live
+
+    clock = {"t": 0.0}
+    monkeypatch.setattr(live.time, "monotonic", lambda: clock["t"])
+
+    class Slow(MockAsr):
+        calls = 0
+
+        def transcribe(self, audio, **kw):
+            Slow.calls += 1
+            clock["t"] += 0.8  # 한 번 받아 적는 데 0.8초
+            return super().transcribe(audio, **kw)
+
+    seg = LiveSegmenter(Slow(), language="ko")
+    audio = _speech(10.0)
+    partial_times = []
+    for i in range(0, len(audio), 4000):  # 0.25초씩
+        seg.feed(audio[i:i + 4000])
+        clock["t"] += 0.25
+        for e in seg.step():
+            if e.type == "partial" and e.text:
+                partial_times.append(clock["t"])
+    gaps = [b - a for a, b in zip(partial_times, partial_times[1:])]
+    assert gaps and min(gaps) >= 2.0, gaps  # 0.8초 × 2.5 이상 간격
+
+    # 말소리 없이 시간만 흐르면 다시 받아 적지 않는다
+    before = Slow.calls
+    clock["t"] += 10
+    seg.step()
+    seg.step()
+    assert Slow.calls - before <= 1
+

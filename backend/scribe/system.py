@@ -6,6 +6,7 @@ import os
 import shutil
 import subprocess
 import threading
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -65,3 +66,32 @@ class KeepAwake:
 
 
 keep_awake = KeepAwake()
+
+
+_power: tuple[float, Optional[str]] = (0.0, None)
+
+
+def power_source() -> Optional[str]:
+    """'ac' | 'battery' | None(알 수 없음). 1분 동안 기억한다."""
+    global _power
+    forced = os.environ.get("SCRIBE_POWER")
+    if forced in ("ac", "battery"):
+        return forced
+    now = time.time()
+    if now - _power[0] < 60:
+        return _power[1]
+    src: Optional[str] = None
+    try:
+        if shutil.which("pmset"):
+            out = subprocess.run(["pmset", "-g", "batt"], capture_output=True, text=True, timeout=3).stdout
+            src = "battery" if "Battery Power" in out else "ac" if "AC Power" in out else None
+        else:
+            for d in Path("/sys/class/power_supply").glob("*"):
+                if (d / "type").read_text().strip() == "Mains":
+                    src = "ac" if (d / "online").read_text().strip() == "1" else "battery"
+                    break
+    except (OSError, subprocess.SubprocessError):
+        src = None
+    _power = (now, src)
+    return src
+

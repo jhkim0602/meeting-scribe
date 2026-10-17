@@ -8,10 +8,13 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from .config import settings
 from .db import Store
+from .storage import audio_file, compress_audio, is_settled
+
+HOUSEKEEP_EVERY_S = 60.0
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 
@@ -32,6 +35,8 @@ class JobManager:
         self.proc: Optional[subprocess.Popen] = None
         self.current: Optional[str] = None
         self._task: Optional[asyncio.Task] = None
+        self.is_recording: Callable[[str], bool] = lambda mid: False
+        self._last_housekeep = 0.0
 
     def recover(self) -> None:
         """서버가 꺼졌다 켜졌을 때 끊긴 작업 정리."""
@@ -62,7 +67,20 @@ class JobManager:
 
     @staticmethod
     def _has_audio(meeting_id: str) -> bool:
-        return (settings.meetings_dir / meeting_id / "audio.wav").exists()
+        return audio_file(settings.meetings_dir / meeting_id) is not None
+
+    def housekeep_once(self) -> list[str]:
+        """원본까지 다 만들고 한동안 손대지 않은 회의의 WAV를 m4a로 줄인다. 줄인 회의 id 목록."""
+        busy = {j["meeting_id"] for j in self.store.active_jobs()}
+        done = []
+        for m in self.store.list_meetings():
+            mid = m["id"]
+            if m["status"] != "ready" or mid in busy or self.is_recording(mid):
+                continue
+            mdir = settings.meetings_dir / mid
+            if is_settled(mdir) and compress_audio(mdir):
+                done.append(mid)
+        return done
 
     def _kick(self) -> None:
         if self.proc is not None and self.proc.poll() is None:
@@ -90,6 +108,10 @@ class JobManager:
                             self.store.update_meeting(m["id"], status="ready" if self.store.get_final(m["id"]) else "error")
                     self.proc, self.current = None, None
                 self._kick()
+                # 원본 작업이 없을 때만 조용히 파일을 줄인다
+                if self.proc is None and time.time() - self._last_housekeep > HOUSEKEEP_EVERY_S:
+                    self._last_housekeep = time.time()
+                    await asyncio.to_thread(self.housekeep_once)
             except Exception as exc:  # noqa: BLE001
                 print(f"[jobs] {exc}", file=sys.stderr)
             await asyncio.sleep(1.0)

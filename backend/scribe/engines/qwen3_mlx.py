@@ -18,18 +18,21 @@ ALIGNER_ID = "Qwen/Qwen3-ForcedAligner-0.6B"
 class Qwen3MlxEngine(AsrEngine):
     name = "qwen3-mlx"
 
-    def __init__(self, model: str, aligner: str = ALIGNER_ID):
+    def __init__(self, model: str, aligner: str = ALIGNER_ID, with_aligner: bool = False):
         super().__init__(model)
         self.aligner_id = aligner
+        self.with_aligner = with_aligner
         self._aligner = None
         self._lock = threading.Lock()  # MLX 호출은 한 번에 하나씩
 
     def load(self) -> None:
-        from mlx_qwen3_asr import transcribe
+        from mlx_qwen3_asr import ForcedAligner, transcribe
 
         with self._lock:
             # 모델/토크나이저를 내려받고 캐시에 올린다 (1초 무음으로 워밍업)
             transcribe(np.zeros(16000, dtype=np.float32), model=self.model, language="ko")
+            if self.with_aligner and self._aligner is None:
+                self._aligner = ForcedAligner(self.aligner_id)
 
     def transcribe(self, audio: np.ndarray, *, language: str, context: str = "") -> str:
         from mlx_qwen3_asr import transcribe

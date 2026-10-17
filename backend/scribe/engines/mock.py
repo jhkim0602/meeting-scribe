@@ -121,4 +121,7 @@ class MockDiarizer(Diarizer):
             i += 1
         if on_progress:
             on_progress(1.0)
+        # 같은 사람(A/B/C)은 회의가 달라도 비슷한 목소리 특징을 낸다
+        basis = {"A": [1.0, 0.1, 0.0, 0.0], "B": [0.0, 1.0, 0.1, 0.0], "C": [0.1, 0.0, 1.0, 0.0]}
+        self.embeddings = {sp: basis[sp] for sp in {t["speaker"] for t in turns}}
         return turns

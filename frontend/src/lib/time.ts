@@ -40,3 +40,10 @@ export function dateGroup(ts: number): string {
   if (d.getFullYear() === now.getFullYear()) return `${d.getMonth() + 1}월`
   return `${d.getFullYear()}년`
 }
+
+/** 모델 내려받기: 0.4/0.8GB */
+export function fmtDownload(d: { done: number; total: number }): string {
+  const gb = (n: number) => (n / 1024 ** 3).toFixed(1)
+  return `${gb(d.done)}/${gb(d.total)}GB`
+}
+

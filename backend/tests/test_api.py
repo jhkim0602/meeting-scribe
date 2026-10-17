@@ -406,3 +406,59 @@ def test_clock_maps_recording_time_to_wall_time(client):
     st = client.get("/api/storage").json()
     assert st["meetings"] >= 1 and st["audio_bytes"] > 0 and st["free_bytes"] > 0
 
+
+
+def test_settled_audio_is_compressed_and_still_usable(client, monkeypatch):
+    """다 만든 회의의 WAV는 m4a로 줄이고, 재생·다시 만들기·이어서 녹음은 그대로 된다."""
+    from scribe import config, storage
+    from scribe import main as appmain
+
+    mid = client.post("/api/meetings", json={}).json()["id"]
+    pcm = _speech_pcm([("s", 2.5), ("n", 1.0)] * 2)
+    _record(client, mid, pcm, messages=[{"type": "stop"}], until="stopped")
+    assert _wait_job(client, mid)["status"] == "done"
+    mdir = config.settings.meetings_dir / mid
+    duration = client.get(f"/api/meetings/{mid}").json()["duration"]
+
+    monkeypatch.setattr(storage, "COMPRESS_AFTER_H", 0.0)
+    assert mid in appmain.jobs.housekeep_once()
+    assert (mdir / "audio.m4a").exists() and not (mdir / "audio.wav").exists()
+    assert client.get(f"/api/meetings/{mid}").json()["has_audio"] is True
+    r = client.get(f"/api/meetings/{mid}/audio", headers={"Range": "bytes=0-99"})
+    assert r.status_code == 206 and r.headers["content-type"] == "audio/mp4" and len(r.content) == 100
+
+    # 다시 만들기: m4a를 임시 WAV로 풀어 처리하고, 끝나면 임시 파일은 지운다. 원본은 최근 2개만 남긴다.
+    for _ in range(2):
+        client.post(f"/api/meetings/{mid}/process")
+        assert _wait_job(client, mid)["status"] == "done"
+    assert (mdir / "audio.m4a").exists() and not (mdir / "audio.wav").exists() and not (mdir / "work.wav").exists()
+    with appmain.store.conn() as c:
+        versions = [r["version"] for r in c.execute("SELECT version FROM final_versions WHERE meeting_id=?", (mid,))]
+    assert sorted(versions) == [2, 3]
+
+    # 이어서 녹음: 먼저 WAV로 풀고(preparing) 같은 길이에서 이어 붙인다
+    with client.websocket_connect(f"/api/meetings/{mid}/record") as ws:
+        first = json.loads(ws.receive_text())
+        ready = json.loads(ws.receive_text())
+        assert first["type"] == "preparing" and ready["type"] == "ready"
+        assert abs(ready["offset"] - duration) < 0.05
+        ws.send_bytes(pcm)
+        ws.send_text(json.dumps({"type": "pause"}))
+        while json.loads(ws.receive_text())["type"] != "paused":
+            pass
+    assert (mdir / "audio.wav").exists() and not (mdir / "audio.m4a").exists()
+    client.post(f"/api/meetings/{mid}/cancel")
+
+
+def test_upload_copy_is_removed_after_processing(client, tmp_path):
+    from scribe import config
+    from scribe.audio import wav_header
+
+    pcm = _speech_pcm([("s", 2.0), ("n", 1.0)] * 2)
+    f = tmp_path / "회의.wav"
+    f.write_bytes(wav_header(len(pcm)) + pcm)
+    with open(f, "rb") as fh:
+        m = client.post("/api/upload", files={"file": ("회의.wav", fh, "audio/wav")}, data={"title": ""}).json()
+    assert _wait_job(client, m["id"])["status"] == "done"
+    mdir = config.settings.meetings_dir / m["id"]
+    assert not list(mdir.glob("source.*")) and (mdir / "audio.wav").exists()
