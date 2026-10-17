@@ -1,6 +1,7 @@
 import { Check, CornerDownRight, MessageSquare, NotebookPen, Pencil, RotateCcw, Trash2 } from 'lucide-react'
 import { memo, useState } from 'react'
-import { api, type Annotation } from '../lib/api'
+import { type Annotation } from '../lib/api'
+import { annActions } from '../lib/annActions'
 import type { View } from '../lib/model'
 import { annotationTime, quoteOf, sendToNotes } from '../lib/notesExport'
 import { seekTo, useStore } from '../lib/store'
@@ -16,7 +17,6 @@ interface Props {
 
 /** 문장 바로 아래에 붙는 댓글 스레드 */
 export const CommentThread = memo(function CommentThread({ ann, view, meetingId, flash, onHover }: Props) {
-  const refreshViews = useStore((s) => s.refreshViews)
   const toast = useStore((s) => s.toast)
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(ann.body)
@@ -31,7 +31,6 @@ export const CommentThread = memo(function CommentThread({ ann, view, meetingId,
   const run = async (fn: () => Promise<unknown>) => {
     try {
       await fn()
-      await refreshViews()
     } catch (e) {
       toast((e as Error).message, 'error')
     }
@@ -39,14 +38,14 @@ export const CommentThread = memo(function CommentThread({ ann, view, meetingId,
   const save = () => {
     setEditing(false)
     const v = draft.trim()
-    if (v && v !== ann.body) run(() => api.patchAnnotation(ann.id, { body: v }, view))
+    if (v && v !== ann.body) run(() => annActions.patch(ann.id, { body: v }, view))
   }
   const sendReply = () => {
     const v = reply.trim()
     if (!v) return
     setReply('')
     setReplying(false)
-    run(() => api.reply(ann.id, v, view))
+    run(() => annActions.reply(ann.id, v, view))
   }
   const toNotes = async () => {
     const n = await sendToNotes(meetingId, [ann], view)
@@ -81,11 +80,11 @@ export const CommentThread = memo(function CommentThread({ ann, view, meetingId,
         <div className="cmt-actions">
           <button className="icon-btn" title="답글" onClick={() => setReplying((v) => !v)}><CornerDownRight size={14} /></button>
           <button className="icon-btn" title={ann.exported_at ? '노트에 한 번 더 넣기' : '노트로 보내기'} onClick={toNotes}><NotebookPen size={14} /></button>
-          <button className="icon-btn" title={resolved ? '다시 열기' : '해결'} onClick={() => run(() => api.patchAnnotation(ann.id, { status: resolved ? 'open' : 'resolved' }, view))}>
+          <button className="icon-btn" title={resolved ? '다시 열기' : '해결'} onClick={() => run(() => annActions.patch(ann.id, { status: resolved ? 'open' : 'resolved' }, view))}>
             {resolved ? <RotateCcw size={14} /> : <Check size={14} />}
           </button>
           <button className="icon-btn" title="편집" onClick={() => { setDraft(ann.body); setEditing(true) }}><Pencil size={14} /></button>
-          <button className="icon-btn" title="삭제" onClick={() => run(() => api.deleteAnnotation(ann.id))}><Trash2 size={14} /></button>
+          <button className="icon-btn" title="삭제" onClick={() => run(() => annActions.remove(ann.id))}><Trash2 size={14} /></button>
         </div>
       </div>
       {editing ? (

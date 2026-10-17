@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { api, type AppSettings, type FinalView, type Health, type Job, type LiveView, type Meeting, type MeetingSummary, type Unit } from './api'
+import { api, type Annotation, type AppSettings, type ResolvedPos, type FinalView, type Health, type Job, type LiveView, type Meeting, type MeetingSummary, type Unit } from './api'
 
 export type Tab = 'live' | 'final' | 'summary'
 export type RecStatus = 'idle' | 'connecting' | 'recording' | 'paused' | 'stopping'
@@ -80,6 +80,10 @@ interface State {
   refreshFinal: () => Promise<void>
   refreshViews: () => Promise<void>
   addLiveSegment: (u: Unit) => void
+  /** 서버가 돌려준 항목 하나를 두 화면에 바꿔 끼운다 (전체를 다시 받지 않는다) */
+  upsertAnnotation: (a: Annotation) => void
+  removeAnnotation: (id: string) => void
+  stampExported: (stamps: Record<string, number | null>) => void
   setPartial: (p: State['partial']) => void
   setTab: (t: Tab) => void
   set: (patch: Partial<State>) => void
@@ -178,6 +182,37 @@ export const useStore = create<State>((set, get) => ({
     if (live.units.some((x) => x.id === u.id)) return
     set({ live: { ...live, units: [...live.units, u] } })
   },
+  upsertAnnotation: (a) => {
+    const { live, final, selectedId } = get()
+    if (a.meeting_id !== selectedId) return
+    const put = (list: Annotation[], r: ResolvedPos | null | undefined) => {
+      const item: Annotation = { ...a, pos: r?.pos ?? null, match: r?.match ?? undefined }
+      const i = list.findIndex((x) => x.id === a.id)
+      if (i < 0) return [...list, item]
+      const next = list.slice()
+      next[i] = item
+      return next
+    }
+    set({
+      live: live ? { ...live, annotations: put(live.annotations, a.resolved?.live) } : live,
+      final: final ? { ...final, annotations: put(final.annotations, a.resolved?.final) } : final,
+    })
+  },
+  removeAnnotation: (id) => {
+    const { live, final } = get()
+    set({
+      live: live ? { ...live, annotations: live.annotations.filter((x) => x.id !== id) } : live,
+      final: final ? { ...final, annotations: final.annotations.filter((x) => x.id !== id) } : final,
+    })
+  },
+  stampExported: (stamps) => {
+    const { live, final } = get()
+    const stamp = (list: Annotation[]) => list.map((x) => (x.id in stamps ? { ...x, exported_at: stamps[x.id] } : x))
+    set({
+      live: live ? { ...live, annotations: stamp(live.annotations) } : live,
+      final: final ? { ...final, annotations: stamp(final.annotations) } : final,
+    })
+  },
   setPartial: (partial) => set({ partial: partial && partial.text ? partial : null }),
   setTab: (tab) => set({ tab }),
   set: (patch) => set(patch),
@@ -200,8 +235,14 @@ export const useStore = create<State>((set, get) => ({
 
 type PlayerBridge = { seek: (t: number, play?: boolean) => void; time: () => number }
 type NotesBridge = { insertQuote: (text: string, t: number) => void; insertTimestamp: (t: number) => void; insertBlocks: (blocks: unknown[]) => void }
+/** 긴 기록은 보이는 부분만 그리므로, 특정 문장으로 가려면 이 길을 쓴다 */
+type TranscriptBridge = { scrollToUnit: (unitId: string, opts?: { align?: 'center' | 'start' | 'end'; smooth?: boolean }) => void }
 
-export const bridges: { player: PlayerBridge | null; notes: NotesBridge | null } = { player: null, notes: null }
+export const bridges: { player: PlayerBridge | null; notes: NotesBridge | null; transcript: TranscriptBridge | null } = {
+  player: null,
+  notes: null,
+  transcript: null,
+}
 
 /** 지금 시각: 녹음 중이면 녹음 경과 시간, 아니면 재생 위치 */
 export function currentClock(): number {

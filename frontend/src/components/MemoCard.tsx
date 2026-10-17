@@ -1,13 +1,13 @@
 import { NotebookPen, StickyNote, Trash2 } from 'lucide-react'
 import { useState } from 'react'
-import { api, type Annotation } from '../lib/api'
+import { type Annotation } from '../lib/api'
+import { annActions } from '../lib/annActions'
 import type { View } from '../lib/model'
 import { sendToNotes } from '../lib/notesExport'
 import { seekTo, useStore } from '../lib/store'
 import { fmtTime } from '../lib/time'
 
 export function MemoCard({ ann, view }: { ann: Annotation; view: View }) {
-  const refreshViews = useStore((s) => s.refreshViews)
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(ann.body)
   const t = ann.anchor.t ?? 0
@@ -15,8 +15,7 @@ export function MemoCard({ ann, view }: { ann: Annotation; view: View }) {
   const save = async () => {
     setEditing(false)
     if (draft.trim() && draft.trim() !== ann.body) {
-      await api.patchAnnotation(ann.id, { body: draft.trim() }, view)
-      await refreshViews()
+      await annActions.patch(ann.id, { body: draft.trim() }, view)
     }
   }
 
@@ -42,8 +41,7 @@ export function MemoCard({ ann, view }: { ann: Annotation; view: View }) {
           className="icon-btn memo-del"
           title="삭제"
           onClick={async () => {
-            await api.deleteAnnotation(ann.id)
-            await refreshViews()
+            await annActions.remove(ann.id)
           }}
         >
           <Trash2 size={13} />

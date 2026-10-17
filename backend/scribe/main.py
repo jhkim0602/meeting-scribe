@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import __version__
-from .anchors import anchor_from_request, resolve_annotations
+from .anchors import anchor_from_request
 from .audio import ffmpeg_path, wav_info
 from .config import settings
 from .db import Store
@@ -358,10 +358,21 @@ KINDS = {"comment", "edit", "memo", "highlight", "divider"}
 
 
 def _resolved_one(ann: dict, view: str) -> dict:
-    idx, version = views.index_for(ann["meeting_id"], view)
-    if idx is None:
-        return dict(ann, pos=None)
-    return resolve_annotations([ann], idx, view, version)[0]
+    """요청한 화면 기준 위치(pos)에 더해, 두 화면 모두의 위치(resolved)를 붙인다.
+    화면은 전체 기록을 다시 받지 않고 이 항목만 바꿔 끼운다."""
+    resolved: dict[str, Optional[dict]] = {}
+    for v in ("live", "final"):
+        idx, version = views.index_for(ann["meeting_id"], v)
+        if idx is None:
+            resolved[v] = None
+            continue
+        r = views.resolve([ann], idx, v, version)[0]
+        resolved[v] = {"pos": r["pos"], "match": r.get("match")}
+    mine = resolved.get("final" if view == "final" else "live") or {"pos": None, "match": None}
+    out = dict(ann, pos=mine["pos"], resolved=resolved)
+    if mine.get("match") is not None:
+        out["match"] = mine["match"]
+    return out
 
 
 @app.post("/api/meetings/{meeting_id}/annotations")
@@ -426,7 +437,10 @@ def add_reply(ann_id: str, body: ReplyIn, view: str = "live") -> dict:
 def mark_exported(meeting_id: str, body: ExportedIn) -> dict:
     """댓글/메모를 노트로 내보냈다고 표시한다."""
     _meeting_or_404(meeting_id)
-    return {"updated": store.mark_exported(meeting_id, body.ids, body.exported)}
+    updated = store.mark_exported(meeting_id, body.ids, body.exported)
+    wanted = set(body.ids)
+    stamps = {a["id"]: a["exported_at"] for a in store.list_annotations(meeting_id) if a["id"] in wanted}
+    return {"updated": updated, "exported_at": stamps}
 
 
 @app.delete("/api/annotations/{ann_id}")

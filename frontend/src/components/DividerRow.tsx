@@ -1,8 +1,8 @@
 import { Pencil, Trash2 } from 'lucide-react'
 import { memo, useState } from 'react'
-import { api, type Annotation } from '../lib/api'
+import { type Annotation } from '../lib/api'
+import { annActions } from '../lib/annActions'
 import type { View } from '../lib/model'
-import { useStore } from '../lib/store'
 import { fmtDuration } from '../lib/time'
 
 function clock(ts: number) {
@@ -11,7 +11,6 @@ function clock(ts: number) {
 
 /** 쉬는 시간·단락 구분선. 자동(일시정지)으로 생긴 것은 실제 시각과 길이를 함께 보여준다. */
 export const DividerRow = memo(function DividerRow({ ann, view }: { ann: Annotation; view: View }) {
-  const refreshViews = useStore((s) => s.refreshViews)
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(ann.body)
   const bs = ann.meta?.break_start
@@ -20,8 +19,7 @@ export const DividerRow = memo(function DividerRow({ ann, view }: { ann: Annotat
   const save = async () => {
     setEditing(false)
     if (draft.trim() !== ann.body) {
-      await api.patchAnnotation(ann.id, { body: draft.trim() }, view)
-      await refreshViews()
+      await annActions.patch(ann.id, { body: draft.trim() }, view)
     }
   }
 
@@ -61,8 +59,7 @@ export const DividerRow = memo(function DividerRow({ ann, view }: { ann: Annotat
           className="icon-btn"
           title="구분선 삭제"
           onClick={async () => {
-            await api.deleteAnnotation(ann.id)
-            await refreshViews()
+            await annActions.remove(ann.id)
           }}
         >
           <Trash2 size={13} />

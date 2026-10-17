@@ -58,6 +58,7 @@ class MockAsr(AsrEngine):
         super().__init__(model)
         self.final = final
         self.offset_hint = 0.0  # 실시간 엔진은 절대 시간을 알아야 대본 위치를 맞출 수 있다
+        self.base_offset = 0.0  # 원본을 창별로 만들 때 이 창이 파일의 몇 초부터인지
         self._window_offset = 0.0
 
     def transcribe(self, audio: np.ndarray, *, language: str, context: str = "", t0: Optional[float] = None) -> str:
@@ -92,13 +93,14 @@ class MockAsr(AsrEngine):
         out = []
         total = max(1, len(audio))
         for start, end in split_windows(audio, target_s=600.0):
-            self._window_offset = start / SAMPLE_RATE
+            rel = start / SAMPLE_RATE
+            self._window_offset = self.base_offset + rel
             for seg in self._transcribe_window(audio[start:end], language=language, context=context):
-                seg["start"] += self._window_offset
-                seg["end"] += self._window_offset
+                seg["start"] += rel
+                seg["end"] += rel
                 for w in seg["words"]:
-                    w["start"] += self._window_offset
-                    w["end"] += self._window_offset
+                    w["start"] += rel
+                    w["end"] += rel
                 out.append(seg)
             if on_progress:
                 on_progress(end / total)

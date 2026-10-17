@@ -1,5 +1,6 @@
 // 댓글·메모 → 노트 블록. 노트에서는 "시각 + 댓글"이 한 줄, 그 아래에 원문 인용과 답글이 들어간다.
-import { api, type Annotation } from './api'
+import { annActions } from './annActions'
+import { type Annotation } from './api'
 import type { View } from './model'
 import { bridges, useStore } from './store'
 
@@ -48,8 +49,7 @@ export async function sendToNotes(meetingId: string, anns: Annotation[], view: V
   blocks.push(...items.map((a) => blockFor(a, view)))
   bridges.notes.insertBlocks(blocks)
   try {
-    await api.markExported(meetingId, items.map((a) => a.id))
-    await st.refreshViews()
+    await annActions.markExported(meetingId, items.map((a) => a.id))
   } catch {
     /* 표시만 실패해도 노트에는 들어갔다 */
   }

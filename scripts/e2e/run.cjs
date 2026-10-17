@@ -135,6 +135,21 @@ async function notesMarkdown(mid) {
   await page.locator('.view-final .mk-comment').first().click()
   await sleep(300)
   check((await page.locator('.view-final .cmt.flash').count()) === 1, '하이라이트 클릭 → 댓글 강조')
+  check((await page.locator('.dock-player .scrub-mark.mk-comment').count()) === 3, '재생 막대에 댓글 눈금 3개')
+
+  // 9) ⌘F: 기록 안에서 찾기 (띄어쓰기 무시), 결과 칠하기, Esc로 닫기
+  const firstText = (await page.locator('.view-final .utext').first().innerText()).replace(/\s+/g, '')
+  const word = firstText.slice(2, 6)
+  await page.mouse.click(600, 400)
+  await page.keyboard.press('Control+f')
+  await page.waitForSelector('.find-bar input')
+  await page.keyboard.type(word)
+  await page.waitForFunction(() => /\d+\/\d+/.test(document.querySelector('.find-count')?.textContent || ''), null, { timeout: 5000 })
+  const painted = await page.evaluate(() => CSS.highlights?.get('scribe-find-current')?.size ?? 0)
+  check(painted > 0, `⌘F 찾기 "${word}" → ${await page.locator('.find-count').innerText()}, 글자 칠함`)
+  await page.screenshot({ path: `${OUT}/c6-find.png` })
+  await page.keyboard.press('Escape')
+  check((await page.locator('.find-bar').count()) === 0 && (await page.evaluate(() => CSS.highlights?.has('scribe-find') ?? false)) === false, 'Esc → 찾기 닫고 칠한 것 지움')
 
   await page.click('.theme-switch button[title="어둡게"]')
   await sleep(400)

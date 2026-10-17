@@ -73,8 +73,16 @@ export interface Annotation {
   updated_at: number
   exported_at: number | null
   meta: { break_start?: number; break_end?: number; auto?: boolean } | null
-  pos: null | { after: string | null } | { start: Pos; end: Pos; approx: boolean; score: number; text: string }
+  pos: AnnPos
   match?: 'same' | 'differs'
+  /** 추가/수정 응답에만: 두 화면 각각의 위치 */
+  resolved?: { live: ResolvedPos | null; final: ResolvedPos | null }
+}
+
+export type AnnPos = null | { after: string | null } | { start: Pos; end: Pos; approx: boolean; score: number; text: string }
+export interface ResolvedPos {
+  pos: AnnPos
+  match?: 'same' | 'differs' | null
 }
 
 export interface LiveView {
@@ -167,7 +175,7 @@ export const api = {
     req<Annotation>('PATCH', `/api/annotations/${annId}?view=${view}`, patch),
   reply: (annId: string, text: string, view = 'live') => req<Annotation>('POST', `/api/annotations/${annId}/replies?view=${view}`, { text }),
   markExported: (id: string, ids: string[], exported = true) =>
-    req<{ updated: number }>('POST', `/api/meetings/${id}/annotations/exported`, { ids, exported }),
+    req<{ updated: number; exported_at: Record<string, number | null> }>('POST', `/api/meetings/${id}/annotations/exported`, { ids, exported }),
   deleteAnnotation: (annId: string) => req<{ ok: boolean }>('DELETE', `/api/annotations/${annId}`),
   search: (q: string) => req<SearchHit[]>('GET', `/api/search?q=${encodeURIComponent(q)}`),
   exportMd: async (id: string) => (await fetch(`/api/meetings/${id}/export.md`)).text(),

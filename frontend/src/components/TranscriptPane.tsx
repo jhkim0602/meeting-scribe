@@ -1,10 +1,11 @@
-import { ArrowDownToLine, Eye, EyeOff, Info, MessageSquare, MessageSquarePlus, Mic, NotebookPen, RefreshCw, Sparkles, StickyNote } from 'lucide-react'
+import { ArrowDownToLine, Eye, EyeOff, Info, ListTree, MessageSquare, MessageSquarePlus, Mic, NotebookPen, RefreshCw, Sparkles, StickyNote } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { api, type Annotation } from '../lib/api'
+import { api, type Annotation, type Unit } from '../lib/api'
+import { annActions } from '../lib/annActions'
 import type { View } from '../lib/model'
 import { sendToNotes } from '../lib/notesExport'
 import { COMMENT_TO_NOTES, usePref } from '../lib/prefs'
-import { currentClock, useStore, type Tab } from '../lib/store'
+import { bridges, currentClock, useStore, type Tab } from '../lib/store'
 import { fmtRelative, fmtTime } from '../lib/time'
 import { Floating } from './Floating'
 import { ProcessingCard } from './ProcessingCard'
@@ -81,6 +82,36 @@ function AnnList({ anns, onClose, rect, view, meetingId }: { anns: Annotation[];
   )
 }
 
+/** 구분선으로 나뉜 구간 목차. 구분선이 있을 때만 보인다. */
+function Toc({ anns, units, rect, onClose }: { anns: Annotation[]; units: Unit[]; rect: DOMRect; onClose: () => void }) {
+  const dividers = anns.filter((a) => a.kind === 'divider' && a.pos && 'after' in a.pos).sort((a, b) => (a.anchor.t ?? 0) - (b.anchor.t ?? 0))
+  const index = new Map(units.map((u, i) => [u.id, i]))
+  const go = (unitId: string | undefined) => {
+    if (unitId) bridges.transcript?.scrollToUnit(unitId, { align: 'start' })
+    onClose()
+  }
+  return (
+    <Floating rect={rect} onClose={onClose} className="toc">
+      <button className="toc-item" onClick={() => go(units[0]?.id)}>
+        <span className="toc-time">{fmtTime(units[0]?.t0 ?? 0)}</span>
+        <span className="toc-label">처음</span>
+      </button>
+      {dividers.map((d) => {
+        const after = d.pos && 'after' in d.pos ? d.pos.after : null
+        const next = after === null ? units[0] : units[(index.get(after) ?? -2) + 1]
+        const mins = d.meta?.break_start && d.meta?.break_end ? Math.round((d.meta.break_end - d.meta.break_start) / 60) : null
+        return (
+          <button key={d.id} className="toc-item" onClick={() => go(next?.id)} disabled={!next}>
+            <span className="toc-time">{fmtTime(next?.t0 ?? d.anchor.t ?? 0)}</span>
+            <span className="toc-label">{d.body || '구분선'}</span>
+            {mins !== null && mins > 0 && <span className="toc-meta">{mins}분 쉼</span>}
+          </button>
+        )
+      })}
+    </Floating>
+  )
+}
+
 export function TranscriptPane() {
   const meeting = useStore((s) => s.meeting)!
   const live = useStore((s) => s.live)
@@ -94,10 +125,10 @@ export function TranscriptPane() {
   const showMarks = useStore((s) => s.showMarks)
   const follow = useStore((s) => s.follow)
   const set = useStore((s) => s.set)
-  const refreshViews = useStore((s) => s.refreshViews)
   const toast = useStore((s) => s.toast)
   const scrollRef = useRef<HTMLDivElement>(null)
   const [listRect, setListRect] = useState<DOMRect | null>(null)
+  const [tocRect, setTocRect] = useState<DOMRect | null>(null)
   const [memo, setMemo] = useState('')
   const [barMode, setBarMode] = useState<'comment' | 'memo'>('comment')
   const [toNotes] = usePref(COMMENT_TO_NOTES, false)
@@ -105,6 +136,8 @@ export function TranscriptPane() {
   const jobRunning = !!job && (job.status === 'queued' || job.status === 'running')
 
   const anns = tab === 'final' ? final?.annotations || [] : live?.annotations || []
+  const viewUnits = tab === 'final' ? final?.units || [] : live?.units || []
+  const hasDividers = anns.some((a) => a.kind === 'divider' && a.pos)
   const movedCount = useMemo(() => (final?.annotations || []).filter((a) => a.origin === 'live' && a.pos).length, [final])
 
   // 녹음 중에는 새 문장이 오면 아래로 따라간다
@@ -127,14 +160,13 @@ export function TranscriptPane() {
     }
     setMemo('')
     try {
-      const ann = await api.addAnnotation(
+      const ann = await annActions.add(
         meeting.id,
         barMode === 'comment'
           ? { kind: 'comment', view: 'live', start: { unit: last.id, offset: 0 }, end: { unit: last.id, offset: last.text.length }, body: text }
           : { kind: 'memo', view: 'live', t: currentClock(), after: last ? last.id : null, body: text },
       )
       if (toNotes) await sendToNotes(meeting.id, [ann], 'live')
-      else await refreshViews()
     } catch (e) {
       toast((e as Error).message, 'error')
     }
@@ -161,6 +193,11 @@ export function TranscriptPane() {
         <span className="spacer" />
         {tab !== 'summary' && (
           <>
+            {hasDividers && (
+              <button className="tool-btn" onClick={(e) => setTocRect(e.currentTarget.getBoundingClientRect())} title="구간 목차 (구분선)">
+                <ListTree size={15} />
+              </button>
+            )}
             <button className="tool-btn" onClick={(e) => setListRect(e.currentTarget.getBoundingClientRect())} title="댓글·메모 목록, 노트로 내보내기">
               <MessageSquare size={15} />
               <span>댓글 {anns.filter((a) => a.kind === 'comment').length}</span>
@@ -195,7 +232,7 @@ export function TranscriptPane() {
                 )}
               </div>
             ) : live ? (
-              <TranscriptView view="live" meetingId={meeting.id} units={live.units} annotations={live.annotations} partial={partial} recording={recordingHere} />
+              <TranscriptView view="live" meetingId={meeting.id} units={live.units} annotations={live.annotations} partial={partial} recording={recordingHere} scrollRef={scrollRef} />
             ) : null}
           </>
         )}
@@ -228,7 +265,7 @@ export function TranscriptPane() {
                     회의 중 남긴 댓글·메모 {movedCount}개를 원본의 같은 자리에 옮겼어요.
                   </div>
                 )}
-                <TranscriptView view="final" meetingId={meeting.id} units={final.units} annotations={final.annotations} />
+                <TranscriptView view="final" meetingId={meeting.id} units={final.units} annotations={final.annotations} scrollRef={scrollRef} />
               </>
             ) : (
               <ProcessingCard meeting={meeting} job={job} />
@@ -264,6 +301,7 @@ export function TranscriptPane() {
           {toNotes && <span className="bar-notes" title="노트에도 함께 추가돼요"><NotebookPen size={13} /></span>}
         </div>
       )}
+      {tocRect && <Toc anns={anns} units={viewUnits} rect={tocRect} onClose={() => setTocRect(null)} />}
       {listRect && <AnnList anns={anns} rect={listRect} view={tab === 'final' ? 'final' : 'live'} meetingId={meeting.id} onClose={() => setListRect(null)} />}
     </section>
   )

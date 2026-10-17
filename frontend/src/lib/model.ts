@@ -3,7 +3,7 @@ import type { Annotation, Unit } from './api'
 
 export type View = 'live' | 'final'
 
-interface RangeAnn {
+export interface RangeAnn {
   s: number
   e: number
   ann: Annotation

@@ -1,5 +1,5 @@
 import { ChevronDown, Coffee, HardDrive, Loader2, Mic, MicOff, Pause, Play, RotateCcw, RotateCw, Square, StickyNote, WifiOff } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ConfirmStop } from './ConfirmStop'
 import { listMics, pauseRecording, resumeRecording, startRecording, stopRecording } from '../hooks/recorder'
 import type { Meeting } from '../lib/api'
@@ -173,6 +173,23 @@ function Recorder() {
 
 const SPEEDS = [1, 1.25, 1.5, 2]
 
+/** 재생 막대 위의 옅은 눈금: 댓글(노랑), 구분선(회색). 지금 보고 있는 화면 기준. */
+function ScrubberMarks({ duration }: { duration: number }) {
+  const anns = useStore((s) => (s.tab === 'final' ? s.final?.annotations : s.live?.annotations))
+  const marks = useMemo(() => {
+    if (!anns || !duration) return []
+    return anns
+      .filter((a) => (a.kind === 'comment' || a.kind === 'divider') && a.pos)
+      .map((a) => ({ id: a.id, kind: a.kind, p: Math.min(100, Math.max(0, ((a.anchor.t0 ?? a.anchor.t ?? 0) / duration) * 100)) }))
+  }, [anns, duration])
+  if (!marks.length) return null
+  return (
+    <div className="scrub-marks" aria-hidden>
+      {marks.map((m) => <span key={m.id} className={`scrub-mark mk-${m.kind}`} style={{ left: `${m.p}%` }} />)}
+    </div>
+  )
+}
+
 function Player({ meeting, onResume }: { meeting: Meeting; onResume?: () => void }) {
   const audio = useRef<HTMLAudioElement>(null)
   const set = useStore((s) => s.set)
@@ -227,16 +244,19 @@ function Player({ meeting, onResume }: { meeting: Meeting; onResume?: () => void
         <button className="icon-btn lg" onClick={() => skip(10)} title="10초 앞으로"><RotateCw size={17} /></button>
       </div>
       <span className="player-time">{fmtTime(time, duration >= 3600)}</span>
-      <input
-        className="scrubber"
-        type="range"
-        min={0}
-        max={duration || 1}
-        step={0.1}
-        value={Math.min(time, duration || 0)}
-        style={{ ['--p' as string]: `${duration ? (time / duration) * 100 : 0}%` }}
-        onChange={(e) => bridges.player?.seek(Number(e.target.value), false)}
-      />
+      <div className="scrub-wrap">
+        <ScrubberMarks duration={duration} />
+        <input
+          className="scrubber"
+          type="range"
+          min={0}
+          max={duration || 1}
+          step={0.1}
+          value={Math.min(time, duration || 0)}
+          style={{ ['--p' as string]: `${duration ? (time / duration) * 100 : 0}%` }}
+          onChange={(e) => bridges.player?.seek(Number(e.target.value), false)}
+        />
+      </div>
       <span className="player-time muted">{fmtTime(duration, duration >= 3600)}</span>
       <button
         className="speed"

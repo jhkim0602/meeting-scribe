@@ -370,3 +370,24 @@ def test_wav_appender_survives_disk_full(tmp_path):
     info = wav_info(tmp_path / "a.wav")
     assert info.num_samples == 1000 and (tmp_path / "a.wav").stat().st_size == 44 + 2000
 
+
+
+def test_mutations_return_positions_for_both_views(client):
+    """화면이 전체 기록을 다시 받지 않도록, 바뀐 항목의 두 화면 위치를 함께 돌려준다."""
+    mid = client.post("/api/meetings", json={}).json()["id"]
+    pcm = _speech_pcm([("s", 2.5), ("n", 1.0), ("s", 3.0), ("n", 1.0)])
+    _record(client, mid, pcm, messages=[{"type": "stop"}], until="stopped")
+    assert _wait_job(client, mid)["status"] == "done"
+    u = client.get(f"/api/meetings/{mid}/live").json()["units"][0]
+    c = client.post(f"/api/meetings/{mid}/annotations", json={
+        "kind": "comment", "view": "live", "body": "확인", "start": {"unit": u["id"], "offset": 0}, "end": {"unit": u["id"], "offset": 4},
+    }).json()
+    assert c["resolved"]["live"]["pos"]["start"]["unit"] == u["id"]
+    assert c["resolved"]["final"]["pos"]["start"]["unit"].startswith("u")
+    r = client.post(f"/api/annotations/{c['id']}/replies", json={"text": "네"}).json()
+    assert r["replies"][0]["text"] == "네" and r["resolved"]["final"]["pos"] == c["resolved"]["final"]["pos"]
+    ex = client.post(f"/api/meetings/{mid}/annotations/exported", json={"ids": [c["id"]]}).json()
+    assert ex["updated"] == 1 and ex["exported_at"][c["id"]] > 0
+    # 위치 캐시: 답글/내보내기 표시는 바뀌어도 같은 위치, 새 값은 그대로 보인다
+    fin = client.get(f"/api/meetings/{mid}/final").json()["final"]["annotations"][0]
+    assert fin["replies"][0]["text"] == "네" and fin["exported_at"] and fin["pos"] == c["resolved"]["final"]["pos"]

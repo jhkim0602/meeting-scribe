@@ -1,6 +1,7 @@
 import { Check, CornerDownLeft, MessageSquare, Pencil, RotateCcw, Trash2, X, Highlighter } from 'lucide-react'
 import { useState } from 'react'
 import { api, type Annotation } from '../lib/api'
+import { annActions } from '../lib/annActions'
 import { isRange, type View } from '../lib/model'
 import { useStore } from '../lib/store'
 import { fmtTime } from '../lib/time'
@@ -27,7 +28,6 @@ export function AnnotationPopover({ anns, rect, view, onClose }: Props) {
 }
 
 function AnnCard({ ann, view, onDeleted }: { ann: Annotation; view: View; onDeleted?: () => void }) {
-  const refreshViews = useStore((s) => s.refreshViews)
   const toast = useStore((s) => s.toast)
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(ann.kind === 'edit' ? ann.replacement || '' : ann.body)
@@ -39,14 +39,13 @@ function AnnCard({ ann, view, onDeleted }: { ann: Annotation; view: View; onDele
   const run = async (fn: () => Promise<unknown>) => {
     try {
       await fn()
-      await refreshViews()
     } catch (e) {
       toast((e as Error).message, 'error')
     }
   }
-  const patch = (p: Parameters<typeof api.patchAnnotation>[1]) => run(() => api.patchAnnotation(ann.id, p, view))
+  const patch = (p: Parameters<typeof api.patchAnnotation>[1]) => run(() => annActions.patch(ann.id, p, view))
   const remove = () => run(async () => {
-    await api.deleteAnnotation(ann.id)
+    await annActions.remove(ann.id)
     onDeleted?.()
   })
 
@@ -135,7 +134,7 @@ function AnnCard({ ann, view, onDeleted }: { ann: Annotation; view: View; onDele
                     if (e.key === 'Enter' && !e.nativeEvent.isComposing && reply.trim()) {
                       const v = reply.trim()
                       setReply('')
-                      run(() => api.reply(ann.id, v, view))
+                      run(() => annActions.reply(ann.id, v, view))
                     }
                   }}
                 />

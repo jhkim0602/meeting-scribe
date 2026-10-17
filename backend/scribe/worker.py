@@ -7,17 +7,27 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import sys
 import time
 import traceback
 from pathlib import Path
 
+import numpy as np
+
 from .audio import convert_to_wav, read_audio, wav_info
-from .config import settings
+from .config import SAMPLE_RATE, settings
 from .db import Store
 from .engines import make_diarizer, make_engine
+from .engines.base import split_windows
 from .merge import build_utterances
+
+# 긴 녹음은 10분 안팎 창으로 나눠 받아쓴다. 메모리를 덜 쓰고, 창마다 결과를 저장해 두므로
+# 중간에 멈추거나(취소, 이어서 녹음) 녹음이 뒤에 더 붙어도 끝난 창은 다시 하지 않는다.
+WINDOW_S = float(os.environ.get("SCRIBE_WINDOW_S", "600"))
+CKPT_VERSION = 1
 
 # 단계별 진행률 가중치
 PHASES = {"convert": 0.05, "load": 0.03, "transcribe": 0.72, "diarize": 0.17, "merge": 0.03}
@@ -45,6 +55,69 @@ class Progress:
         if message is not None:
             fields["message"] = message
         self.store.update_job(self.job_id, **fields)
+
+
+class Checkpoints:
+    """창별 받아쓰기 결과와 화자 구분 결과를 meetings/<id>/ckpt/ 에 저장한다.
+    모델·언어·용어집이 바뀌면 key가 달라져 모두 지운다."""
+
+    def __init__(self, mdir: Path, key: str):
+        self.dir = mdir / "ckpt"
+        self.dir.mkdir(parents=True, exist_ok=True)
+        meta = self.dir / "meta.json"
+        try:
+            old = json.loads(meta.read_text())["key"]
+        except (OSError, ValueError, KeyError):
+            old = None
+        if old != key:
+            for f in self.dir.iterdir():
+                f.unlink()
+            meta.write_text(json.dumps({"key": key}))
+
+    def load(self, name: str):
+        try:
+            return json.loads((self.dir / f"{name}.json").read_text())
+        except (OSError, ValueError):
+            return None
+
+    def save(self, name: str, data) -> None:
+        tmp = self.dir / f"{name}.tmp"
+        tmp.write_text(json.dumps(data, ensure_ascii=False))
+        tmp.replace(self.dir / f"{name}.json")
+
+    def drop_prefix(self, prefix: str, keep: str) -> None:
+        for f in self.dir.glob(f"{prefix}*.json"):
+            if f.stem != keep:
+                f.unlink()
+
+
+class _LazyAudio:
+    """WAV를 통째로 읽지 않고 필요한 구간만 float로 꺼낸다 (창 나누기용)."""
+
+    def __init__(self, wav: Path):
+        info = wav_info(wav)
+        self._mm = np.memmap(wav, dtype="<i2", mode="r", offset=info.data_offset, shape=(info.num_samples,))
+
+    def __len__(self) -> int:
+        return len(self._mm)
+
+    def __getitem__(self, sl):
+        return np.asarray(self._mm[sl], dtype=np.float32) / 32768.0
+
+
+def plan_windows(wav: Path) -> list[tuple[int, int]]:
+    # 앞부분이 같으면 같은 자리에서 자르므로, 녹음이 뒤에 붙어도 앞 창들은 그대로 쓸 수 있다
+    return split_windows(_LazyAudio(wav), target_s=WINDOW_S, search_s=min(20.0, WINDOW_S / 10))  # type: ignore[arg-type]
+
+
+def _shift(segs: list[dict], offset: float) -> list[dict]:
+    for seg in segs:
+        seg["start"] += offset
+        seg["end"] += offset
+        for w in seg.get("words") or []:
+            w["start"] += offset
+            w["end"] += offset
+    return segs
 
 
 def find_source(mdir: Path) -> Path | None:
@@ -81,26 +154,70 @@ def run(job_id: str) -> int:
             duration = wav_info(wav).duration
         store.update_meeting(mid, duration=duration)
 
-        prog.set("load", 0.0, "모델 준비 중 (처음에는 내려받기 때문에 오래 걸릴 수 있어요)", force=True)
-        engine = make_engine("final")
-        engine.load()
-        diarizer = make_diarizer()
-        prog.set("load", 1.0, force=True)
-
-        audio = read_audio(wav)
         context = store.get_setting("vocabulary", "") or ""
-        prog.set("transcribe", 0.0, "받아쓰는 중", force=True)
-        segments = engine.transcribe_long(audio, language=settings.language, context=context, on_progress=lambda f: prog.set("transcribe", f))
-        del engine
+        key = hashlib.sha1(f"{CKPT_VERSION}|{describe_final()}|{settings.language}|{context}|{WINDOW_S}".encode()).hexdigest()
+        ck = Checkpoints(mdir, key)
+        windows = plan_windows(wav)
+        total = max(1, windows[-1][1] if windows else 1)
+        segments: list[dict] = []
+        todo: list[tuple[int, int]] = []
+        done = 0
+        for a, b in windows:
+            saved = ck.load(f"asr_{a}_{b}")
+            if saved is None:
+                todo.append((a, b))
+            else:
+                segments.extend(saved)
+                done += b - a
+
+        if todo:
+            prog.set("load", 0.0, "모델 준비 중 (처음에는 내려받기 때문에 오래 걸릴 수 있어요)", force=True)
+            engine = make_engine("final")
+            engine.load()
+            prog.set("load", 1.0, force=True)
+            resumed = done > 0
+            for i, (a, b) in enumerate(todo):
+                msg = f"받아쓰는 중 ({i + 1}/{len(todo)}구간{', 이전 진행분 이어서' if resumed else ''})" if len(windows) > 1 else "받아쓰는 중"
+                prog.set("transcribe", done / total, msg, force=True)
+                audio = read_audio(wav, a / SAMPLE_RATE, b / SAMPLE_RATE)
+                if hasattr(engine, "base_offset"):
+                    engine.base_offset = a / SAMPLE_RATE  # 시연용 엔진이 대본 위치를 맞추는 데 쓴다
+                segs = engine.transcribe_long(
+                    audio, language=settings.language, context=context,
+                    on_progress=lambda f, a=a, b=b: prog.set("transcribe", (done + f * (b - a)) / total),
+                )
+                del audio
+                segs = _shift(segs, a / SAMPLE_RATE)
+                ck.save(f"asr_{a}_{b}", segs)
+                segments.extend(segs)
+                done += b - a
+            del engine
+        print(f"windows={len(windows)} reused={len(windows) - len(todo)}", flush=True)
+        segments.sort(key=lambda s: s["start"])
+        # 녹음이 늘어 나뉜 자리가 바뀐 옛 창 결과는 지운다
+        valid = {f"asr_{a}_{b}" for a, b in windows}
+        for f in ck.dir.glob("asr_*.json"):
+            if f.stem not in valid:
+                f.unlink()
 
         prog.set("diarize", 0.0, "화자 구분 중", force=True)
+        diarizer = make_diarizer()
         turns: list[dict] = []
         diar_name = diarizer.describe()
-        try:
-            turns = diarizer.diarize(wav, audio, num_speakers=meeting.get("num_speakers"), on_progress=lambda f: prog.set("diarize", f))
-        except Exception as exc:  # noqa: BLE001 - 화자 구분 실패해도 전사는 살린다
-            diar_name = f"{diar_name} (실패: {type(exc).__name__})"
-            prog.notes.append(f"화자 구분을 건너뛰었어요: {exc}")
+        diar_key = f"diar_{diar_name}_{total}_{meeting.get('num_speakers') or 0}".replace("/", "_").replace(":", "_")
+        saved_turns = ck.load(diar_key)
+        if saved_turns is not None:
+            turns = saved_turns
+        else:
+            try:
+                audio = read_audio(wav)
+                turns = diarizer.diarize(wav, audio, num_speakers=meeting.get("num_speakers"), on_progress=lambda f: prog.set("diarize", f))
+                del audio
+                ck.drop_prefix("diar_", keep=diar_key)
+                ck.save(diar_key, turns)
+            except Exception as exc:  # noqa: BLE001 - 화자 구분 실패해도 전사는 살린다
+                diar_name = f"{diar_name} (실패: {type(exc).__name__})"
+                prog.notes.append(f"화자 구분을 건너뛰었어요: {exc}")
 
         prog.set("merge", 0.0, "정리 중", force=True)
         boundaries = [float(a["anchor"]["t"]) for a in store.list_annotations(mid) if a["kind"] == "divider" and "t" in a["anchor"]]

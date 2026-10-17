@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import threading
 from collections import OrderedDict
 from typing import Optional
@@ -20,10 +21,17 @@ def speaker_name(speakers: dict, label: Optional[str]) -> Optional[str]:
     return label
 
 
+def _anchor_sig(ann: dict) -> str:
+    """위치 계산에 쓰이는 값만 모은 서명. 답글·상태·내보내기 표시가 바뀌어도 위치는 다시 계산하지 않는다."""
+    return json.dumps([ann["kind"], ann.get("origin"), ann.get("origin_version"), ann["anchor"], ann.get("replacement")], ensure_ascii=False, sort_keys=True)
+
+
 class Views:
     def __init__(self, store: Store, cache_size: int = 16):
         self.store = store
         self._cache: OrderedDict[tuple, TextIndex] = OrderedDict()
+        # 텍스트 버전별로 계산해 둔 첨삭 위치: {index key: {ann id: (서명, pos, match)}}
+        self._pos: OrderedDict[tuple, dict] = OrderedDict()
         self._lock = threading.Lock()
         self._size = cache_size
 
@@ -34,11 +42,46 @@ class Views:
                 self._cache.move_to_end(key)
                 return idx
         idx = TextIndex(units)
+        idx.key = key  # type: ignore[attr-defined]
         with self._lock:
             self._cache[key] = idx
             while len(self._cache) > self._size:
                 self._cache.popitem(last=False)
         return idx
+
+    def resolve(self, anns: list[dict], idx: TextIndex, view: str, version: int) -> list[dict]:
+        """resolve_annotations와 같지만, 같은 텍스트 버전에서 이미 계산한 위치는 다시 계산하지 않는다."""
+        key = getattr(idx, "key", None)
+        if key is None:
+            return resolve_annotations(anns, idx, view, version)
+        with self._lock:
+            cache = self._pos.get(key)
+            if cache is None:
+                cache = self._pos[key] = {}
+                while len(self._pos) > self._size:
+                    self._pos.popitem(last=False)
+            else:
+                self._pos.move_to_end(key)
+        out: list[Optional[dict]] = []
+        missing: list[dict] = []
+        for a in anns:
+            hit = cache.get(a["id"])
+            if hit is not None and hit[0] == _anchor_sig(a):
+                item = dict(a, pos=hit[1])
+                if hit[2] is not None:
+                    item["match"] = hit[2]
+                out.append(item)
+            else:
+                out.append(None)
+                missing.append(a)
+        if missing:
+            fresh = iter(resolve_annotations(missing, idx, view, version))
+            for i, item in enumerate(out):
+                if item is None:
+                    r = next(fresh)
+                    cache[r["id"]] = (_anchor_sig(r), r["pos"], r.get("match"))
+                    out[i] = r
+        return out  # type: ignore[return-value]
 
     # ---------- 실시간 기록 ----------
     def live_units(self, meeting_id: str) -> list[dict]:
@@ -66,14 +109,14 @@ class Views:
 
     def live_view(self, meeting_id: str) -> dict:
         idx = self.live_index(meeting_id)
-        anns = resolve_annotations(self.store.list_annotations(meeting_id), idx, "live", 0)
+        anns = self.resolve(self.store.list_annotations(meeting_id), idx, "live", 0)
         return {"units": idx.units, "annotations": anns}
 
     def final_view(self, meeting_id: str) -> Optional[dict]:
         idx, version, final = self.final_index(meeting_id)
         if idx is None or final is None:
             return None
-        anns = resolve_annotations(self.store.list_annotations(meeting_id), idx, "final", version)
+        anns = self.resolve(self.store.list_annotations(meeting_id), idx, "final", version)
         data = final["data"]
         return {
             "version": version,

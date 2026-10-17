@@ -1,7 +1,9 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as RMouseEvent } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as RMouseEvent, type RefObject } from 'react'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import { Highlighter, MessageSquarePlus, NotebookPen, PenLine, SeparatorHorizontal, StickyNote } from 'lucide-react'
-import { api, type Annotation, type Unit } from '../lib/api'
-import { buildModel, piecesFor, timeAtOffset, unitAtTime, type Piece, type View } from '../lib/model'
+import { type Annotation, type Unit } from '../lib/api'
+import { annActions } from '../lib/annActions'
+import { buildModel, piecesFor, timeAtOffset, unitAtTime, type Piece, type RangeAnn, type View } from '../lib/model'
 import { readSelection, type TextSelection } from '../lib/selection'
 import { bridges, seekTo, useStore } from '../lib/store'
 import { fmtTime } from '../lib/time'
@@ -13,6 +15,7 @@ import { Composer } from './Composer'
 import { Floating } from './Floating'
 import { MemoCard } from './MemoCard'
 import { SpeakerLabel } from './SpeakerLabel'
+import { clearHighlights, paintHighlights, TranscriptFind, useFindShortcut, type Hit } from './TranscriptFind'
 
 interface Props {
   view: View
@@ -21,6 +24,8 @@ interface Props {
   annotations: Annotation[]
   partial?: { t0: number; t1: number; text: string } | null
   recording?: boolean
+  /** 스크롤되는 영역. 긴 기록은 여기에 보이는 문장만 그린다. */
+  scrollRef: RefObject<HTMLDivElement | null>
 }
 
 type ComposerState =
@@ -83,7 +88,7 @@ function PieceView({ p, onOpen, hover }: { p: Piece; onOpen: (ids: string[], el:
 
 interface RowProps {
   u: Unit
-  pieces: Piece[]
+  ranges: RangeAnn[] | undefined
   showSpeaker: boolean
   active: boolean
   flash: boolean
@@ -102,7 +107,8 @@ interface RowProps {
   onHover: (id: string | null) => void
 }
 
-const UnitRow = memo(function UnitRow({ u, pieces, showSpeaker, active, flash, comments, memos, dividers, view, meetingId, showMarks, hover, flashAnn, onOpen, onMemo, onComment, onDivider, onHover }: RowProps) {
+const UnitRow = memo(function UnitRow({ u, ranges, showSpeaker, active, flash, comments, memos, dividers, view, meetingId, showMarks, hover, flashAnn, onOpen, onMemo, onComment, onDivider, onHover }: RowProps) {
+  const pieces = useMemo(() => piecesFor(u.text, ranges, view, showMarks), [u.text, ranges, view, showMarks])
   return (
     <>
       {showSpeaker && (
@@ -142,12 +148,20 @@ function unitHasAnn(model: ReturnType<typeof buildModel>, unitId: string, annId:
   return !!model.perUnit.get(unitId)?.some((r) => r.ann.id === annId)
 }
 
-export function TranscriptView({ view, meetingId, units, annotations, partial, recording }: Props) {
+/** 그리기 전 높이 추정 (그린 뒤에는 실제 높이를 잰다). 한 줄에 한글 약 42자. */
+function estimateRow(u: Unit, speaker: boolean, model: ReturnType<typeof buildModel>, showMarks: boolean): number {
+  let h = 10 + Math.max(1, Math.ceil(u.text.length / 42)) * 27
+  if (speaker) h += 30
+  if (showMarks) h += (model.commentEnds.get(u.id)?.length || 0) * 80 + (model.memosAfter.get(u.id)?.length || 0) * 64
+  h += (model.dividersAfter.get(u.id)?.length || 0) * 44
+  return h
+}
+
+export function TranscriptView({ view, meetingId, units, annotations, partial, recording, scrollRef }: Props) {
   const showMarks = useStore((s) => s.showMarks)
   const playing = useStore((s) => s.playing)
   const follow = useStore((s) => s.follow)
   const flashUnit = useStore((s) => s.flashUnit)
-  const refreshViews = useStore((s) => s.refreshViews)
   const toast = useStore((s) => s.toast)
   const ref = useRef<HTMLDivElement>(null)
   const [sel, setSel] = useState<TextSelection | null>(null)
@@ -160,7 +174,62 @@ export function TranscriptView({ view, meetingId, units, annotations, partial, r
   const byId = useMemo(() => new Map(annotations.map((a) => [a.id, a])), [annotations])
   const unitById = useMemo(() => new Map(units.map((u) => [u.id, u])), [units])
   const activeId = useStore((s) => (recording || (!s.playing && s.playerTime <= 0) ? null : unitAtTime(units, s.playerTime)))
-  const piecesByUnit = useMemo(() => units.map((u) => piecesFor(u.text, model.perUnit.get(u.id), view, showMarks)), [units, model, view, showMarks])
+  const indexById = useMemo(() => new Map(units.map((u, i) => [u.id, i])), [units])
+  const listRef = useRef<HTMLDivElement>(null)
+  const [scrollMargin, setScrollMargin] = useState(0)
+  const showSpeakerAt = (i: number) => view === 'final' && (i === 0 || units[i - 1].speaker !== units[i].speaker)
+
+  // 긴 기록: 보이는 문장(+앞뒤 여유)만 그린다
+  const virtualizer = useVirtualizer({
+    count: units.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: (i) => estimateRow(units[i], showSpeakerAt(i), model, showMarks),
+    getItemKey: (i) => units[i].id,
+    overscan: 10,
+    scrollMargin,
+  })
+
+  // 목록 위의 안내 카드 높이만큼 목록이 아래에서 시작한다
+  useLayoutEffect(() => {
+    const top = listRef.current?.offsetTop ?? 0
+    if (Math.abs(top - scrollMargin) > 1) setScrollMargin(top)
+  })
+
+  const scrollToIndex = useCallback(
+    (i: number, align: 'center' | 'start' | 'end' = 'center') => virtualizer.scrollToIndex(i, { align }),
+    [virtualizer],
+  )
+
+  useEffect(() => {
+    bridges.transcript = {
+      scrollToUnit: (id, opts) => {
+        const i = indexById.get(id)
+        if (i !== undefined) scrollToIndex(i, opts?.align ?? 'center')
+      },
+    }
+    return () => {
+      bridges.transcript = null
+    }
+  }, [indexById, scrollToIndex])
+
+  // 찾기 (⌘F)
+  const find = useFindShortcut(true)
+  const hitsRef = useRef<{ hits: Hit[]; current: number }>({ hits: [], current: -1 })
+  const onHits = useCallback((hits: Hit[], current: number) => {
+    hitsRef.current = { hits, current }
+    paintHighlights(listRef.current, units, hits, current)
+  }, [units])
+  const onJump = useCallback((h: Hit) => scrollToIndex(h.i), [scrollToIndex])
+  const closeFind = useCallback(() => {
+    find.setOpen(false)
+    hitsRef.current = { hits: [], current: -1 }
+    clearHighlights()
+  }, [find])
+  // 스크롤해서 새로 그린 문장에도 칠한다
+  useEffect(() => {
+    if (find.open) paintHighlights(listRef.current, units, hitsRef.current.hits, hitsRef.current.current)
+  })
+  useEffect(() => clearHighlights, [])
 
   const captureSelection = useCallback(() => {
     setTimeout(() => {
@@ -181,19 +250,20 @@ export function TranscriptView({ view, meetingId, units, annotations, partial, r
   // 재생 중인 문장 따라가기
   useEffect(() => {
     if (!activeId || !playing || !follow) return
-    document.getElementById(`unit-${activeId}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' })
-  }, [activeId, playing, follow])
+    const i = indexById.get(activeId)
+    if (i !== undefined) scrollToIndex(i)
+  }, [activeId, playing, follow, indexById, scrollToIndex])
 
   useEffect(() => {
     if (!flashUnit) return
-    document.getElementById(`unit-${flashUnit}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' })
-  }, [flashUnit])
+    const i = indexById.get(flashUnit)
+    if (i !== undefined) scrollToIndex(i)
+  }, [flashUnit, indexById, scrollToIndex])
 
   const create = async (body: Record<string, unknown>, toNotes = false) => {
     try {
-      const ann = await api.addAnnotation(meetingId, { view, ...body })
+      const ann = await annActions.add(meetingId, { view, ...body })
       if (toNotes) await sendToNotes(meetingId, [ann], view)
-      else await refreshViews()
     } catch (e) {
       toast((e as Error).message, 'error')
     }
@@ -260,31 +330,47 @@ export function TranscriptView({ view, meetingId, units, annotations, partial, r
 
   return (
     <div className={`transcript view-${view} ${showMarks ? '' : 'marks-off'}`} ref={ref} onMouseUp={captureSelection} onKeyUp={(e) => e.shiftKey && captureSelection()}>
+      {find.open && (
+        <TranscriptFind units={units} initial={find.initial} inputRef={find.inputRef} onHits={onHits} onJump={onJump} onClose={closeFind} />
+      )}
       {showMarks && model.memosBefore.map((m) => <MemoCard key={m.id} ann={m} view={view} />)}
       {model.dividersBefore.map((d) => <DividerRow key={d.id} ann={d} view={view} />)}
-      {units.map((u, i) => (
-        <UnitRow
-          key={u.id}
-          u={u}
-          pieces={piecesByUnit[i]}
-          showSpeaker={view === 'final' && (i === 0 || units[i - 1].speaker !== u.speaker)}
-          active={u.id === activeId}
-          flash={u.id === flashUnit}
-          comments={model.commentEnds.get(u.id)}
-          memos={model.memosAfter.get(u.id)}
-          dividers={model.dividersAfter.get(u.id)}
-          view={view}
-          meetingId={meetingId}
-          showMarks={showMarks}
-          hover={hover !== null && unitHasAnn(model, u.id, hover) ? hover : null}
-          flashAnn={flashAnn !== null && model.commentEnds.get(u.id)?.some((c) => c.id === flashAnn) ? flashAnn : null}
-          onOpen={openPop}
-          onMemo={openMemo}
-          onComment={openComment}
-          onDivider={openDivider}
-          onHover={setHover}
-        />
-      ))}
+      <div ref={listRef} className="vlist" style={{ height: virtualizer.getTotalSize() }}>
+        {virtualizer.getVirtualItems().map((vi) => {
+          const i = vi.index
+          const u = units[i]
+          return (
+            <div
+              key={vi.key}
+              data-index={i}
+              ref={virtualizer.measureElement}
+              className="vrow"
+              style={{ transform: `translateY(${vi.start - scrollMargin}px)` }}
+            >
+              <UnitRow
+                u={u}
+                ranges={model.perUnit.get(u.id)}
+                showSpeaker={showSpeakerAt(i)}
+                active={u.id === activeId}
+                flash={u.id === flashUnit}
+                comments={model.commentEnds.get(u.id)}
+                memos={model.memosAfter.get(u.id)}
+                dividers={model.dividersAfter.get(u.id)}
+                view={view}
+                meetingId={meetingId}
+                showMarks={showMarks}
+                hover={hover !== null && unitHasAnn(model, u.id, hover) ? hover : null}
+                flashAnn={flashAnn !== null && model.commentEnds.get(u.id)?.some((c) => c.id === flashAnn) ? flashAnn : null}
+                onOpen={openPop}
+                onMemo={openMemo}
+                onComment={openComment}
+                onDivider={openDivider}
+                onHover={setHover}
+              />
+            </div>
+          )
+        })}
+      </div>
       {partial && partial.text && (
         <div className="unit partial">
           <span className="u-time">{fmtTime(partial.t0)}</span>
