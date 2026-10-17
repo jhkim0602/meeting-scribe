@@ -8,6 +8,7 @@ import { Floating } from './Floating'
 const STATUS: Record<string, { label: string; tone: string }> = {
   empty: { label: '녹음 전', tone: 'gray' },
   recording: { label: '녹음 중', tone: 'red' },
+  paused: { label: '일시정지', tone: 'amber' },
   recorded: { label: '원본 전', tone: 'amber' },
   processing: { label: '원본 만드는 중', tone: 'blue' },
   ready: { label: '원본 완료', tone: 'green' },
@@ -28,7 +29,7 @@ export function PageHeader() {
   const [confirmDelete, setConfirmDelete] = useState(false)
   const titleRef = useRef<HTMLTextAreaElement>(null)
   const recordingHere = rec.status !== 'idle' && rec.meetingId === meeting.id
-  const status = recordingHere ? STATUS.recording : STATUS[meeting.status] || STATUS.empty
+  const status = recordingHere ? (rec.status === 'paused' ? STATUS.paused : STATUS.recording) : STATUS[meeting.status] || STATUS.empty
   const duration = recordingHere ? rec.elapsed : meeting.duration
 
   useEffect(() => setTitle(meeting.title), [meeting.id, meeting.title])

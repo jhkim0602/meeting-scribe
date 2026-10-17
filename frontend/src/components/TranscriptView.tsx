@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as RMouseEvent } from 'react'
-import { Highlighter, MessageSquarePlus, NotebookPen, PenLine, StickyNote } from 'lucide-react'
+import { Highlighter, MessageSquarePlus, NotebookPen, PenLine, SeparatorHorizontal, StickyNote } from 'lucide-react'
 import { api, type Annotation, type Unit } from '../lib/api'
 import { buildModel, piecesFor, timeAtOffset, unitAtTime, type Piece, type View } from '../lib/model'
 import { readSelection, type TextSelection } from '../lib/selection'
@@ -8,6 +8,7 @@ import { fmtTime } from '../lib/time'
 import { sendToNotes } from '../lib/notesExport'
 import { AnnotationPopover } from './AnnotationPopover'
 import { CommentThread } from './CommentThread'
+import { DividerRow } from './DividerRow'
 import { Composer } from './Composer'
 import { Floating } from './Floating'
 import { MemoCard } from './MemoCard'
@@ -24,7 +25,7 @@ interface Props {
 
 type ComposerState =
   | { mode: 'comment' | 'edit'; rect: DOMRect; start: { unit: string; offset: number }; end: { unit: string; offset: number }; quote: string }
-  | { mode: 'memo'; rect: DOMRect; t: number; after: string | null }
+  | { mode: 'memo' | 'divider'; rect: DOMRect; t: number; after: string | null }
 
 function markClasses(anns: Annotation[]): string {
   const cls: string[] = []
@@ -88,6 +89,7 @@ interface RowProps {
   flash: boolean
   comments: Annotation[] | undefined
   memos: Annotation[] | undefined
+  dividers: Annotation[] | undefined
   view: View
   meetingId: string
   showMarks: boolean
@@ -96,10 +98,11 @@ interface RowProps {
   onOpen: (ids: string[], el: HTMLElement) => void
   onMemo: (u: Unit, el: HTMLElement) => void
   onComment: (u: Unit, el: HTMLElement) => void
+  onDivider: (u: Unit, el: HTMLElement) => void
   onHover: (id: string | null) => void
 }
 
-const UnitRow = memo(function UnitRow({ u, pieces, showSpeaker, active, flash, comments, memos, view, meetingId, showMarks, hover, flashAnn, onOpen, onMemo, onComment, onHover }: RowProps) {
+const UnitRow = memo(function UnitRow({ u, pieces, showSpeaker, active, flash, comments, memos, dividers, view, meetingId, showMarks, hover, flashAnn, onOpen, onMemo, onComment, onDivider, onHover }: RowProps) {
   return (
     <>
       {showSpeaker && (
@@ -123,10 +126,14 @@ const UnitRow = memo(function UnitRow({ u, pieces, showSpeaker, active, flash, c
           <button className="u-act" title="이 문장 뒤에 메모" onClick={(e) => onMemo(u, e.currentTarget)}>
             <StickyNote size={14} />
           </button>
+          <button className="u-act" title="이 문장 뒤에 구분선 (쉬는 시간, 단락)" onClick={(e) => onDivider(u, e.currentTarget)}>
+            <SeparatorHorizontal size={14} />
+          </button>
         </div>
       </div>
       {showMarks && comments?.map((c) => <CommentThread key={c.id} ann={c} view={view} meetingId={meetingId} flash={flashAnn === c.id} onHover={onHover} />)}
       {showMarks && memos?.map((m) => <MemoCard key={m.id} ann={m} view={view} />)}
+      {dividers?.map((d) => <DividerRow key={d.id} ann={d} view={view} />)}
     </>
   )
 })
@@ -226,6 +233,7 @@ export function TranscriptView({ view, meetingId, units, annotations, partial, r
     [byId],
   )
   const openMemo = useCallback((u: Unit, el: HTMLElement) => setComposer({ mode: 'memo', rect: el.getBoundingClientRect(), t: u.t1 + 0.01, after: u.id }), [])
+  const openDivider = useCallback((u: Unit, el: HTMLElement) => setComposer({ mode: 'divider', rect: el.getBoundingClientRect(), t: u.t1 + 0.01, after: u.id }), [])
   const openComment = useCallback(
     (u: Unit, el: HTMLElement) =>
       setComposer({ mode: 'comment', rect: el.getBoundingClientRect(), start: { unit: u.id, offset: 0 }, end: { unit: u.id, offset: u.text.length }, quote: u.text }),
@@ -253,6 +261,7 @@ export function TranscriptView({ view, meetingId, units, annotations, partial, r
   return (
     <div className={`transcript view-${view} ${showMarks ? '' : 'marks-off'}`} ref={ref} onMouseUp={captureSelection} onKeyUp={(e) => e.shiftKey && captureSelection()}>
       {showMarks && model.memosBefore.map((m) => <MemoCard key={m.id} ann={m} view={view} />)}
+      {model.dividersBefore.map((d) => <DividerRow key={d.id} ann={d} view={view} />)}
       {units.map((u, i) => (
         <UnitRow
           key={u.id}
@@ -263,6 +272,7 @@ export function TranscriptView({ view, meetingId, units, annotations, partial, r
           flash={u.id === flashUnit}
           comments={model.commentEnds.get(u.id)}
           memos={model.memosAfter.get(u.id)}
+          dividers={model.dividersAfter.get(u.id)}
           view={view}
           meetingId={meetingId}
           showMarks={showMarks}
@@ -271,6 +281,7 @@ export function TranscriptView({ view, meetingId, units, annotations, partial, r
           onOpen={openPop}
           onMemo={openMemo}
           onComment={openComment}
+          onDivider={openDivider}
           onHover={setHover}
         />
       ))}
@@ -294,7 +305,7 @@ export function TranscriptView({ view, meetingId, units, annotations, partial, r
         </Floating>
       )}
 
-      {composer && composer.mode !== 'memo' && (
+      {composer && (composer.mode === 'comment' || composer.mode === 'edit') && (
         <Composer
           rect={composer.rect}
           mode={composer.mode}
@@ -311,8 +322,13 @@ export function TranscriptView({ view, meetingId, units, annotations, partial, r
           }
         />
       )}
-      {composer && composer.mode === 'memo' && (
-        <Composer rect={composer.rect} mode="memo" onClose={() => setComposer(null)} onSubmit={(text, toNotes) => create({ kind: 'memo', t: composer.t, after: composer.after, body: text }, toNotes)} />
+      {composer && (composer.mode === 'memo' || composer.mode === 'divider') && (
+        <Composer
+          rect={composer.rect}
+          mode={composer.mode}
+          onClose={() => setComposer(null)}
+          onSubmit={(text, toNotes) => create({ kind: composer.mode, t: composer.t, after: composer.after, body: text }, toNotes)}
+        />
       )}
       {pop && popAnns.length > 0 && <AnnotationPopover anns={popAnns} rect={pop.rect} view={view} onClose={() => setPop(null)} />}
     </div>

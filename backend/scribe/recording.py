@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import Optional
+from typing import Callable, Optional
 
 from fastapi import WebSocket, WebSocketDisconnect
 
@@ -16,6 +18,73 @@ from .engines import LiveEngineHolder
 from .live import LiveEvent, LiveSegmenter
 
 _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="live-asr")
+
+# 이보다 짧게 멈춘 것은 구분선을 만들지 않는다 (실수로 누른 일시정지, 짧은 연결 끊김)
+MIN_BREAK_S = float(os.environ.get("SCRIBE_MIN_BREAK_S", "20"))
+BREAK_LABEL = "쉬는 시간"
+
+
+def make_break_divider(store: Store, meeting_id: str, t: float, wall_from: float, wall_to: float) -> Optional[dict]:
+    """녹음이 멈췄던 구간을 '쉬는 시간' 구분선으로 남긴다. 녹음 시간 t 지점(멈춘 곳)에 놓인다."""
+    if wall_to - wall_from < MIN_BREAK_S:
+        return None
+    after = None
+    for seg in store.list_live_segments(meeting_id):
+        if seg["t0"] <= t:
+            after = seg["id"]
+        else:
+            break
+    return store.add_annotation(
+        meeting_id,
+        kind="divider",
+        origin="live",
+        origin_version=0,
+        anchor={"t": round(float(t), 3), "after": after},
+        body=BREAK_LABEL,
+        meta={"break_start": wall_from, "break_end": wall_to, "auto": True},
+    )
+
+
+def mark_paused(store: Store, meeting_id: str, t: float, wall: float) -> None:
+    """멈춘 시각을 기억한다. 이미 멈춘 상태면 처음 멈춘 시각을 유지한다."""
+    m = store.get_meeting(meeting_id) or {}
+    if not m.get("paused_wall"):
+        store.update_meeting(meeting_id, paused_wall=wall, paused_t=t)
+
+
+def close_break(store: Store, meeting_id: str, fallback_t: float) -> Optional[dict]:
+    """다시 녹음을 시작할 때: 멈춰 있던 동안을 구분선으로 만들고 기록을 지운다."""
+    m = store.get_meeting(meeting_id) or {}
+    pw, pt = m.get("paused_wall"), m.get("paused_t")
+    if not pw:
+        return None
+    store.update_meeting(meeting_id, paused_wall=None, paused_t=None)
+    return make_break_divider(store, meeting_id, pt if pt is not None else fallback_t, pw, time.time())
+
+
+def begin_session_break(store: Store, meeting_id: str, start_s: float, params: dict) -> Optional[dict]:
+    """새 연결이 열렸을 때 쉬는 시간 처리.
+
+    - continuous=1: 브라우저가 끊긴 동안의 소리를 모아 두었다가 보내는 재연결. 끊김은 쉬는 시간이 아니다.
+    - paused=1: 브라우저가 아직 일시정지 상태. 구분선은 재개할 때 만든다.
+    - since=<epoch>: 마지막으로 소리를 보낸 시각 (노트북 잠자기 등).
+    """
+    m = store.get_meeting(meeting_id) or {}
+    client_paused = params.get("paused") == "1"
+    if params.get("continuous") == "1":
+        if not client_paused:
+            store.update_meeting(meeting_id, paused_wall=None, paused_t=None)
+        return None
+    try:
+        since = float(params["since"]) if params.get("since") else None
+    except ValueError:
+        since = None
+    pw = m.get("paused_wall")
+    if since is not None and (not pw or since < pw):
+        store.update_meeting(meeting_id, paused_wall=since, paused_t=m.get("paused_t") if pw else start_s)
+    if client_paused or start_s <= 0:
+        return None
+    return close_break(store, meeting_id, start_s)
 
 
 class RecordingSession:
@@ -78,7 +147,14 @@ class RecordingSession:
         return self.writer.duration
 
 
-async def handle_recording(ws: WebSocket, store: Store, holder: LiveEngineHolder, sessions: dict, on_stop) -> None:
+async def handle_recording(
+    ws: WebSocket,
+    store: Store,
+    holder: LiveEngineHolder,
+    sessions: dict,
+    on_stop: Callable[[str], Optional[dict]],
+    on_resume: Optional[Callable[[str], bool]] = None,
+) -> None:
     meeting_id = ws.path_params["meeting_id"]
     await ws.accept()
     meeting = store.get_meeting(meeting_id)
@@ -95,15 +171,14 @@ async def handle_recording(ws: WebSocket, store: Store, holder: LiveEngineHolder
         await ws.send_text(json.dumps({"type": "error", "message": "이미 다른 창에서 녹음 중입니다"}))
         await ws.close()
         return
-    if meeting["status"] == "processing":
-        await ws.send_text(json.dumps({"type": "error", "message": "원본을 만드는 중에는 녹음할 수 없습니다"}))
-        await ws.close()
-        return
+    # 원본을 만드는 중이면(예: 실수로 녹음 종료) 그 작업을 멈추고 이어서 녹음한다
+    cancelled_job = bool(on_resume(meeting_id)) if on_resume and meeting["status"] == "processing" else False
     holder.start_loading()
     session = RecordingSession(store, holder, meeting_id, ws)
     sessions[meeting_id] = session
     store.update_meeting(meeting_id, status="recording")
-    await session.send({"type": "ready", "offset": session.start_s, "engine": holder.info()})
+    divider = begin_session_break(store, meeting_id, session.start_s, dict(ws.query_params))
+    await session.send({"type": "ready", "offset": session.start_s, "engine": holder.info(), "divider": divider, "cancelled_job": cancelled_job})
     stop = False
     try:
         while True:
@@ -119,7 +194,16 @@ async def handle_recording(ws: WebSocket, store: Store, holder: LiveEngineHolder
                 if kind == "pause":
                     await session.flush()
                     store.update_meeting(meeting_id, duration=session.writer.duration)
+                    # from_t/from_wall: 오래 조용했던 경우 조용해진 시점부터 쉬는 시간으로 본다
+                    t = data.get("from_t")
+                    t = float(t) if isinstance(t, (int, float)) and 0 <= t <= session.writer.duration else session.writer.duration
+                    wall = data.get("from_wall")
+                    wall = float(wall) if isinstance(wall, (int, float)) and wall <= time.time() else time.time()
+                    mark_paused(store, meeting_id, t, wall)
                     await session.send({"type": "paused", "duration": session.writer.duration})
+                elif kind == "resume":
+                    divider = close_break(store, meeting_id, session.writer.duration)
+                    await session.send({"type": "resumed", "divider": divider})
                 elif kind == "stop":
                     await session.flush()
                     stop = True
@@ -139,6 +223,8 @@ async def handle_recording(ws: WebSocket, store: Store, holder: LiveEngineHolder
             duration = session.close()
             sessions.pop(meeting_id, None)
             store.update_meeting(meeting_id, duration=duration, status="recorded")
+            # 녹음이 끝나거나 끊긴 시각 → 다시 이어서 녹음하면 그 사이를 쉬는 시간으로 표시
+            mark_paused(store, meeting_id, duration, time.time())
             if stop:
                 job = on_stop(meeting_id)
                 try:

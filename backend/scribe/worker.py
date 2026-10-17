@@ -103,7 +103,8 @@ def run(job_id: str) -> int:
             prog.notes.append(f"화자 구분을 건너뛰었어요: {exc}")
 
         prog.set("merge", 0.0, "정리 중", force=True)
-        data = build_utterances(segments, turns)
+        boundaries = [float(a["anchor"]["t"]) for a in store.list_annotations(mid) if a["kind"] == "divider" and "t" in a["anchor"]]
+        data = build_utterances(segments, turns, boundaries)
         data["duration"] = duration
         data["language"] = settings.language
         version = store.save_final_version(mid, data, engine=describe_final(), diarizer=diar_name)

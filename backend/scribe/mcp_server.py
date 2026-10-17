@@ -129,12 +129,17 @@ def get_annotations(meeting_id: str = "latest") -> str:
     anns = sorted(_store.list_annotations(mid), key=lambda a: a["anchor"].get("t0", a["anchor"].get("t", 0)))
     if not anns:
         return "(첨삭 없음)"
-    label = {"comment": "댓글", "memo": "메모", "edit": "수정", "highlight": "강조"}
+    label = {"comment": "댓글", "memo": "메모", "edit": "수정", "highlight": "강조", "divider": "구분선"}
     lines = []
     for a in anns:
         anc = a["anchor"]
         t = anc.get("t0", anc.get("t", 0))
         quote = f' "{anc["quote"]}"' if anc.get("quote") else ""
+        if a["kind"] == "divider":
+            from .export import divider_text
+
+            lines.append(f"- [{fmt_time(t)}] ──── {divider_text(a)} ────")
+            continue
         if a["kind"] == "edit":
             detail = f' → "{a.get("replacement") or ""}" ({ {"accepted": "적용됨", "dismissed": "무시됨"}.get(a["status"], "제안") })'
         else:

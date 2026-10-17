@@ -22,8 +22,10 @@ def client(tmp_path_factory):
     config.settings.diarizer = "mock"
     from fastapi.testclient import TestClient
 
+    from scribe import recording
     from scribe.main import app
 
+    recording.MIN_BREAK_S = 1.0  # 테스트에서는 1초 이상 멈추면 쉬는 시간
     with TestClient(app) as c:
         yield c
 
@@ -189,4 +191,95 @@ def test_comment_export_flag_and_whole_sentence_comment(client):
     assert ann["exported_at"] is not None
     client.post(f"/api/meetings/{mid}/annotations/exported", json={"ids": [c["id"]], "exported": False})
     assert client.get(f"/api/meetings/{mid}/live").json()["annotations"][0]["exported_at"] is None
+    client.post(f"/api/meetings/{mid}/cancel")
+
+
+
+def _record(client, mid, pcm, query="", messages=(), until="paused"):
+    """녹음 연결을 열어 소리를 보내고 메시지를 차례로 보낸 뒤, until 메시지를 받으면 닫는다."""
+    got = []
+    with client.websocket_connect(f"/api/meetings/{mid}/record{query}") as ws:
+        ready = json.loads(ws.receive_text())
+        got.append(ready)
+        if pcm:
+            ws.send_bytes(pcm)
+        for m in messages:
+            if isinstance(m, (int, float)):
+                time.sleep(m)
+                continue
+            ws.send_text(json.dumps(m))
+            want = {"pause": "paused", "resume": "resumed", "stop": "stopped"}[m["type"]]
+            while True:
+                msg = json.loads(ws.receive_text())
+                got.append(msg)
+                if msg["type"] == want:
+                    break
+    return got
+
+
+def test_pause_resume_creates_break_divider(client):
+    mid = client.post("/api/meetings", json={}).json()["id"]
+    pcm = _speech_pcm([("s", 2.5), ("n", 1.0)])
+    got = _record(client, mid, pcm, messages=[{"type": "pause"}, 1.3, {"type": "resume"}, {"type": "pause"}, 0.2, {"type": "resume"}])
+    resumed = [m for m in got if m["type"] == "resumed"]
+    assert resumed[0]["divider"] is not None and resumed[1]["divider"] is None  # 0.2초 멈춤은 무시
+    d = resumed[0]["divider"]
+    assert d["kind"] == "divider" and d["body"] == "쉬는 시간" and d["meta"]["auto"] is True
+    assert d["meta"]["break_end"] - d["meta"]["break_start"] >= 1.3
+    live = client.get(f"/api/meetings/{mid}/live").json()
+    div = [a for a in live["annotations"] if a["kind"] == "divider"][0]
+    assert div["pos"]["after"] == live["units"][-1]["id"]
+    md = client.get(f"/api/meetings/{mid}/export.md").text
+    assert "──── 쉬는 시간 · " in md and "분 ────" in md
+    client.post(f"/api/meetings/{mid}/cancel")
+
+
+def test_resume_after_stop_cancels_processing_and_marks_break(client):
+    mid = client.post("/api/meetings", json={}).json()["id"]
+    pcm = _speech_pcm([("s", 2.5), ("n", 1.0)] * 3)
+    got = _record(client, mid, pcm, messages=[{"type": "stop"}], until="stopped")
+    assert got[-1]["job"]["status"] in ("queued", "running")
+    # 실수로 종료한 직후 바로 이어서 녹음: 원본 작업을 취소하고, 몇 초 차이는 쉬는 시간이 아니다
+    got2 = _record(client, mid, b"", messages=[{"type": "pause"}])
+    ready = got2[0]
+    assert ready["type"] == "ready" and ready["cancelled_job"] is True
+    assert ready["divider"] is None
+    job = client.get(f"/api/meetings/{mid}/job").json()["job"]
+    assert job["status"] == "cancelled"
+    client.post(f"/api/meetings/{mid}/cancel")
+
+
+def test_continuous_reconnect_is_not_a_break(client):
+    mid = client.post("/api/meetings", json={}).json()["id"]
+    pcm = _speech_pcm([("s", 2.0), ("n", 1.0)])
+    _record(client, mid, pcm, messages=[{"type": "pause"}])
+    time.sleep(1.2)
+    got = _record(client, mid, pcm, query="?continuous=1", messages=[{"type": "pause"}])
+    assert got[0]["divider"] is None
+    # 브라우저가 일시정지 상태로 다시 연결하면 재개할 때 구분선을 만든다
+    m = client.get(f"/api/meetings/{mid}").json()
+    assert m["paused_wall"] is not None
+    time.sleep(1.2)
+    got = _record(client, mid, b"", query="?continuous=1&paused=1", messages=[{"type": "resume"}, {"type": "pause"}])
+    resumed = [x for x in got if x["type"] == "resumed"][0]
+    assert resumed["divider"] is not None
+    # 잠자기 등으로 소리가 끊긴 재연결: since 시각부터 쉬는 시간
+    since = time.time() - 120
+    got = _record(client, mid, b"", query=f"?since={since}", messages=[{"type": "pause"}])
+    d = got[0]["divider"]
+    assert d is not None and abs(d["meta"]["break_start"] - since) < 2
+    client.post(f"/api/meetings/{mid}/cancel")
+
+
+def test_manual_divider_and_settings(client):
+    mid = client.post("/api/meetings", json={}).json()["id"]
+    pcm = _speech_pcm([("s", 2.0), ("n", 1.0)])
+    _record(client, mid, pcm, messages=[{"type": "pause"}])
+    u = client.get(f"/api/meetings/{mid}/live").json()["units"][0]
+    d = client.post(f"/api/meetings/{mid}/annotations", json={"kind": "divider", "view": "live", "t": u["t1"] + 0.01, "after": u["id"], "body": "2부"}).json()
+    assert d["pos"] == {"after": u["id"]} and d["meta"] is None
+    assert client.patch(f"/api/annotations/{d['id']}", json={"body": "안건 2"}).json()["body"] == "안건 2"
+    assert "──── 안건 2 ────" in client.get(f"/api/meetings/{mid}/export.md").text
+    s = client.put("/api/settings", json={"break_prompt_minutes": 5}).json()
+    assert s["break_prompt_minutes"] == 5
     client.post(f"/api/meetings/{mid}/cancel")

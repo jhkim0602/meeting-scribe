@@ -8,7 +8,20 @@ from typing import Optional
 from .textutil import fmt_time
 from .views import Views, speaker_name
 
-KIND_LABEL = {"comment": "댓글", "memo": "메모", "edit": "수정", "highlight": "강조"}
+KIND_LABEL = {"comment": "댓글", "memo": "메모", "edit": "수정", "highlight": "강조", "divider": "구분선"}
+
+
+def divider_text(ann: dict) -> str:
+    """'쉬는 시간 · 14:02–14:15 · 13분' 형식."""
+    label = (ann.get("body") or "").strip() or "구분선"
+    meta = ann.get("meta") or {}
+    bs, be = meta.get("break_start"), meta.get("break_end")
+    if bs and be:
+        a = _dt.datetime.fromtimestamp(bs).strftime("%H:%M")
+        b = _dt.datetime.fromtimestamp(be).strftime("%H:%M")
+        mins = max(1, round((be - bs) / 60))
+        return f"{label} · {a}–{b} · {mins}분"
+    return label
 
 
 def _local_ranges(units: list[dict], annotations: list[dict]) -> dict[str, list[tuple[int, int, dict, bool]]]:
@@ -79,19 +92,22 @@ def transcript_markdown(
     start: Optional[float] = None,
     end: Optional[float] = None,
 ) -> str:
-    anns = annotations if include_annotations else []
+    anns = annotations if include_annotations else [a for a in annotations if a["kind"] == "divider"]
     per = _local_ranges(units, anns)
     memos_after: dict[Optional[str], list[dict]] = {}
     for ann in anns:
         pos = ann.get("pos")
-        if ann["kind"] == "memo" and pos is not None and "after" in pos:
+        if ann["kind"] in ("memo", "divider") and pos is not None and "after" in pos:
             memos_after.setdefault(pos["after"], []).append(ann)
     counter = [0]
     lines: list[str] = []
 
     def memo_lines(key: Optional[str]) -> None:
         for m in sorted(memos_after.get(key, []), key=lambda a: a["anchor"].get("t", 0)):
-            lines.append(f"> [메모 {fmt_time(m['anchor'].get('t', 0))}] {m['body']}")
+            if m["kind"] == "divider":
+                lines.append(f"──── {divider_text(m)} ────")
+            else:
+                lines.append(f"> [메모 {fmt_time(m['anchor'].get('t', 0))}] {m['body']}")
 
     if start is None:
         memo_lines(None)
@@ -112,7 +128,8 @@ def transcript_markdown(
 
 LEGEND = (
     "표기: ==강조== / ==댓글 단 부분==[c1] 아래에 댓글 / ~~원문~~{수정: 사용자가 고친 문장} / "
-    "> [메모 시각] 사용자가 회의 중 남긴 메모. 사용자의 메모·댓글·수정은 중요한 신호이므로 우선 반영할 것."
+    "> [메모 시각] 사용자가 회의 중 남긴 메모 / ──── 구분선 ──── 쉬는 시간이나 회의 단락. "
+    "사용자의 메모·댓글·수정은 중요한 신호이므로 우선 반영할 것."
 )
 
 

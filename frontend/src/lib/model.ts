@@ -20,6 +20,8 @@ export interface RenderModel {
   perUnit: Map<string, RangeAnn[]>
   memosAfter: Map<string, Annotation[]>
   memosBefore: Annotation[]
+  dividersAfter: Map<string, Annotation[]>
+  dividersBefore: Annotation[]
   commentEnds: Map<string, Annotation[]>
   unplaced: Annotation[]
 }
@@ -33,11 +35,19 @@ export function buildModel(units: Unit[], annotations: Annotation[]): RenderMode
   const perUnit = new Map<string, RangeAnn[]>()
   const memosAfter = new Map<string, Annotation[]>()
   const memosBefore: Annotation[] = []
+  const dividersAfter = new Map<string, Annotation[]>()
+  const dividersBefore: Annotation[] = []
   const commentEnds = new Map<string, Annotation[]>()
   const unplaced: Annotation[] = []
   for (const ann of annotations) {
     if (!ann.pos) {
       unplaced.push(ann)
+      continue
+    }
+    if (ann.kind === 'divider' && 'after' in ann.pos) {
+      const key = ann.pos.after
+      if (key === null) dividersBefore.push(ann)
+      else dividersAfter.set(key, [...(dividersAfter.get(key) || []), ann])
       continue
     }
     if (ann.kind === 'memo' && 'after' in ann.pos) {
@@ -66,7 +76,8 @@ export function buildModel(units: Unit[], annotations: Annotation[]): RenderMode
   }
   for (const list of memosAfter.values()) list.sort((a, b) => (a.anchor.t ?? 0) - (b.anchor.t ?? 0))
   for (const list of commentEnds.values()) list.sort((a, b) => (a.anchor.t0 ?? 0) - (b.anchor.t0 ?? 0) || a.created_at - b.created_at)
-  return { perUnit, memosAfter, memosBefore, commentEnds, unplaced }
+  for (const list of dividersAfter.values()) list.sort((a, b) => (a.anchor.t ?? 0) - (b.anchor.t ?? 0))
+  return { perUnit, memosAfter, memosBefore, dividersAfter, dividersBefore, commentEnds, unplaced }
 }
 
 function editDisplay(ann: Annotation, view: View, showMarks: boolean): EditDisplay {

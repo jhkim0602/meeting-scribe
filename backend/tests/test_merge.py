@@ -50,3 +50,22 @@ def test_no_words_no_turns():
     out = build_utterances([{"text": " 안녕하세요 ", "start": 1.0, "end": 2.0, "words": []}], [])
     assert out["utterances"][0]["text"] == "안녕하세요"
     assert out["utterances"][0]["speaker"] is None
+
+
+
+def test_break_boundary_splits_same_speaker_without_gap():
+    """일시정지 앞뒤 소리는 붙어 있지만(무음 없음) 쉬는 시간 경계에서 나눈다."""
+    seg = {
+        "text": "오전 안건은 여기까지 오후에는 채용 얘기",
+        "start": 0.0,
+        "end": 6.0,
+        "words": [
+            {"text": "오전", "start": 0.0, "end": 0.5}, {"text": "안건은", "start": 0.5, "end": 1.2},
+            {"text": "여기까지", "start": 1.2, "end": 2.9}, {"text": "오후에는", "start": 3.0, "end": 3.8},
+            {"text": "채용", "start": 3.8, "end": 4.3}, {"text": "얘기", "start": 4.3, "end": 5.0},
+        ],
+    }
+    turns = [{"speaker": "A", "start": 0.0, "end": 6.0}]
+    assert len(build_utterances([seg], turns)["utterances"]) == 1
+    out = build_utterances([seg], turns, boundaries=[2.95])["utterances"]
+    assert [u["text"] for u in out] == ["오전 안건은 여기까지", "오후에는 채용 얘기"]

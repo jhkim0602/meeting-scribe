@@ -110,6 +110,14 @@ class Store:
         cols = {r["name"] for r in c.execute("PRAGMA table_info(annotations)").fetchall()}
         if "exported_at" not in cols:
             c.execute("ALTER TABLE annotations ADD COLUMN exported_at REAL")
+        if "meta" not in cols:
+            c.execute("ALTER TABLE annotations ADD COLUMN meta TEXT")
+        mcols = {r["name"] for r in c.execute("PRAGMA table_info(meetings)").fetchall()}
+        # 일시정지/연결 끊김 시각: 다시 녹음할 때 쉬는 시간 구분선을 만든다
+        if "paused_wall" not in mcols:
+            c.execute("ALTER TABLE meetings ADD COLUMN paused_wall REAL")
+        if "paused_t" not in mcols:
+            c.execute("ALTER TABLE meetings ADD COLUMN paused_t REAL")
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path, timeout=30, isolation_level=None, check_same_thread=False)
@@ -251,13 +259,14 @@ class Store:
             "color": fields.get("color"),
             "status": fields.get("status") or "open",
             "replies": json.dumps(fields.get("replies") or [], ensure_ascii=False),
+            "meta": json.dumps(fields["meta"], ensure_ascii=False) if fields.get("meta") else None,
             "created_at": now,
             "updated_at": now,
         }
         with self.conn() as c:
             c.execute(
-                "INSERT INTO annotations(id,meeting_id,kind,origin,origin_version,anchor,body,replacement,color,status,replies,created_at,updated_at)"
-                " VALUES(:id,:meeting_id,:kind,:origin,:origin_version,:anchor,:body,:replacement,:color,:status,:replies,:created_at,:updated_at)",
+                "INSERT INTO annotations(id,meeting_id,kind,origin,origin_version,anchor,body,replacement,color,status,replies,meta,created_at,updated_at)"
+                " VALUES(:id,:meeting_id,:kind,:origin,:origin_version,:anchor,:body,:replacement,:color,:status,:replies,:meta,:created_at,:updated_at)",
                 ann,
             )
         return self.get_annotation(ann["id"])  # type: ignore[return-value]
@@ -273,12 +282,12 @@ class Store:
         return [self._ann_row(r) for r in rows]
 
     def update_annotation(self, ann_id: str, **fields: Any) -> Optional[dict]:
-        allowed = {"body", "replacement", "color", "status", "replies", "anchor", "exported_at"}
+        allowed = {"body", "replacement", "color", "status", "replies", "anchor", "exported_at", "meta"}
         cols, vals = [], []
         for key, value in fields.items():
             if key not in allowed:
                 continue
-            if key in ("replies", "anchor") and not isinstance(value, str):
+            if key in ("replies", "anchor", "meta") and value is not None and not isinstance(value, str):
                 value = json.dumps(value, ensure_ascii=False)
             cols.append(f"{key}=?")
             vals.append(value)
@@ -312,6 +321,7 @@ class Store:
         d = dict(row)
         d["anchor"] = json.loads(d["anchor"])
         d["replies"] = json.loads(d["replies"] or "[]")
+        d["meta"] = json.loads(d["meta"]) if d.get("meta") else None
         return d
 
     # ---------- jobs ----------

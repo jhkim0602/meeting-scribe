@@ -107,7 +107,15 @@ def _majority(speakers: list[Optional[str]], durations: list[float]) -> Optional
     return max(acc, key=acc.get) if acc else None
 
 
-def split_segment(seg: dict, turns: TurnIndex) -> list[dict]:
+def _crosses(boundaries: list[float], a: float, b: float) -> bool:
+    """a와 b 사이(a < x <= b)에 구분선이 있는가."""
+    if not boundaries or b <= a:
+        return False
+    i = bisect.bisect_right(boundaries, a)
+    return i < len(boundaries) and boundaries[i] <= b
+
+
+def split_segment(seg: dict, turns: TurnIndex, boundaries: list[float] | None = None) -> list[dict]:
     text = seg.get("text") or ""
     if not text.strip():
         return []
@@ -133,6 +141,7 @@ def split_segment(seg: dict, turns: TurnIndex) -> list[dict]:
         sentence_break = any(ch in SENTENCE_END for ch in between)
         if (
             speakers[i] != speakers[i - 1]
+            or _crosses(boundaries or [], (prev[2] + prev[3]) / 2, (cur[2] + cur[3]) / 2)
             or cur[2] - prev[3] > SPEAKER_GAP_S
             or (sentence_break and cur[2] - piece_start_t > LONG_PIECE_S)
         ):
@@ -156,13 +165,14 @@ def split_segment(seg: dict, turns: TurnIndex) -> list[dict]:
     return pieces
 
 
-def _merge_adjacent(utts: list[dict]) -> list[dict]:
+def _merge_adjacent(utts: list[dict], boundaries: list[float] | None = None) -> list[dict]:
     out: list[dict] = []
     for u in utts:
         if out:
             prev = out[-1]
             if (
                 prev["speaker"] == u["speaker"]
+                and not _crosses(boundaries or [], prev["t1"] - 0.3, u["t0"] + 0.3)
                 and u["t0"] - prev["t1"] <= MERGE_GAP_S
                 and not prev["text"].endswith(SENTENCE_END)
                 and u["t1"] - prev["t0"] <= MERGE_MAX_S
@@ -176,14 +186,16 @@ def _merge_adjacent(utts: list[dict]) -> list[dict]:
     return out
 
 
-def build_utterances(segments: list[dict], turns: list[dict]) -> dict:
-    """segments: [{text, start, end, words:[{text,start,end}]}], turns: [{speaker,start,end}]."""
+def build_utterances(segments: list[dict], turns: list[dict], boundaries: list[float] | None = None) -> dict:
+    """segments: [{text, start, end, words:[{text,start,end}]}], turns: [{speaker,start,end}].
+    boundaries: 쉬는 시간/구분선 시각. 이 시각을 넘어 발화를 합치지 않는다."""
     ti = TurnIndex(turns)
+    bounds = sorted(float(b) for b in (boundaries or []))
     utts: list[dict] = []
     for seg in segments:
-        utts.extend(split_segment(seg, ti))
+        utts.extend(split_segment(seg, ti, bounds))
     utts.sort(key=lambda u: (u["t0"], u["t1"]))
-    utts = _merge_adjacent(utts)
+    utts = _merge_adjacent(utts, bounds)
 
     # 화자 라벨을 등장 순서대로 S1, S2 ...로 바꾼다
     mapping: dict[str, str] = {}

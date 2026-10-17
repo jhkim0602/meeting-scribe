@@ -122,6 +122,7 @@ async function notesMarkdown(mid) {
 
   // 7) 녹음 종료 → 원본에 댓글이 옮겨짐
   await page.click('.btn-stop')
+  await page.click('.modal.confirm button:has-text("녹음 종료")')
   await page.waitForSelector('.dock-player', { timeout: 30000 })
   await page.click('.tab:has-text("원본")')
   await page.waitForSelector('.view-final .unit', { timeout: 60000 })

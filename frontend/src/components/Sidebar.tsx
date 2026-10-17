@@ -29,7 +29,7 @@ function Item({ m, active }: { m: MeetingSummary; active: boolean }) {
       <span className="side-title">{m.title || '제목 없는 회의'}</span>
       <span className="side-meta">
         {recording ? (
-          <span className="rec-dot" />
+          <span className={`rec-dot ${rec.status === 'paused' ? 'paused' : ''}`} title={rec.status === 'paused' ? '일시정지' : '녹음 중'} />
         ) : m.status === 'processing' ? (
           <span className="side-progress"><Loader2 size={11} className="spin" />{m.progress != null ? `${Math.round(m.progress * 100)}%` : ''}</span>
         ) : m.duration ? (

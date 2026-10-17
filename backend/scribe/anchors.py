@@ -322,6 +322,6 @@ def resolve_annotations(annotations: list[dict], index: TextIndex, view: str, ve
 
 
 def anchor_from_request(index: TextIndex, payload: dict[str, Any]) -> Optional[dict]:
-    if payload.get("kind") == "memo":
+    if payload.get("kind") in ("memo", "divider"):
         return memo_anchor(index, float(payload.get("t") or 0.0), payload.get("after"))
     return compute_anchor(index, payload["start"], payload["end"])

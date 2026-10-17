@@ -7,7 +7,7 @@ import { fmtTime } from '../lib/time'
 import { Floating } from './Floating'
 
 const COLORS = ['yellow', 'green', 'blue', 'pink', 'purple']
-const KIND = { comment: '댓글', edit: '수정', memo: '메모', highlight: '강조' } as const
+const KIND = { comment: '댓글', edit: '수정', memo: '메모', highlight: '강조', divider: '구분선' } as const
 
 interface Props {
   anns: Annotation[]

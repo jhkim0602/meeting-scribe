@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { MeetingPage } from './components/MeetingPage'
+import { RecAlertBar } from './components/RecAlertBar'
 import { SettingsDialog } from './components/SettingsDialog'
 import { Sidebar } from './components/Sidebar'
 import { Toasts } from './components/Toasts'
@@ -65,7 +66,10 @@ export default function App() {
   return (
     <div className={`app ${sidebarOpen ? '' : 'side-closed'}`}>
       {sidebarOpen && <Sidebar onSettings={() => setSettingsOpen(true)} />}
-      <main className="main">{selectedId ? <MeetingPage /> : <Welcome />}</main>
+      <main className="main">
+        {selectedId ? <MeetingPage /> : <Welcome />}
+        <RecAlertBar />
+      </main>
       {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
       <Toasts />
     </div>

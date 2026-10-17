@@ -25,6 +25,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const toast = useStore((s) => s.toast)
   const [vocab, setVocab] = useState(settings?.vocabulary || '')
   const [auto, setAuto] = useState(settings?.auto_process ?? true)
+  const [breakMin, setBreakMin] = useState(settings?.break_prompt_minutes ?? 3)
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
@@ -33,7 +34,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   }, [onClose])
 
   const save = async () => {
-    await api.saveSettings({ vocabulary: vocab, auto_process: auto })
+    await api.saveSettings({ vocabulary: vocab, auto_process: auto, break_prompt_minutes: breakMin })
     await loadSettings()
     toast('설정을 저장했어요', 'success')
     onClose()
@@ -60,6 +61,13 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             <label className="check">
               <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} />
               녹음을 마치면 자동으로 원본 만들기
+            </label>
+            <label className="field-inline">
+              <span>조용한 시간이 이어지면 쉬는 시간인지 묻기</span>
+              <select className="input select" value={breakMin} onChange={(e) => setBreakMin(Number(e.target.value))}>
+                <option value={0}>묻지 않음</option>
+                {[2, 3, 5, 10, 15].map((m) => <option key={m} value={m}>{m}분</option>)}
+              </select>
             </label>
           </section>
           <section>

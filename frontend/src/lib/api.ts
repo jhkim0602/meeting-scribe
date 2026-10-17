@@ -55,7 +55,7 @@ export interface Pos {
   offset: number
 }
 
-export type AnnKind = 'comment' | 'edit' | 'memo' | 'highlight'
+export type AnnKind = 'comment' | 'edit' | 'memo' | 'highlight' | 'divider'
 
 export interface Annotation {
   id: string
@@ -72,6 +72,7 @@ export interface Annotation {
   created_at: number
   updated_at: number
   exported_at: number | null
+  meta: { break_start?: number; break_end?: number; auto?: boolean } | null
   pos: null | { after: string | null } | { start: Pos; end: Pos; approx: boolean; score: number; text: string }
   match?: 'same' | 'differs'
 }
@@ -109,6 +110,7 @@ export interface Health {
 export interface AppSettings {
   vocabulary: string
   auto_process: boolean
+  break_prompt_minutes: number
 }
 
 export interface SearchHit {

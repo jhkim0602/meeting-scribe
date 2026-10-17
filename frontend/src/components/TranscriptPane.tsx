@@ -70,7 +70,7 @@ function AnnList({ anns, onClose, rect, view, meetingId }: { anns: Annotation[];
             <span className={`kind-dot kind-${a.kind}`} />
             <span className="ann-list-time">{fmtTime(a.anchor.t0 ?? a.anchor.t ?? 0)}</span>
             <span className="ann-list-text">
-              {a.kind === 'edit' ? `${a.anchor.quote} → ${a.replacement}` : a.body || a.anchor.quote}
+              {a.kind === 'edit' ? `${a.anchor.quote} → ${a.replacement}` : a.kind === 'divider' ? `구분선 ${a.body}` : a.body || a.anchor.quote}
               {a.kind === 'comment' && a.anchor.quote && <em>{a.anchor.quote}</em>}
             </span>
             {a.exported_at ? <NotebookPen size={12} className="ann-list-exported" /> : <span />}

@@ -1,9 +1,10 @@
 import { ChevronDown, Loader2, Mic, Pause, Play, RotateCcw, RotateCw, Square, StickyNote } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import { ConfirmStop } from './ConfirmStop'
 import { listMics, pauseRecording, resumeRecording, startRecording, stopRecording } from '../hooks/recorder'
 import type { Meeting } from '../lib/api'
 import { bridges, useStore } from '../lib/store'
-import { fmtTime } from '../lib/time'
+import { fmtDuration, fmtTime } from '../lib/time'
 
 function useMicChoice() {
   const [mics, setMics] = useState<MediaDeviceInfo[]>([])
@@ -60,14 +61,23 @@ function Level() {
   )
 }
 
+function PausedFor({ since }: { since: number }) {
+  const [now, setNow] = useState(Date.now())
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [])
+  return <span className="chip chip-paused">일시정지 · {fmtDuration((now - since) / 1000)} 지남</span>
+}
+
 function Recorder() {
   const rec = useStore((s) => s.rec)
   const health = useStore((s) => s.health)
-  const toast = useStore((s) => s.toast)
   const engine = health?.live
+  const [confirm, setConfirm] = useState(false)
   const stop = async () => {
-    const job = await stopRecording()
-    if (job) toast('녹음을 마쳤어요. 원본을 만들기 시작했어요.', 'success')
+    setConfirm(false)
+    await stopRecording()
   }
   return (
     <div className="dock dock-rec">
@@ -75,17 +85,17 @@ function Recorder() {
         {rec.status === 'recording' ? <span className="rec-dot big" /> : <span className="rec-dot big paused" />}
         <span className="rec-time">{fmtTime(rec.elapsed, rec.elapsed >= 3600)}</span>
         <Level />
-        {rec.status === 'paused' && <span className="chip">일시정지</span>}
+        {rec.status === 'paused' && rec.pausedAt && <PausedFor since={rec.pausedAt} />}
         {rec.status === 'stopping' && <span className="chip"><Loader2 size={12} className="spin" />마무리 중</span>}
       </div>
       <div className="rec-center">
         {rec.status === 'recording' && (
-          <button className="btn btn-round" onClick={pauseRecording} title="일시정지"><Pause size={18} /></button>
+          <button className="btn btn-round" onClick={() => pauseRecording()} title="일시정지 (쉬는 시간)"><Pause size={18} /></button>
         )}
         {rec.status === 'paused' && (
-          <button className="btn btn-round" onClick={resumeRecording} title="이어서 녹음"><Mic size={18} /></button>
+          <button className="btn btn-resume" onClick={resumeRecording} title="이어서 녹음"><Mic size={16} />이어서 녹음</button>
         )}
-        <button className="btn btn-stop" onClick={stop} disabled={rec.status === 'stopping' || rec.status === 'connecting'}>
+        <button className="btn btn-stop" onClick={() => setConfirm(true)} disabled={rec.status === 'stopping' || rec.status === 'connecting'}>
           <Square size={14} fill="currentColor" />
           녹음 종료
         </button>
@@ -93,8 +103,19 @@ function Recorder() {
       <div className="rec-right">
         {engine?.state === 'loading' && <span className="engine-note"><Loader2 size={12} className="spin" />모델 준비 중 · 녹음은 계속 저장돼요</span>}
         {engine?.state === 'error' && <span className="engine-note err" title={engine.error || ''}>실시간 받아쓰기 오류 · 녹음은 저장 중</span>}
-        {engine?.state === 'ready' && <span className="engine-note ok"><StickyNote size={12} />글자를 드래그하고 C를 누르면 댓글</span>}
+        {engine?.state === 'ready' && rec.status === 'recording' && <span className="engine-note ok"><StickyNote size={12} />글자를 드래그하고 C를 누르면 댓글</span>}
+        {rec.status === 'paused' && <span className="engine-note ok">일시정지 중에는 기록되지 않아요</span>}
       </div>
+      {confirm && (
+        <ConfirmStop
+          onClose={() => setConfirm(false)}
+          onStop={stop}
+          onPause={() => {
+            setConfirm(false)
+            pauseRecording()
+          }}
+        />
+      )}
     </div>
   )
 }
@@ -209,7 +230,8 @@ export function Dock() {
 
   if (recordingHere) return <Recorder />
   if (meeting.has_audio) {
-    const canResume = meeting.source === 'live' && meeting.status !== 'processing'
+    // 원본을 만드는 중이어도 이어서 녹음할 수 있다 (서버가 그 작업을 취소한다)
+    const canResume = meeting.source === 'live'
     return <Player key={meeting.id} meeting={meeting} onResume={canResume ? start : undefined} />
   }
   return (

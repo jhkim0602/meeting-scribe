@@ -91,11 +91,17 @@ def health() -> dict:
 class SettingsIn(BaseModel):
     vocabulary: Optional[str] = None
     auto_process: Optional[bool] = None
+    break_prompt_minutes: Optional[float] = None
 
 
 @app.get("/api/settings")
 def get_settings() -> dict:
-    return {"vocabulary": store.get_setting("vocabulary", ""), "auto_process": store.get_setting("auto_process", True)}
+    return {
+        "vocabulary": store.get_setting("vocabulary", ""),
+        "auto_process": store.get_setting("auto_process", True),
+        # 이만큼 조용하면 '쉬는 시간인가요?'를 묻는다 (0이면 묻지 않음)
+        "break_prompt_minutes": store.get_setting("break_prompt_minutes", 3),
+    }
 
 
 @app.put("/api/settings")
@@ -104,6 +110,8 @@ def put_settings(body: SettingsIn) -> dict:
         store.set_setting("vocabulary", body.vocabulary.strip())
     if body.auto_process is not None:
         store.set_setting("auto_process", bool(body.auto_process))
+    if body.break_prompt_minutes is not None:
+        store.set_setting("break_prompt_minutes", max(0.0, min(60.0, float(body.break_prompt_minutes))))
     return get_settings()
 
 
@@ -339,7 +347,7 @@ class ExportedIn(BaseModel):
     exported: bool = True
 
 
-KINDS = {"comment", "edit", "memo", "highlight"}
+KINDS = {"comment", "edit", "memo", "highlight", "divider"}
 
 
 def _resolved_one(ann: dict, view: str) -> dict:
@@ -359,9 +367,9 @@ def add_annotation(meeting_id: str, body: AnnotationIn) -> dict:
     if idx is None:
         raise HTTPException(400, "원본이 아직 없습니다")
     payload = body.model_dump()
-    if body.kind == "memo":
+    if body.kind in ("memo", "divider"):
         if body.t is None:
-            raise HTTPException(400, "메모 시간이 필요합니다")
+            raise HTTPException(400, "시간이 필요합니다")
     elif not (body.start and body.end):
         raise HTTPException(400, "선택 범위가 필요합니다")
     anchor = anchor_from_request(idx, payload)
@@ -450,9 +458,18 @@ def _after_stop(meeting_id: str) -> Optional[dict]:
     return None
 
 
+def _before_resume(meeting_id: str) -> bool:
+    """원본을 만드는 중에 다시 녹음하면 그 작업을 취소한다. 취소했으면 True."""
+    latest = store.latest_job(meeting_id)
+    if latest and latest["status"] in ("queued", "running"):
+        jobs.cancel(meeting_id)
+        return True
+    return False
+
+
 @app.websocket("/api/meetings/{meeting_id}/record")
 async def record(ws: WebSocket) -> None:
-    await handle_recording(ws, store, holder, sessions, _after_stop)
+    await handle_recording(ws, store, holder, sessions, _after_stop, _before_resume)
 
 
 @app.exception_handler(Exception)

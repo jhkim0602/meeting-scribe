@@ -9,7 +9,16 @@ export interface Toast {
   id: number
   text: string
   tone?: 'info' | 'error' | 'success'
+  action?: { label: string; run: () => void }
 }
+
+/** 녹음 중 화면 아래에 띄우는 알림 */
+export type RecAlert =
+  | { kind: 'paused-speech' }
+  | { kind: 'silence'; fromT: number; fromWall: number; minutes: number }
+  | { kind: 'mic-lost'; state: 'reconnecting' | 'failed' }
+  | { kind: 'mic-silent' }
+  | { kind: 'server-lost'; since: number }
 
 interface State {
   health: Health | null
@@ -27,7 +36,7 @@ interface State {
   follow: boolean
   sidebarOpen: boolean
   theme: Theme
-  rec: { status: RecStatus; meetingId: string | null; offset: number; elapsed: number; level: number }
+  rec: { status: RecStatus; meetingId: string | null; offset: number; elapsed: number; level: number; pausedAt: number | null; alert: RecAlert | null }
   playerTime: number
   playing: boolean
   toasts: Toast[]
@@ -46,7 +55,7 @@ interface State {
   setTab: (t: Tab) => void
   set: (patch: Partial<State>) => void
   setRec: (patch: Partial<State['rec']>) => void
-  toast: (text: string, tone?: Toast['tone']) => void
+  toast: (text: string, tone?: Toast['tone'], action?: Toast['action'], ms?: number) => void
   dismissToast: (id: number) => void
   flash: (unitId: string) => void
 }
@@ -77,7 +86,7 @@ export const useStore = create<State>((set, get) => ({
   follow: true,
   sidebarOpen: true,
   theme: readTheme(),
-  rec: { status: 'idle', meetingId: null, offset: 0, elapsed: 0, level: 0 },
+  rec: { status: 'idle', meetingId: null, offset: 0, elapsed: 0, level: 0, pausedAt: null, alert: null },
   playerTime: 0,
   playing: false,
   toasts: [],
@@ -144,10 +153,10 @@ export const useStore = create<State>((set, get) => ({
   setTab: (tab) => set({ tab }),
   set: (patch) => set(patch),
   setRec: (patch) => set({ rec: { ...get().rec, ...patch } }),
-  toast: (text, tone = 'info') => {
+  toast: (text, tone = 'info', action, ms) => {
     const id = toastSeq++
-    set({ toasts: [...get().toasts, { id, text, tone }] })
-    setTimeout(() => get().dismissToast(id), tone === 'error' ? 7000 : 3500)
+    set({ toasts: [...get().toasts, { id, text, tone, action }] })
+    setTimeout(() => get().dismissToast(id), ms ?? (action ? 10000 : tone === 'error' ? 7000 : 3500))
   },
   dismissToast: (id) => set({ toasts: get().toasts.filter((t) => t.id !== id) }),
   flash: (unitId) => {
