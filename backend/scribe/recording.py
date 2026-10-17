@@ -205,7 +205,11 @@ async def handle_recording(
     sessions[meeting_id] = session
     keep_awake.acquire()
     store.update_meeting(meeting_id, status="recording")
-    divider = begin_session_break(store, meeting_id, session.start_s, dict(ws.query_params))
+    params = dict(ws.query_params)
+    divider = begin_session_break(store, meeting_id, session.start_s, params)
+    if params.get("continuous") != "1":
+        # 끊김 없이 이어 보내는 재연결이 아니면, 여기서부터는 지금 시각에 녹음된 소리
+        store.add_clock_point(meeting_id, session.start_s, time.time())
     await session.send({
         "type": "ready", "offset": session.start_s, "engine": holder.info(), "divider": divider,
         "cancelled_job": cancelled_job, "disk_free_s": round(free_s),
@@ -238,6 +242,7 @@ async def handle_recording(
                     await session.send({"type": "paused", "duration": session.writer.duration})
                 elif kind == "resume":
                     divider = close_break(store, meeting_id, session.writer.duration)
+                    store.add_clock_point(meeting_id, session.writer.duration, time.time())
                     await session.send({"type": "resumed", "divider": divider})
                 elif kind == "stop":
                     await session.flush()

@@ -66,6 +66,7 @@ export const CommentThread = memo(function CommentThread({ ann, view, meetingId,
     <div
       className={`cmt ${flash ? 'flash' : ''} ${resolved ? 'is-resolved' : ''}`}
       id={`cmt-${ann.id}`}
+      tabIndex={-1}
       onMouseEnter={() => onHover(ann.id)}
       onMouseLeave={() => onHover(null)}
     >

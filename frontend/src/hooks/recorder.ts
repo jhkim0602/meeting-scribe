@@ -467,8 +467,16 @@ function attachTrack(s: Session) {
   })
 }
 
+/** 녹음 중에 마이크를 바꾼다 */
+export async function switchMic(deviceId: string | undefined): Promise<boolean> {
+  const s = session
+  if (!s) return false
+  s.deviceId = deviceId
+  return reconnectMic({ manual: true, message: '마이크를 바꿨어요.' })
+}
+
 /** 마이크를 다시 연결한다. 끊겼을 때는 조용히, 사용자가 눌렀을 때(manual)는 결과를 알려 준다. */
-export async function reconnectMic(opts?: { manual?: boolean }): Promise<boolean> {
+export async function reconnectMic(opts?: { manual?: boolean; message?: string }): Promise<boolean> {
   const s = session
   if (!s || s.micRetrying) return false
   s.micRetrying = true
@@ -504,7 +512,7 @@ export async function reconnectMic(opts?: { manual?: boolean }): Promise<boolean
       clearAlert('mic-lost')
       clearAlert('mic-silent')
       if (fallback) st.toast('원래 마이크를 찾을 수 없어 기본 마이크로 다시 연결했어요.')
-      else if (opts?.manual || hadBanner) st.toast('마이크를 다시 연결했어요.', 'success')
+      else if (opts?.manual || hadBanner) st.toast(opts?.message || '마이크를 다시 연결했어요.', 'success')
       return true
     } catch {
       await new Promise((r) => setTimeout(r, 1000))

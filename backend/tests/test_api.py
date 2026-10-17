@@ -391,3 +391,18 @@ def test_mutations_return_positions_for_both_views(client):
     # 위치 캐시: 답글/내보내기 표시는 바뀌어도 같은 위치, 새 값은 그대로 보인다
     fin = client.get(f"/api/meetings/{mid}/final").json()["final"]["annotations"][0]
     assert fin["replies"][0]["text"] == "네" and fin["exported_at"] and fin["pos"] == c["resolved"]["final"]["pos"]
+
+
+def test_clock_maps_recording_time_to_wall_time(client):
+    """녹음 시간 → 실제 시각: 시작·재개할 때마다 기준점을 남긴다 (끊김 없는 재연결은 제외)."""
+    mid = client.post("/api/meetings", json={}).json()["id"]
+    pcm = _speech_pcm([("s", 2.0), ("n", 1.0)])
+    t0 = time.time()
+    _record(client, mid, pcm, messages=[{"type": "pause"}, 1.2, {"type": "resume"}, {"type": "pause"}])
+    _record(client, mid, pcm, query="?continuous=1", messages=[{"type": "pause"}])
+    clock = client.get(f"/api/meetings/{mid}").json()["clock"]
+    assert [p[0] for p in clock] == [0.0, 3.0]
+    assert abs(clock[0][1] - t0) < 1.0 and clock[1][1] - clock[0][1] >= 1.2
+    st = client.get("/api/storage").json()
+    assert st["meetings"] >= 1 and st["audio_bytes"] > 0 and st["free_bytes"] > 0
+

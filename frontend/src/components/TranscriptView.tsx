@@ -8,6 +8,8 @@ import { readSelection, type TextSelection } from '../lib/selection'
 import { bridges, seekTo, useStore } from '../lib/store'
 import { fmtTime } from '../lib/time'
 import { sendToNotes } from '../lib/notesExport'
+import { fmtClock, wallAt } from '../lib/clock'
+import { usePref, usePrefStr, VIEW_CLOCK, VIEW_COMMENTS_COLLAPSED, VIEW_FONT, type FontSize } from '../lib/prefs'
 import { AnnotationPopover } from './AnnotationPopover'
 import { CommentThread } from './CommentThread'
 import { DividerRow } from './DividerRow'
@@ -105,9 +107,11 @@ interface RowProps {
   onComment: (u: Unit, el: HTMLElement) => void
   onDivider: (u: Unit, el: HTMLElement) => void
   onHover: (id: string | null) => void
+  timeLabel: (t: number) => string
+  timeTitle: (t: number) => string
 }
 
-const UnitRow = memo(function UnitRow({ u, ranges, showSpeaker, active, flash, comments, memos, dividers, view, meetingId, showMarks, hover, flashAnn, onOpen, onMemo, onComment, onDivider, onHover }: RowProps) {
+const UnitRow = memo(function UnitRow({ u, ranges, showSpeaker, active, flash, comments, memos, dividers, view, meetingId, showMarks, hover, flashAnn, onOpen, onMemo, onComment, onDivider, onHover, timeLabel, timeTitle }: RowProps) {
   const pieces = useMemo(() => piecesFor(u.text, ranges, view, showMarks), [u.text, ranges, view, showMarks])
   return (
     <>
@@ -117,8 +121,8 @@ const UnitRow = memo(function UnitRow({ u, ranges, showSpeaker, active, flash, c
         </div>
       )}
       <div id={`unit-${u.id}`} className={`unit ${active ? 'active' : ''} ${flash ? 'flash' : ''}`}>
-        <button className="u-time" onClick={() => seekTo(u.t0)} title="이 부분부터 듣기">
-          {fmtTime(u.t0)}
+        <button className="u-time" onClick={() => seekTo(u.t0)} title={timeTitle(u.t0)}>
+          {timeLabel(u.t0)}
         </button>
         <p className="utext" data-unit={u.id} data-len={u.text.length}>
           {pieces.map((p, k) => (
@@ -170,6 +174,20 @@ export function TranscriptView({ view, meetingId, units, annotations, partial, r
   const [hover, setHover] = useState<string | null>(null)
   const [flashAnn, setFlashAnn] = useState<string | null>(null)
 
+  const [collapsed] = usePref(VIEW_COMMENTS_COLLAPSED, false)
+  const [clockView] = usePref(VIEW_CLOCK, false)
+  const [font] = usePrefStr<FontSize>(VIEW_FONT, 'm')
+  const clock = useStore((s) => (s.meeting?.id === meetingId ? s.meeting.clock : undefined))
+  // 시각에 마우스를 올리면 실제 시각, 보기 설정에서 켜면 실제 시각으로 표시
+  const timeLabel = useCallback((t: number) => {
+    const w = clockView ? wallAt(clock, t) : null
+    return w !== null ? fmtClock(w) : fmtTime(t)
+  }, [clock, clockView])
+  const timeTitle = useCallback((t: number) => {
+    const w = wallAt(clock, t)
+    return w !== null ? `${clockView ? fmtTime(t) : fmtClock(w, true)} · 이 부분부터 듣기` : '이 부분부터 듣기'
+  }, [clock, clockView])
+
   const model = useMemo(() => buildModel(units, annotations), [units, annotations])
   const byId = useMemo(() => new Map(annotations.map((a) => [a.id, a])), [annotations])
   const unitById = useMemo(() => new Map(units.map((u) => [u.id, u])), [units])
@@ -206,11 +224,22 @@ export function TranscriptView({ view, meetingId, units, annotations, partial, r
         const i = indexById.get(id)
         if (i !== undefined) scrollToIndex(i, opts?.align ?? 'center')
       },
+      // M 단축키: 지금 재생 위치의 문장 뒤에 메모
+      memoAt: (t) => {
+        const id = unitAtTime(units, t) ?? units[units.length - 1]?.id
+        const i = id ? indexById.get(id) : undefined
+        if (!id || i === undefined) return
+        scrollToIndex(i)
+        setTimeout(() => {
+          const el = document.getElementById(`unit-${id}`)
+          if (el) setComposer({ mode: 'memo', rect: el.getBoundingClientRect(), t, after: id })
+        }, 120)
+      },
     }
     return () => {
       bridges.transcript = null
     }
-  }, [indexById, scrollToIndex])
+  }, [indexById, scrollToIndex, units])
 
   // 찾기 (⌘F)
   const find = useFindShortcut(true)
@@ -329,7 +358,7 @@ export function TranscriptView({ view, meetingId, units, annotations, partial, r
   const popAnns = pop ? pop.ids.map((id) => byId.get(id)).filter((a): a is Annotation => !!a) : []
 
   return (
-    <div className={`transcript view-${view} ${showMarks ? '' : 'marks-off'}`} ref={ref} onMouseUp={captureSelection} onKeyUp={(e) => e.shiftKey && captureSelection()}>
+    <div className={`transcript view-${view} font-${font} ${showMarks ? '' : 'marks-off'} ${collapsed ? 'cmts-collapsed' : ''}`} ref={ref} onMouseUp={captureSelection} onKeyUp={(e) => e.shiftKey && captureSelection()}>
       {find.open && (
         <TranscriptFind units={units} initial={find.initial} inputRef={find.inputRef} onHits={onHits} onJump={onJump} onClose={closeFind} />
       )}
@@ -366,6 +395,8 @@ export function TranscriptView({ view, meetingId, units, annotations, partial, r
                 onComment={openComment}
                 onDivider={openDivider}
                 onHover={setHover}
+                timeLabel={timeLabel}
+                timeTitle={timeTitle}
               />
             </div>
           )
@@ -373,7 +404,7 @@ export function TranscriptView({ view, meetingId, units, annotations, partial, r
       </div>
       {partial && partial.text && (
         <div className="unit partial">
-          <span className="u-time">{fmtTime(partial.t0)}</span>
+          <span className="u-time">{timeLabel(partial.t0)}</span>
           <p className="utext-partial">
             {partial.text}
             <span className="typing" />

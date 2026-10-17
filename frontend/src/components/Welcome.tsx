@@ -1,12 +1,15 @@
 import { FileUp, Mic, PanelLeft } from 'lucide-react'
-import { useRef, useState } from 'react'
+import { useRef, useState, useMemo } from 'react'
 import { createAndRecord } from '../hooks/recorder'
 import { useStore } from '../lib/store'
 import { fmtDuration, fmtRelative } from '../lib/time'
 import { uploadFiles } from './Sidebar'
 
 export function Welcome() {
-  const meetings = useStore((s) => s.meetings)
+  const allMeetings = useStore((s) => s.meetings)
+  const hidden = useStore((s) => s.hiddenMeetings)
+  // 지우는 중(되돌리기 대기)인 회의는 숨긴다
+  const meetings = useMemo(() => (hidden.length ? allMeetings.filter((m) => !hidden.includes(m.id)) : allMeetings), [allMeetings, hidden])
   const health = useStore((s) => s.health)
   const sidebarOpen = useStore((s) => s.sidebarOpen)
   const set = useStore((s) => s.set)

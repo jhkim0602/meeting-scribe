@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { MeetingPage } from './components/MeetingPage'
 import { RecAlertBar } from './components/RecAlertBar'
 import { SettingsDialog } from './components/SettingsDialog'
+import { ShortcutsOverlay, useGlobalShortcuts } from './components/Shortcuts'
 import { Sidebar } from './components/Sidebar'
 import { Toasts } from './components/Toasts'
 import { Welcome } from './components/Welcome'
@@ -18,6 +19,7 @@ export default function App() {
   const sidebarOpen = useStore((s) => s.sidebarOpen)
   const theme = useStore((s) => s.theme)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  useGlobalShortcuts()
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme === 'system' ? '' : theme
@@ -71,6 +73,7 @@ export default function App() {
         <RecAlertBar />
       </main>
       {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
+      <ShortcutsOverlay />
       <Toasts />
     </div>
   )

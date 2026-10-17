@@ -38,6 +38,17 @@ export interface Meeting extends MeetingSummary {
   job: Job | null
   has_audio: boolean
   has_summary: boolean
+  /** 녹음 시간 → 실제 시각 기준점: [녹음 시간(초), 실제 시각(epoch 초)] */
+  clock: [number, number][]
+}
+
+export interface StorageInfo {
+  data_dir: string
+  meetings: number
+  audio_bytes: number
+  other_bytes: number
+  free_bytes: number
+  free_s: number
 }
 
 export interface Unit {
@@ -177,6 +188,7 @@ export const api = {
   markExported: (id: string, ids: string[], exported = true) =>
     req<{ updated: number; exported_at: Record<string, number | null> }>('POST', `/api/meetings/${id}/annotations/exported`, { ids, exported }),
   deleteAnnotation: (annId: string) => req<{ ok: boolean }>('DELETE', `/api/annotations/${annId}`),
+  storage: () => req<StorageInfo>('GET', '/api/storage'),
   search: (q: string) => req<SearchHit[]>('GET', `/api/search?q=${encodeURIComponent(q)}`),
   exportMd: async (id: string) => (await fetch(`/api/meetings/${id}/export.md`)).text(),
   upload: async (file: File, title = ''): Promise<Meeting> => {

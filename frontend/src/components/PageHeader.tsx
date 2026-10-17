@@ -1,6 +1,7 @@
 import { CalendarDays, Clock3, Download, FileAudio, Mic, MoreHorizontal, PanelLeft, RefreshCw, Trash2, Users } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api'
+import { deleteLater } from '../lib/annActions'
 import { useStore } from '../lib/store'
 import { fmtDate, fmtDuration } from '../lib/time'
 import { Floating } from './Floating'
@@ -26,7 +27,6 @@ export function PageHeader() {
   const toast = useStore((s) => s.toast)
   const [title, setTitle] = useState(meeting.title)
   const [menu, setMenu] = useState<DOMRect | null>(null)
-  const [confirmDelete, setConfirmDelete] = useState(false)
   const titleRef = useRef<HTMLTextAreaElement>(null)
   const recordingHere = rec.status !== 'idle' && rec.meetingId === meeting.id
   const status = recordingHere ? (rec.status === 'paused' ? STATUS.paused : STATUS.recording) : STATUS[meeting.status] || STATUS.empty
@@ -60,16 +60,32 @@ export function PageHeader() {
     }
   }
 
-  const remove = async () => {
-    try {
-      await api.deleteMeeting(meeting.id)
-      setMenu(null)
-      location.hash = ''
-      await useStore.getState().select(null)
-      await loadMeetings()
-    } catch (e) {
-      toast((e as Error).message, 'error')
-    }
+  // 확인창 대신 바로 숨기고 10초 동안 되돌릴 수 있게 한다
+  const remove = () => {
+    setMenu(null)
+    const id = meeting.id
+    const st = useStore.getState()
+    const unhide = () => useStore.setState({ hiddenMeetings: useStore.getState().hiddenMeetings.filter((x) => x !== id) })
+    st.set({ hiddenMeetings: [...st.hiddenMeetings, id] })
+    location.hash = ''
+    deleteLater(
+      `meeting:${id}`,
+      `/api/meetings/${id}`,
+      `"${meeting.title || '제목 없는 회의'}" 회의를`,
+      () => {
+        unhide()
+        location.hash = `#/m/${id}`
+      },
+      (e) => {
+        unhide()
+        toast(`회의를 지우지 못했어요: ${e.message}`, 'error')
+      },
+      10000,
+      () => {
+        unhide()
+        loadMeetings()
+      },
+    )
   }
 
   return (
@@ -81,7 +97,7 @@ export function PageHeader() {
         <span className="crumb">{meeting.source === 'upload' ? <FileAudio size={14} /> : <Mic size={14} />}{meeting.title || '제목 없는 회의'}</span>
         <span className="spacer" />
         <span className={`status-pill tone-${status.tone}`}><span className="dot" />{status.label}</span>
-        <button className="icon-btn" onClick={(e) => { setConfirmDelete(false); setMenu(e.currentTarget.getBoundingClientRect()) }} title="더 보기"><MoreHorizontal size={16} /></button>
+        <button className="icon-btn" onClick={(e) => setMenu(e.currentTarget.getBoundingClientRect())} title="더 보기"><MoreHorizontal size={16} /></button>
       </div>
       <div className="title-wrap">
         <textarea
@@ -115,11 +131,7 @@ export function PageHeader() {
             <RefreshCw size={15} />원본 다시 만들기
           </button>
           <div className="menu-sep" />
-          {confirmDelete ? (
-            <button className="menu-item danger" onClick={remove}><Trash2 size={15} />정말 삭제할까요? 녹음·노트가 모두 지워져요</button>
-          ) : (
-            <button className="menu-item danger" onClick={() => setConfirmDelete(true)} disabled={recordingHere}><Trash2 size={15} />회의 삭제</button>
-          )}
+          <button className="menu-item danger" onClick={remove} disabled={recordingHere} title={recordingHere ? '녹음을 마친 뒤 지울 수 있어요' : undefined}><Trash2 size={15} />회의 삭제</button>
         </Floating>
       )}
     </header>

@@ -35,3 +35,45 @@ export function usePref(key: string, fallback: boolean): [boolean, (v: boolean) 
 
 /** 새 댓글을 노트에도 바로 추가할지 */
 export const COMMENT_TO_NOTES = 'commentToNotes'
+
+export function getPrefStr<T extends string>(key: string, fallback: T): T {
+  try {
+    return (localStorage.getItem(key) as T | null) ?? fallback
+  } catch {
+    return fallback
+  }
+}
+
+export function usePrefStr<T extends string>(key: string, fallback: T): [T, (v: T) => void] {
+  const [v, setV] = useState<T>(() => getPrefStr(key, fallback))
+  useEffect(() => {
+    const on = () => setV(getPrefStr(key, fallback))
+    listeners.add(on)
+    return () => {
+      listeners.delete(on)
+    }
+  }, [key, fallback])
+  return [
+    v,
+    (nv: T) => {
+      try {
+        localStorage.setItem(key, nv)
+      } catch {
+        /* 무시 */
+      }
+      listeners.forEach((l) => l())
+    },
+  ]
+}
+
+// ⋯ 보기 메뉴
+/** 댓글을 한 줄로 접어 보기 */
+export const VIEW_COMMENTS_COLLAPSED = 'viewCommentsCollapsed'
+/** 녹음 시간 대신 실제 시각 보기 */
+export const VIEW_CLOCK = 'viewClock'
+/** 기록 글자 크기 */
+export const VIEW_FONT = 'viewFont'
+export type FontSize = 's' | 'm' | 'l'
+/** 녹음 표시줄의 첫 안내를 몇 번 보여 줬는지 */
+export const HINT_SEEN = 'hintSeen'
+

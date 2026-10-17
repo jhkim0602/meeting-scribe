@@ -87,7 +87,7 @@ CREATE TABLE IF NOT EXISTS settings(
 );
 """
 
-JSON_FIELDS_MEETING = ("speakers",)
+JSON_FIELDS_MEETING = ("speakers", "clock")
 
 
 def new_id() -> str:
@@ -118,6 +118,9 @@ class Store:
             c.execute("ALTER TABLE meetings ADD COLUMN paused_wall REAL")
         if "paused_t" not in mcols:
             c.execute("ALTER TABLE meetings ADD COLUMN paused_t REAL")
+        # 녹음 시간 → 실제 시각: [[녹음 시간(초), 그때의 실제 시각(epoch)], ...]
+        if "clock" not in mcols:
+            c.execute("ALTER TABLE meetings ADD COLUMN clock TEXT NOT NULL DEFAULT '[]'")
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path, timeout=30, isolation_level=None, check_same_thread=False)
@@ -192,6 +195,7 @@ class Store:
     def _meeting_row(self, row: sqlite3.Row, *, with_notes: bool = False) -> dict:
         d = dict(row)
         d["speakers"] = json.loads(d.get("speakers") or "{}")
+        d["clock"] = json.loads(d.get("clock") or "[]")
         if not with_notes:
             d.pop("notes_json", None)
             d.pop("notes_md", None)
@@ -368,3 +372,13 @@ class Store:
                 "INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                 (key, json.dumps(value, ensure_ascii=False)),
             )
+
+    def add_clock_point(self, meeting_id: str, t: float, wall: float) -> None:
+        """이 녹음 시간 t부터는 실제 시각 wall에 녹음된 소리다 (녹음 시작, 재개할 때마다)."""
+        m = self.get_meeting(meeting_id)
+        if m is None:
+            return
+        points = [p for p in m.get("clock") or [] if p[0] < t - 1e-3]
+        points.append([round(float(t), 3), round(float(wall), 3)])
+        self.update_meeting(meeting_id, clock=points)
+

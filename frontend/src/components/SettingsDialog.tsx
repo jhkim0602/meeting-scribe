@@ -1,7 +1,13 @@
-import { Copy, X } from 'lucide-react'
+import { ChevronRight, Copy, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { api } from '../lib/api'
+import { api, type StorageInfo } from '../lib/api'
 import { useStore } from '../lib/store'
+
+function fmtBytes(n: number): string {
+  if (n >= 1024 ** 3) return `${(n / 1024 ** 3).toFixed(1)}GB`
+  if (n >= 1024 ** 2) return `${Math.round(n / 1024 ** 2)}MB`
+  return `${Math.max(1, Math.round(n / 1024))}KB`
+}
 
 function CopyBlock({ text }: { text: string }) {
   return (
@@ -26,6 +32,11 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [vocab, setVocab] = useState(settings?.vocabulary || '')
   const [auto, setAuto] = useState(settings?.auto_process ?? true)
   const [breakMin, setBreakMin] = useState(settings?.break_prompt_minutes ?? 3)
+  const [storage, setStorage] = useState<StorageInfo | null>(null)
+
+  useEffect(() => {
+    api.storage().then(setStorage).catch(() => undefined)
+  }, [])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
@@ -71,18 +82,22 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             </label>
           </section>
           <section>
-            <h3>엔진</h3>
-            {health ? (
-              <dl className="kv">
-                <dt>실시간</dt><dd>{health.live.kind} · {health.live.model} <em className={`st-${health.live.state}`}>{health.live.state}</em></dd>
-                <dt>원본</dt><dd>{health.final.kind} · {health.final.model}</dd>
-                <dt>화자 구분</dt><dd>{health.diarizer === 'none' ? '사용 안 함 (HF_TOKEN 설정 필요)' : health.diarizer}</dd>
-                <dt>데이터 위치</dt><dd><code>{health.data_dir}</code></dd>
-              </dl>
+            <h3>저장 공간</h3>
+            {storage ? (
+              <>
+                <div className="storage-bar" aria-hidden>
+                  <span className="s-audio" style={{ flex: storage.audio_bytes }} />
+                  <span className="s-other" style={{ flex: storage.other_bytes }} />
+                  <span className="s-free" style={{ flex: storage.free_bytes }} />
+                </div>
+                <p className="storage-text">
+                  회의 {storage.meetings}개 · 녹음 {fmtBytes(storage.audio_bytes)} · 기록과 노트 {fmtBytes(storage.other_bytes)}
+                  <span className="muted"> · 남은 공간 {fmtBytes(storage.free_bytes)} (약 {Math.floor(storage.free_s / 3600)}시간 더 녹음할 수 있어요)</span>
+                </p>
+              </>
             ) : (
-              <p className="muted">서버에 연결되지 않았어요.</p>
+              <p className="muted">계산하는 중…</p>
             )}
-            {health?.live.error && <p className="error-text">{health.live.error}</p>}
           </section>
           <section>
             <h3>Claude 연결 (MCP)</h3>
@@ -94,6 +109,21 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             <p className="field-label">회의록 스킬 (Claude Code)</p>
             <CopyBlock text={`mkdir -p ~/.claude/skills && cp -r "${health?.project_root || '<프로젝트 폴더>'}/claude/skills/meeting-minutes" ~/.claude/skills/`} />
           </section>
+          <details className="advanced">
+            <summary><ChevronRight size={14} />고급</summary>
+            {health ? (
+              <dl className="kv">
+                <dt>실시간</dt><dd>{health.live.kind} · {health.live.model} <em className={`st-${health.live.state}`}>{health.live.state}</em></dd>
+                <dt>원본</dt><dd>{health.final.kind} · {health.final.model}</dd>
+                <dt>화자 구분</dt><dd>{health.diarizer === 'none' ? '사용 안 함 (HF_TOKEN 설정 필요)' : health.diarizer}</dd>
+                <dt>데이터 위치</dt><dd><code>{health.data_dir}</code></dd>
+                <dt>잠자기 방지</dt><dd>{health.keep_awake ? '녹음 중 caffeinate' : '브라우저 화면 꺼짐 방지'}</dd>
+              </dl>
+            ) : (
+              <p className="muted">서버에 연결되지 않았어요.</p>
+            )}
+            {health?.live.error && <p className="error-text">{health.live.error}</p>}
+          </details>
         </div>
         <div className="modal-foot">
           <button className="btn" onClick={onClose}>취소</button>

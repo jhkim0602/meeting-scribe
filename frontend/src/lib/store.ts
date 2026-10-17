@@ -63,6 +63,7 @@ interface State {
   tab: Tab
   showMarks: boolean
   follow: boolean
+  shortcutsOpen: boolean
   sidebarOpen: boolean
   theme: Theme
   rec: RecState
@@ -83,6 +84,11 @@ interface State {
   /** 서버가 돌려준 항목 하나를 두 화면에 바꿔 끼운다 (전체를 다시 받지 않는다) */
   upsertAnnotation: (a: Annotation) => void
   removeAnnotation: (id: string) => void
+  /** 지우기 전 모습을 돌려준다 (되돌리기용) */
+  takeAnnotation: (id: string) => AnnSnapshot
+  restoreAnnotation: (snap: AnnSnapshot) => void
+  /** 지우는 중(되돌리기 대기)이라 목록에서 숨긴 회의 */
+  hiddenMeetings: string[]
   stampExported: (stamps: Record<string, number | null>) => void
   setPartial: (p: State['partial']) => void
   setTab: (t: Tab) => void
@@ -94,6 +100,11 @@ interface State {
 }
 
 let toastSeq = 1
+
+export interface AnnSnapshot {
+  live?: { item: Annotation; index: number }
+  final?: { item: Annotation; index: number }
+}
 
 function readTheme(): Theme {
   try {
@@ -117,6 +128,7 @@ export const useStore = create<State>((set, get) => ({
   tab: 'live',
   showMarks: true,
   follow: true,
+  shortcutsOpen: false,
   sidebarOpen: true,
   theme: readTheme(),
   rec: REC_IDLE,
@@ -205,6 +217,30 @@ export const useStore = create<State>((set, get) => ({
       final: final ? { ...final, annotations: final.annotations.filter((x) => x.id !== id) } : final,
     })
   },
+  takeAnnotation: (id) => {
+    const { live, final } = get()
+    const snap: AnnSnapshot = {}
+    const li = live?.annotations.findIndex((x) => x.id === id) ?? -1
+    const fi = final?.annotations.findIndex((x) => x.id === id) ?? -1
+    if (live && li >= 0) snap.live = { item: live.annotations[li], index: li }
+    if (final && fi >= 0) snap.final = { item: final.annotations[fi], index: fi }
+    get().removeAnnotation(id)
+    return snap
+  },
+  restoreAnnotation: (snap) => {
+    const { live, final } = get()
+    const put = (list: Annotation[], s?: { item: Annotation; index: number }) => {
+      if (!s || list.some((x) => x.id === s.item.id)) return list
+      const next = list.slice()
+      next.splice(Math.min(s.index, next.length), 0, s.item)
+      return next
+    }
+    set({
+      live: live ? { ...live, annotations: put(live.annotations, snap.live) } : live,
+      final: final ? { ...final, annotations: put(final.annotations, snap.final) } : final,
+    })
+  },
+  hiddenMeetings: [],
   stampExported: (stamps) => {
     const { live, final } = get()
     const stamp = (list: Annotation[]) => list.map((x) => (x.id in stamps ? { ...x, exported_at: stamps[x.id] } : x))
@@ -236,12 +272,18 @@ export const useStore = create<State>((set, get) => ({
 type PlayerBridge = { seek: (t: number, play?: boolean) => void; time: () => number }
 type NotesBridge = { insertQuote: (text: string, t: number) => void; insertTimestamp: (t: number) => void; insertBlocks: (blocks: unknown[]) => void }
 /** 긴 기록은 보이는 부분만 그리므로, 특정 문장으로 가려면 이 길을 쓴다 */
-type TranscriptBridge = { scrollToUnit: (unitId: string, opts?: { align?: 'center' | 'start' | 'end'; smooth?: boolean }) => void }
+type TranscriptBridge = {
+  scrollToUnit: (unitId: string, opts?: { align?: 'center' | 'start' | 'end'; smooth?: boolean }) => void
+  memoAt: (t: number) => void
+}
+/** 녹음 중 아래 입력창 (C/M 단축키) */
+type MemoBarBridge = { focus: (mode: 'comment' | 'memo') => void }
 
-export const bridges: { player: PlayerBridge | null; notes: NotesBridge | null; transcript: TranscriptBridge | null } = {
+export const bridges: { player: PlayerBridge | null; notes: NotesBridge | null; transcript: TranscriptBridge | null; memoBar: MemoBarBridge | null } = {
   player: null,
   notes: null,
   transcript: null,
+  memoBar: null,
 }
 
 /** 지금 시각: 녹음 중이면 녹음 경과 시간, 아니면 재생 위치 */

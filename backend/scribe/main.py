@@ -95,6 +95,29 @@ def health() -> dict:
     }
 
 
+@app.get("/api/storage")
+def storage() -> dict:
+    """앱이 쓰는 저장 공간과 남은 공간 (설정 화면)."""
+    audio = other = 0
+    for mdir in settings.meetings_dir.iterdir() if settings.meetings_dir.exists() else []:
+        for f in mdir.rglob("*"):
+            if f.is_file():
+                size = f.stat().st_size
+                if f.suffix.lower() in (".wav", ".m4a", ".mp3", ".mp4", ".aac", ".flac", ".ogg", ".webm") or f.stem == "source":
+                    audio += size
+                else:
+                    other += size
+    db = sum(p.stat().st_size for p in settings.data_dir.glob("scribe.db*") if p.is_file())
+    return {
+        "data_dir": str(settings.data_dir),
+        "meetings": len(store.list_meetings()),
+        "audio_bytes": audio,
+        "other_bytes": other + db,
+        "free_bytes": disk_free_bytes(settings.data_dir),
+        "free_s": round(disk_free_seconds(settings.data_dir)),
+    }
+
+
 class SettingsIn(BaseModel):
     vocabulary: Optional[str] = None
     auto_process: Optional[bool] = None

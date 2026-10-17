@@ -1,10 +1,10 @@
-import { ArrowDownToLine, Eye, EyeOff, Info, ListTree, MessageSquare, MessageSquarePlus, Mic, NotebookPen, RefreshCw, Sparkles, StickyNote } from 'lucide-react'
+import { ArrowDown, Check, Info, Keyboard, ListTree, MessageSquare, MessageSquarePlus, Mic, MoreHorizontal, NotebookPen, RefreshCw, Sparkles, StickyNote } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, type Annotation, type Unit } from '../lib/api'
 import { annActions } from '../lib/annActions'
 import type { View } from '../lib/model'
 import { sendToNotes } from '../lib/notesExport'
-import { COMMENT_TO_NOTES, usePref } from '../lib/prefs'
+import { COMMENT_TO_NOTES, usePref, usePrefStr, VIEW_CLOCK, VIEW_COMMENTS_COLLAPSED, VIEW_FONT, type FontSize } from '../lib/prefs'
 import { bridges, currentClock, useStore, type Tab } from '../lib/store'
 import { fmtRelative, fmtTime } from '../lib/time'
 import { Floating } from './Floating'
@@ -112,6 +112,41 @@ function Toc({ anns, units, rect, onClose }: { anns: Annotation[]; units: Unit[]
   )
 }
 
+/** ⋯ 보기 설정: 첨삭, 댓글 접기, 실제 시각, 글자 크기 */
+function ViewMenu({ rect, onClose, hasClock }: { rect: DOMRect; onClose: () => void; hasClock: boolean }) {
+  const showMarks = useStore((s) => s.showMarks)
+  const set = useStore((s) => s.set)
+  const [collapsed, setCollapsed] = usePref(VIEW_COMMENTS_COLLAPSED, false)
+  const [clock, setClock] = usePref(VIEW_CLOCK, false)
+  const [font, setFont] = usePrefStr<FontSize>(VIEW_FONT, 'm')
+  const Item = ({ on, label, onClick, disabled, title }: { on: boolean; label: string; onClick: () => void; disabled?: boolean; title?: string }) => (
+    <button className="menu-item check-item" onClick={onClick} disabled={disabled} title={title} role="menuitemcheckbox" aria-checked={on}>
+      <span className="check-box">{on && <Check size={13} />}</span>
+      {label}
+    </button>
+  )
+  return (
+    <Floating rect={rect} onClose={onClose} className="menu view-menu">
+      <Item on={showMarks} label="첨삭 보기" onClick={() => set({ showMarks: !showMarks })} />
+      <Item on={collapsed} label="댓글 한 줄로 접기" onClick={() => setCollapsed(!collapsed)} />
+      <Item on={clock && hasClock} label="실제 시각으로 보기" onClick={() => setClock(!clock)} disabled={!hasClock} title={hasClock ? undefined : '올린 파일은 녹음한 시각을 몰라요'} />
+      <div className="menu-sep" />
+      <div className="menu-row">
+        <span>글자 크기</span>
+        <div className="seg">
+          {(['s', 'm', 'l'] as FontSize[]).map((f) => (
+            <button key={f} className={font === f ? 'on' : ''} onClick={() => setFont(f)}>{f === 's' ? '작게' : f === 'm' ? '보통' : '크게'}</button>
+          ))}
+        </div>
+      </div>
+      <div className="menu-sep" />
+      <button className="menu-item" onClick={() => { onClose(); useStore.getState().set({ shortcutsOpen: true }) }}>
+        <Keyboard size={15} />단축키<kbd className="menu-kbd">?</kbd>
+      </button>
+    </Floating>
+  )
+}
+
 export function TranscriptPane() {
   const meeting = useStore((s) => s.meeting)!
   const live = useStore((s) => s.live)
@@ -124,11 +159,16 @@ export function TranscriptPane() {
   const rec = useStore((s) => s.rec)
   const showMarks = useStore((s) => s.showMarks)
   const follow = useStore((s) => s.follow)
+  const playing = useStore((s) => s.playing)
   const set = useStore((s) => s.set)
   const toast = useStore((s) => s.toast)
   const scrollRef = useRef<HTMLDivElement>(null)
   const [listRect, setListRect] = useState<DOMRect | null>(null)
   const [tocRect, setTocRect] = useState<DOMRect | null>(null)
+  const [viewRect, setViewRect] = useState<DOMRect | null>(null)
+  const memoInput = useRef<HTMLInputElement>(null)
+  const seenCount = useRef(0)
+  const userScrollAt = useRef(0)
   const [memo, setMemo] = useState('')
   const [barMode, setBarMode] = useState<'comment' | 'memo'>('comment')
   const [toNotes] = usePref(COMMENT_TO_NOTES, false)
@@ -140,14 +180,65 @@ export function TranscriptPane() {
   const hasDividers = anns.some((a) => a.kind === 'divider' && a.pos)
   const movedCount = useMemo(() => (final?.annotations || []).filter((a) => a.origin === 'live' && a.pos).length, [final])
 
-  // 녹음 중에는 새 문장이 오면 아래로 따라간다
+  // 따라가기: 녹음 중에는 맨 아래(새 문장), 재생 중에는 재생 위치를 따라간다.
+  // 사용자가 직접 스크롤해 다른 곳을 보면 멈추고 "새 문장 n개" / "재생 위치로" 버튼을 띄운다.
   const liveCount = live?.units.length || 0
   useEffect(() => {
     const el = scrollRef.current
-    if (!el || tab !== 'live' || !follow) return
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 240
-    if (nearBottom || recordingHere) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+    if (!el || tab !== 'live' || !recordingHere || !follow) return
+    el.scrollTo({ top: el.scrollHeight })
+    seenCount.current = liveCount
   }, [liveCount, partial?.text, tab, follow, recordingHere])
+
+  useEffect(() => {
+    set({ follow: true })
+  }, [tab, meeting.id, set])
+
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const mark = () => {
+      userScrollAt.current = Date.now()
+    }
+    const onScroll = () => {
+      if (Date.now() - userScrollAt.current > 800) return // 프로그램이 움직인 스크롤
+      const near = el.scrollHeight - el.scrollTop - el.clientHeight < 120
+      const st = useStore.getState()
+      if (st.tab === 'live' && recordingHere) {
+        if (near !== st.follow) set({ follow: near })
+        if (near) seenCount.current = useStore.getState().live?.units.length || 0
+      } else if (st.playing && st.follow) set({ follow: false })
+    }
+    el.addEventListener('wheel', mark, { passive: true })
+    el.addEventListener('touchmove', mark, { passive: true })
+    el.addEventListener('pointerdown', mark)
+    el.addEventListener('keydown', mark)
+    el.addEventListener('scroll', onScroll, { passive: true })
+    return () => {
+      el.removeEventListener('wheel', mark)
+      el.removeEventListener('touchmove', mark)
+      el.removeEventListener('pointerdown', mark)
+      el.removeEventListener('keydown', mark)
+      el.removeEventListener('scroll', onScroll)
+    }
+  }, [recordingHere, set])
+
+  const newCount = tab === 'live' && recordingHere && !follow ? Math.max(0, liveCount - seenCount.current) : 0
+  const showJump = !follow && (newCount > 0 || (playing && tab !== 'summary'))
+
+  // C/M 단축키로 아래 입력창에 바로 쓰기
+  useEffect(() => {
+    if (!(tab === 'live' && recordingHere)) return
+    bridges.memoBar = {
+      focus: (mode) => {
+        setBarMode(mode)
+        memoInput.current?.focus()
+      },
+    }
+    return () => {
+      bridges.memoBar = null
+    }
+  }, [tab, recordingHere])
 
   const addFromBar = async () => {
     const text = memo.trim()
@@ -202,11 +293,8 @@ export function TranscriptPane() {
               <MessageSquare size={15} />
               <span>댓글 {anns.filter((a) => a.kind === 'comment').length}</span>
             </button>
-            <button className={`tool-btn ${showMarks ? '' : 'off'}`} onClick={() => set({ showMarks: !showMarks })} title={showMarks ? '첨삭 숨기기' : '첨삭 보기'}>
-              {showMarks ? <Eye size={15} /> : <EyeOff size={15} />}
-            </button>
-            <button className={`tool-btn ${follow ? 'on' : ''}`} onClick={() => set({ follow: !follow })} title="말하는/재생 중인 곳 따라가기">
-              <ArrowDownToLine size={15} />
+            <button className={`tool-btn ${showMarks ? '' : 'off'}`} onClick={(e) => setViewRect(e.currentTarget.getBoundingClientRect())} title="보기 설정">
+              <MoreHorizontal size={15} />
             </button>
           </>
         )}
@@ -276,6 +364,19 @@ export function TranscriptPane() {
         {tab === 'summary' && <SummaryView meeting={meeting} />}
       </div>
 
+      {showJump && (
+        <button
+          className="jump-pill"
+          onClick={() => {
+            userScrollAt.current = 0 // 이제부터의 스크롤은 우리가 움직이는 것
+            set({ follow: true })
+            if (tab === 'live' && recordingHere) scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
+          }}
+        >
+          <ArrowDown size={14} />
+          {newCount > 0 ? `새 문장 ${newCount}개` : '재생 위치로'}
+        </button>
+      )}
       {tab === 'live' && recordingHere && (
         <div className={`memo-bar mode-${barMode}`}>
           <div className="bar-mode">
@@ -287,6 +388,7 @@ export function TranscriptPane() {
             </button>
           </div>
           <input
+            ref={memoInput}
             value={memo}
             placeholder={barMode === 'comment' ? '방금 문장에 댓글… (Enter)' : `${fmtTime(rec.elapsed)} 지금 이 순간에 메모… (Enter)`}
             onChange={(e) => setMemo(e.target.value)}
@@ -301,6 +403,7 @@ export function TranscriptPane() {
           {toNotes && <span className="bar-notes" title="노트에도 함께 추가돼요"><NotebookPen size={13} /></span>}
         </div>
       )}
+      {viewRect && <ViewMenu rect={viewRect} onClose={() => setViewRect(null)} hasClock={(meeting.clock?.length || 0) > 0} />}
       {tocRect && <Toc anns={anns} units={viewUnits} rect={tocRect} onClose={() => setTocRect(null)} />}
       {listRect && <AnnList anns={anns} rect={listRect} view={tab === 'final' ? 'final' : 'live'} meetingId={meeting.id} onClose={() => setListRect(null)} />}
     </section>

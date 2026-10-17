@@ -1,8 +1,10 @@
-import { ChevronDown, Coffee, HardDrive, Loader2, Mic, MicOff, Pause, Play, RotateCcw, RotateCw, Square, StickyNote, WifiOff } from 'lucide-react'
+import { Check, ChevronDown, Coffee, HardDrive, Loader2, Mic, MicOff, Pause, Play, RotateCcw, RotateCw, Square, WifiOff } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ConfirmStop } from './ConfirmStop'
-import { listMics, pauseRecording, resumeRecording, startRecording, stopRecording } from '../hooks/recorder'
+import { Floating } from './Floating'
+import { listMics, pauseRecording, resumeRecording, startRecording, stopRecording, switchMic } from '../hooks/recorder'
 import type { Meeting } from '../lib/api'
+import { getPrefStr, HINT_SEEN } from '../lib/prefs'
 import { bridges, useStore } from '../lib/store'
 import { fmtDuration, fmtTime } from '../lib/time'
 
@@ -32,40 +34,125 @@ function useMicChoice() {
   return { mics, mic, choose, refresh }
 }
 
+type MicChoice = ReturnType<typeof useMicChoice>
+
 // 블루투스 마이크는 통화 모드(낮은 음질)로 바뀌어 받아쓰기가 부정확해진다
 const BLUETOOTH = /airpods|bluetooth|buds|beats|hands-?free|headset|블루투스/i
 
-function isBluetooth(mics: MediaDeviceInfo[], mic: string) {
+function micLabel(mics: MediaDeviceInfo[], mic: string) {
   const d = mics.find((m) => m.deviceId === (mic || 'default'))
-  return BLUETOOTH.test(d?.label || '')
+  return d?.label || ''
 }
 
-function MicSelect({ mics, mic, choose }: { mics: MediaDeviceInfo[]; mic: string; choose: (id: string) => void }) {
+function isBluetooth(mics: MediaDeviceInfo[], mic: string) {
+  return BLUETOOTH.test(micLabel(mics, mic))
+}
+
+/** 녹음 전 마이크 시험: 잠깐 마이크를 열어 소리 크기만 잰다 */
+function useMicTest(deviceId: string, active: boolean, onOpen: () => void) {
+  const [level, setLevel] = useState(0)
+  const [failed, setFailed] = useState(false)
+  useEffect(() => {
+    if (!active) return
+    let stopped = false
+    let stream: MediaStream | null = null
+    let ctx: AudioContext | null = null
+    let raf = 0
+    let frame = 0
+    navigator.mediaDevices
+      .getUserMedia({ audio: { deviceId: deviceId ? { exact: deviceId } : undefined } })
+      .then((st) => {
+        if (stopped) {
+          st.getTracks().forEach((t) => t.stop())
+          return
+        }
+        stream = st
+        onOpen() // 권한을 받은 뒤라 마이크 이름을 읽을 수 있다
+        ctx = new AudioContext()
+        const an = ctx.createAnalyser()
+        an.fftSize = 1024
+        ctx.createMediaStreamSource(st).connect(an)
+        const buf = new Float32Array(an.fftSize)
+        const tick = () => {
+          if (frame++ % 4 === 0) {
+            an.getFloatTimeDomainData(buf)
+            let sq = 0
+            for (const x of buf) sq += x * x
+            setLevel(Math.min(1, Math.sqrt(sq / buf.length) * 6))
+          }
+          raf = requestAnimationFrame(tick)
+        }
+        tick()
+      })
+      .catch(() => setFailed(true))
+    return () => {
+      stopped = true
+      cancelAnimationFrame(raf)
+      stream?.getTracks().forEach((t) => t.stop())
+      ctx?.close().catch(() => undefined)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deviceId, active])
+  return { level, failed }
+}
+
+function Meter({ level }: { level: number }) {
   return (
-    <label className="mic-select" title="마이크 선택">
-      <Mic size={14} />
-      <select value={mic} onChange={(e) => choose(e.target.value)}>
-        <option value="">기본 마이크</option>
-        {mics.filter((m) => m.deviceId && m.deviceId !== 'default').map((m) => (
-          <option key={m.deviceId} value={m.deviceId}>{m.label || '마이크'}</option>
-        ))}
-      </select>
-      <ChevronDown size={12} />
-    </label>
+    <div className="meter" aria-hidden>
+      <span style={{ width: `${Math.max(2, Math.min(100, level * 100))}%` }} />
+    </div>
   )
 }
 
-function Level() {
-  const level = useStore((s) => s.rec.level)
-  const status = useStore((s) => s.rec.status)
-  const hist = useRef<number[]>(Array(18).fill(0))
-  hist.current = [...hist.current.slice(1), status === 'recording' ? level : 0]
+/** 마이크 고르기 + 입력 확인. 녹음 중에는 연결 상태도 함께 보여 준다. */
+function MicPanel({ rect, onClose, choice, recording }: { rect: DOMRect; onClose: () => void; choice: MicChoice; recording: boolean }) {
+  const { mics, mic, choose, refresh } = choice
+  const recLevel = useStore((s) => (s.rec.status === 'recording' ? s.rec.level : 0))
+  const net = useStore((s) => s.rec.net)
+  const health = useStore((s) => s.health)
+  const test = useMicTest(mic, !recording, refresh)
+  const level = recording ? recLevel : test.level
+  const devices = mics.filter((m) => m.deviceId && m.deviceId !== 'default')
+  const pick = (id: string) => {
+    if (id === mic) return
+    choose(id)
+    if (recording) switchMic(id || undefined)
+  }
+  useEffect(() => {
+    useStore.getState().loadHealth()
+  }, [])
+  const hours = health ? health.disk_free_s / 3600 : null
   return (
-    <div className="level" aria-hidden>
-      {hist.current.map((v, i) => (
-        <span key={i} style={{ transform: `scaleY(${Math.max(0.08, Math.min(1, v))})` }} />
+    <Floating rect={rect} placement="above" onClose={onClose} className="mic-panel">
+      <p className="mic-panel-label">마이크</p>
+      <button className="menu-item check-item" onClick={() => pick('')} aria-checked={!mic} role="menuitemradio">
+        <span className="check-box">{!mic && <Check size={13} />}</span>
+        기본 마이크{micLabel(mics, '') && <em>{micLabel(mics, '').replace(/^(Default|기본값) - /, '')}</em>}
+      </button>
+      {devices.map((d) => (
+        <button key={d.deviceId} className="menu-item check-item" onClick={() => pick(d.deviceId)} aria-checked={mic === d.deviceId} role="menuitemradio">
+          <span className="check-box">{mic === d.deviceId && <Check size={13} />}</span>
+          {d.label || '마이크'}
+        </button>
       ))}
-    </div>
+      <div className="mic-panel-meter">
+        <Meter level={level} />
+        <span className="muted">{test.failed && !recording ? '마이크를 열 수 없어요. 권한을 확인해 주세요.' : level > 0.04 ? '잘 들려요' : '말해 보세요'}</span>
+      </div>
+      {isBluetooth(mics, mic) && <p className="mic-panel-note warn-hint">블루투스 마이크는 통화 음질로 바뀌어 받아쓰기가 부정확해질 수 있어요. 맥북 내장 마이크를 권해요.</p>}
+      {recording && health && (
+        <dl className="mic-panel-status">
+          <dt>실시간 받아쓰기</dt>
+          <dd>{health.live.state === 'ready' ? '준비됨' : health.live.state === 'error' ? '오류 · 녹음은 저장 중' : '준비 중 · 녹음은 저장 중'}</dd>
+          <dt>서버 연결</dt>
+          <dd>{net === 'ok' ? '연결됨' : '다시 연결 중 · 소리는 모아 두는 중'}</dd>
+          <dt>저장 공간</dt>
+          <dd>{hours === null ? '-' : hours >= 1 ? `약 ${Math.floor(hours)}시간 더 녹음할 수 있어요` : `약 ${Math.max(1, Math.round(hours * 60))}분 남았어요`}</dd>
+          <dt>잠자기</dt>
+          <dd>{health.keep_awake ? '녹음하는 동안 맥이 잠들지 않아요' : '화면이 꺼지지 않게 해 두었어요'}</dd>
+        </dl>
+      )}
+    </Floating>
   )
 }
 
@@ -91,9 +178,23 @@ function PausedFor({ since, heard }: { since: number; heard: boolean }) {
   )
 }
 
-/** 녹음 표시줄의 상태 아이콘. 문제가 있을 때만 보인다. */
-function Signals() {
+/** 마이크 아이콘: 소리가 들어오면 은은하게 빛나고, 문제가 있으면 주황/빨강 */
+function MicRing() {
+  const level = useStore((s) => (s.rec.status === 'recording' ? s.rec.level : 0))
   const mic = useStore((s) => s.rec.mic)
+  return (
+    <span
+      className={`mic-ring ${mic !== 'ok' ? `sig ${mic}` : ''}`}
+      style={{ ['--lv' as string]: Math.min(1, level * 1.4).toFixed(2) }}
+      title={mic === 'bad' ? '마이크를 찾을 수 없어요' : mic === 'warn' ? '마이크 소리가 들어오지 않거나 다시 연결하는 중이에요' : undefined}
+    >
+      {mic === 'ok' ? <Mic size={14} /> : <MicOff size={14} />}
+    </span>
+  )
+}
+
+/** 표시줄 옆 상태: 연결 끊김 아이콘, 접어 둔 알림. 문제가 있을 때만 보인다. */
+function Signals() {
   const net = useStore((s) => s.rec.net)
   const alert = useStore((s) => s.rec.alert)
   const collapsed = useStore((s) => s.rec.alertCollapsed)
@@ -101,11 +202,6 @@ function Signals() {
   const expand = () => setRec({ alertCollapsed: false })
   return (
     <>
-      {mic !== 'ok' && (
-        <span className={`sig ${mic}`} title={mic === 'bad' ? '마이크를 찾을 수 없어요' : '마이크 소리가 들어오지 않거나 다시 연결하는 중이에요'}>
-          <MicOff size={15} />
-        </span>
-      )}
       {net !== 'ok' && (
         <span className="sig warn" title="서버에 다시 연결하는 중이에요. 소리는 브라우저에 모아 두고 있어요.">
           <WifiOff size={15} />
@@ -120,11 +216,13 @@ function Signals() {
   )
 }
 
-function Recorder() {
+function Recorder({ choice }: { choice: MicChoice }) {
   const rec = useStore((s) => s.rec)
-  const health = useStore((s) => s.health)
-  const engine = health?.live
+  const engine = useStore((s) => s.health?.live)
   const [confirm, setConfirm] = useState(false)
+  const [panel, setPanel] = useState<DOMRect | null>(null)
+  // 처음 몇 번만 사용법을 한 줄 보여 준다
+  const [showHint] = useState(() => Number(getPrefStr(HINT_SEEN, '0')) <= 3)
   const stop = async () => {
     setConfirm(false)
     await stopRecording()
@@ -132,19 +230,22 @@ function Recorder() {
   return (
     <div className="dock dock-rec">
       <div className="rec-left">
-        {rec.status === 'recording' ? <span className="rec-dot big" /> : <span className="rec-dot big paused" />}
-        <span className="rec-time">{fmtTime(rec.elapsed, rec.elapsed >= 3600)}</span>
-        <Level />
+        <button className={`rec-pill ${rec.status}`} onClick={(e) => setPanel(e.currentTarget.getBoundingClientRect())} title="마이크·연결 상태">
+          <span className={`rec-dot big ${rec.status === 'recording' ? '' : 'paused'}`} />
+          <span className="rec-time">{fmtTime(rec.elapsed, rec.elapsed >= 3600)}</span>
+          <MicRing />
+          <ChevronDown size={12} className="rec-pill-caret" />
+        </button>
         <Signals />
         {rec.status === 'paused' && rec.pausedAt && <PausedFor since={rec.pausedAt} heard={rec.heard} />}
         {rec.status === 'stopping' && <span className="chip"><Loader2 size={12} className="spin" />마무리 중</span>}
       </div>
       <div className="rec-center">
         {rec.status === 'recording' && (
-          <button className="btn btn-round" onClick={() => pauseRecording()} title="일시정지 (쉬는 시간)"><Pause size={18} /></button>
+          <button className="btn btn-round" onClick={() => pauseRecording()} title="일시정지 (쉬는 시간) · ⌘⇧P"><Pause size={18} /></button>
         )}
         {rec.status === 'paused' && (
-          <button className="btn btn-resume" onClick={resumeRecording} title="이어서 녹음"><Mic size={16} />이어서 녹음</button>
+          <button className="btn btn-resume" onClick={resumeRecording} title="이어서 녹음 · ⌘⇧P"><Mic size={16} />이어서 녹음</button>
         )}
         <button className="btn btn-stop" onClick={() => setConfirm(true)} disabled={rec.status === 'stopping' || rec.status === 'connecting'}>
           <Square size={14} fill="currentColor" />
@@ -154,9 +255,10 @@ function Recorder() {
       <div className="rec-right">
         {engine?.state === 'loading' && <span className="engine-note"><Loader2 size={12} className="spin" />모델 준비 중 · 녹음은 계속 저장돼요</span>}
         {engine?.state === 'error' && <span className="engine-note err" title={engine.error || ''}>실시간 받아쓰기 오류 · 녹음은 저장 중</span>}
-        {engine?.state === 'ready' && rec.status === 'recording' && <span className="engine-note ok"><StickyNote size={12} />글자를 드래그하고 C를 누르면 댓글</span>}
+        {engine?.state === 'ready' && rec.status === 'recording' && showHint && <span className="engine-note ok">글자를 드래그하고 C를 누르면 댓글 · ? 단축키</span>}
         {rec.status === 'paused' && <span className="engine-note ok">일시정지 중에는 기록되지 않아요</span>}
       </div>
+      {panel && <MicPanel rect={panel} onClose={() => setPanel(null)} choice={choice} recording />}
       {confirm && (
         <ConfirmStop
           onClose={() => setConfirm(false)}
@@ -282,7 +384,9 @@ export function Dock() {
   const meeting = useStore((s) => s.meeting)!
   const rec = useStore((s) => s.rec)
   const toast = useStore((s) => s.toast)
-  const { mics, mic, choose, refresh } = useMicChoice()
+  const choice = useMicChoice()
+  const { mics, mic, refresh } = choice
+  const [panel, setPanel] = useState<DOMRect | null>(null)
   const recordingHere = rec.status !== 'idle' && rec.meetingId === meeting.id
   const busyElsewhere = rec.status !== 'idle' && rec.meetingId !== meeting.id
 
@@ -291,32 +395,44 @@ export function Dock() {
       toast('다른 회의를 녹음 중이에요. 먼저 종료해 주세요.', 'error')
       return
     }
+    setPanel(null)
     try {
       await startRecording(meeting.id, mic || undefined)
+      try {
+        localStorage.setItem(HINT_SEEN, String(Number(getPrefStr(HINT_SEEN, '0')) + 1))
+      } catch {
+        /* 무시 */
+      }
       refresh()
     } catch {
       /* 안내는 recorder에서 */
     }
   }
 
-  if (recordingHere) return <Recorder />
+  if (recordingHere) return <Recorder choice={choice} />
   if (meeting.has_audio) {
     // 원본을 만드는 중이어도 이어서 녹음할 수 있다 (서버가 그 작업을 취소한다)
     const canResume = meeting.source === 'live'
     return <Player key={meeting.id} meeting={meeting} onResume={canResume ? start : undefined} />
   }
+  const label = mic ? micLabel(mics, mic) || '마이크' : '기본 마이크'
   return (
     <div className="dock dock-idle">
       <button className="btn btn-record" onClick={start} disabled={rec.status === 'connecting'}>
         {rec.status === 'connecting' ? <Loader2 size={16} className="spin" /> : <span className="rec-dot white" />}
         녹음 시작
       </button>
-      <MicSelect mics={mics} mic={mic} choose={choose} />
+      <button className="mic-select" onClick={(e) => setPanel(e.currentTarget.getBoundingClientRect())} title="마이크 고르기·소리 확인">
+        <Mic size={14} />
+        <span className="mic-name">{label}</span>
+        <ChevronDown size={12} />
+      </button>
       {isBluetooth(mics, mic) ? (
         <span className="dock-hint warn-hint">블루투스 마이크는 통화 음질로 바뀌어 받아쓰기가 부정확해질 수 있어요. 맥북 내장 마이크를 권해요.</span>
       ) : (
         <span className="muted dock-hint">말하는 동안 실시간으로 받아 적고, 끝나면 화자를 나눈 원본을 만들어요.</span>
       )}
+      {panel && <MicPanel rect={panel} onClose={() => setPanel(null)} choice={choice} recording={false} />}
     </div>
   )
 }

@@ -47,7 +47,10 @@ const THEMES: { key: Theme; icon: typeof Sun; label: string }[] = [
 ]
 
 export function Sidebar({ onSettings }: { onSettings: () => void }) {
-  const meetings = useStore((s) => s.meetings)
+  const allMeetings = useStore((s) => s.meetings)
+  const hidden = useStore((s) => s.hiddenMeetings)
+  // 지우는 중(되돌리기 대기)인 회의는 숨긴다
+  const meetings = useMemo(() => (hidden.length ? allMeetings.filter((m) => !hidden.includes(m.id)) : allMeetings), [allMeetings, hidden])
   const selectedId = useStore((s) => s.selectedId)
   const health = useStore((s) => s.health)
   const theme = useStore((s) => s.theme)
