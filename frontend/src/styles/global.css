@@ -828,3 +828,10 @@ kbd { display: inline-grid; place-items: center; min-width: 20px; height: 20px; 
 .advanced[open] summary svg { transform: rotate(90deg); }
 .advanced[open] summary { margin-bottom: 10px; }
 
+/* ---------- 목소리로 이름 제안 ---------- */
+.legend-item { display: inline-flex; align-items: center; gap: 2px; }
+.voice-chip { height: 20px; padding: 0 7px; border: 1px dashed var(--border-strong); border-radius: 10px; background: none; color: var(--text-2); font-size: 12px; cursor: pointer; }
+.voice-chip:hover { border-style: solid; border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.storage-help { margin: 6px 0 0; font-size: 12.5px; }
+.storage-backup { margin-left: 8px; color: var(--accent); font-weight: 600; }
+

@@ -31,6 +31,7 @@ from .security import LocalOnlyMiddleware
 from .storage import audio_file, media_type
 from .system import KeepAwake, disk_free_bytes, disk_free_seconds, power_source
 from .views import Views
+from .voices import learn_from_meeting
 
 settings.ensure_dirs()
 store = Store(settings.db_path)
@@ -212,7 +213,11 @@ def patch_meeting(meeting_id: str, body: MeetingPatch) -> dict:
         fields["speakers"] = body.speakers
     if body.num_speakers is not None:
         fields["num_speakers"] = body.num_speakers or None
-    return _meeting_detail(store.update_meeting(meeting_id, **fields))  # type: ignore[arg-type]
+    m = store.update_meeting(meeting_id, **fields)
+    if body.speakers is not None:
+        # 이름 붙인 화자의 목소리를 기억해 다음 회의에서 제안한다
+        learn_from_meeting(store, meeting_id)
+    return _meeting_detail(m)  # type: ignore[arg-type]
 
 
 @app.delete("/api/meetings/{meeting_id}")
@@ -509,6 +514,17 @@ def export_md(meeting_id: str, version: str = "auto", download: int = 0) -> Resp
         title = (store.get_meeting(meeting_id) or {}).get("title") or "meeting"
         headers["Content-Disposition"] = f"attachment; filename*=UTF-8''{quote(title)}.md"
     return PlainTextResponse(md, media_type="text/markdown; charset=utf-8", headers=headers)
+
+
+@app.get("/api/backup.zip")
+def backup() -> StreamingResponse:
+    """전체 백업 (DB + 녹음 + 회의록 .md)"""
+    from urllib.parse import quote
+
+    from .backup import backup_name, iter_backup
+
+    headers = {"Content-Disposition": f"attachment; filename*=UTF-8''{quote(backup_name())}"}
+    return StreamingResponse(iter_backup(store, views), media_type="application/zip", headers=headers)
 
 
 @app.get("/api/search")

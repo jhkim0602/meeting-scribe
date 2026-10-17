@@ -9,6 +9,7 @@ from typing import Optional
 
 from .anchors import TextIndex, resolve_annotations
 from .db import Store
+from .voices import suggest
 
 
 def speaker_name(speakers: dict, label: Optional[str]) -> Optional[str]:
@@ -118,7 +119,10 @@ class Views:
             return None
         anns = self.resolve(self.store.list_annotations(meeting_id), idx, "final", version)
         data = final["data"]
+        meeting = self.store.get_meeting(meeting_id) or {}
+        suggestions = suggest(self.store, meeting_id, data.get("speaker_embeddings") or {}, meeting.get("speakers") or {})
         return {
+            "speaker_suggestions": suggestions,
             "version": version,
             "created_at": final["created_at"],
             "engine": final.get("engine"),

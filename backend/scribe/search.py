@@ -14,10 +14,38 @@ def _snippet(text: str, q: str, width: int = 60) -> str:
     return ("…" if a else "") + text[a:b] + ("…" if b < len(text) else "")
 
 
+KIND_ORDER = {"title": 0, "final": 1, "live": 1, "notes": 2}
+
+
 def search_all(views: Views, q: str, limit: int = 30) -> list[dict]:
     q = (q or "").strip()
     if not q:
         return []
+    if views.store.fts:
+        return _search_index(views, q, limit)
+    return _search_scan(views, q, limit)
+
+
+def _search_index(views: Views, q: str, limit: int) -> list[dict]:
+    """FTS5 색인으로 찾는다. 원본이 있는 회의는 원본에서, 없으면 실시간 기록에서."""
+    store = views.store
+    meetings = store.list_meetings()
+    rank = {m["id"]: i for i, m in enumerate(meetings)}
+    by_id = {m["id"]: m for m in meetings}
+    rows = [r for r in store.search_rows(q, limit=max(300, limit * 10)) if r["meeting_id"] in by_id]
+    rows.sort(key=lambda r: (rank[r["meeting_id"]], KIND_ORDER.get(r["kind"], 3), r["t"] if r["t"] is not None else 0))
+    out = []
+    for r in rows[:limit]:
+        title = by_id[r["meeting_id"]]["title"] or "제목 없는 회의"
+        item = {"meeting_id": r["meeting_id"], "title": title, "kind": r["kind"], "t": r["t"],
+                "snippet": title if r["kind"] == "title" else _snippet(r["text"], q)}
+        if r["ref"]:
+            item["unit"] = r["ref"]
+        out.append(item)
+    return out
+
+
+def _search_scan(views: Views, q: str, limit: int) -> list[dict]:
     store = views.store
     out: list[dict] = []
     ql = q.lower()

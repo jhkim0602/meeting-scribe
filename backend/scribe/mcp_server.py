@@ -20,6 +20,7 @@ from .export import LEGEND, meeting_markdown, transcript_markdown
 from .search import search_all
 from .textutil import fmt_time
 from .views import Views, speaker_name
+from .voices import learn_from_meeting
 
 INSTRUCTIONS = """\
 로컬 회의 기록 앱(Meeting Scribe)의 데이터에 접근합니다.
@@ -183,6 +184,7 @@ def rename_speakers(meeting_id: str, names: dict[str, str]) -> str:
     speakers = dict(m.get("speakers") or {})
     speakers.update({k: v for k, v in names.items() if k})
     _store.update_meeting(mid, speakers=speakers)
+    learn_from_meeting(_store, mid)
     return "화자 이름: " + ", ".join(f"{k}={speaker_name(speakers, k)}" for k in sorted(speakers))
 
 

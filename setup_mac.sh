@@ -40,13 +40,18 @@ else
   (cd frontend && npm ci && npm run build)
 fi
 
-say "5/5 모델 미리 받기 (Qwen3-ASR 0.6B·1.7B, 약 5GB)"
-read -r -p "지금 받을까요? 나중에 첫 녹음 때 받아도 됩니다. [Y/n] " yn
+say "5/5 모델 미리 받기 (Qwen3-ASR 8비트 0.6B·1.7B + 단어 정렬기, 약 4.7GB)"
+read -r -p "지금 받을까요? 나중에 첫 녹음 때 받아도 됩니다(화면에 진행률이 보여요). [Y/n] " yn
 if [[ "${yn:-Y}" =~ ^[Yy]$ ]]; then
   set -a; source .env; set +a
   (cd backend && .venv/bin/python -m scribe.download_models) || true
 fi
 
 say "설치 완료"
+read -r -p "로그인할 때 서버를 자동으로 켤까요? (터미널을 열어 둘 필요가 없어요) [y/N] " auto
+if [[ "${auto:-N}" =~ ^[Yy]$ ]]; then
+  "$ROOT/scripts/launchagent.sh" install || true
+fi
 echo "실행: ./run.sh   (브라우저에서 http://127.0.0.1:8765 이 열려요)"
+echo "맥 실기기 점검: (cd backend && .venv/bin/python -m scribe.selftest)"
 echo "Claude 연결: claude mcp add meeting-scribe -- $ROOT/scripts/mcp.sh"

@@ -17,9 +17,12 @@
 ## 빠른 시작 (Apple Silicon 맥)
 
 ```bash
-./setup_mac.sh      # ffmpeg, Python 3.12, Qwen3-ASR(MLX) 설치 + 모델 미리 받기(선택)
+./setup_mac.sh      # ffmpeg, Python 3.12, Qwen3-ASR(MLX) 설치 + 모델 미리 받기(선택, 약 4.7GB)
 ./run.sh            # http://127.0.0.1:8765 이 열립니다
 ```
+
+- 로그인할 때 서버를 저절로 켜려면 `scripts/launchagent.sh install` (끄기: `uninstall`). 터미널을 열어 둘 필요가 없습니다.
+- 처음 맥에서 쓸 때는 `cd backend && .venv/bin/python -m scribe.selftest --compare`로 속도와 정확도를 확인하고, [맥 점검표](docs/MAC_CHECKLIST.md)를 한 번 따라 해 보세요.
 
 화자 구분까지 쓰려면 한 번만 준비합니다.
 
@@ -103,6 +106,10 @@
 |---|---|
 | ![구분선](docs/screenshots/dividers.png) | ![종료 확인](docs/screenshots/stop-confirm.png) |
 
+| 녹음 표시줄을 누르면 (마이크·상태) | ⋯ 보기 설정 | ⌘F 기록에서 찾기 |
+|---|---|---|
+| ![마이크 패널](docs/screenshots/mic-panel.png) | ![보기 설정](docs/screenshots/view-menu.png) | ![찾기](docs/screenshots/find.png) |
+
 ## Claude로 요약하기 (MCP + 스킬)
 
 앱은 회의 데이터를 MCP 서버로 내어 줍니다. 내 Claude 구독으로 요약하고, 결과를 앱에 저장합니다.
@@ -175,10 +182,28 @@ mkdir -p ~/.claude/skills && cp -r claude/skills/meeting-minutes ~/.claude/skill
 | 항목 | 예상 |
 |---|---|
 | 실시간 자막 지연 | 1~2초 |
-| 메모리 사용 | 약 6GB (실시간 + 원본 모델 동시) |
-| 5시간 파일 원본 만들기 | 약 35~45분 (받아쓰기) + 약 20분 (pyannote) |
+| 모델 내려받기 | 약 4.7GB (8bit 기본) · fp16이면 약 8.4GB |
+| 메모리 사용 | 약 4GB (8bit 실시간 + 원본 동시) · fp16이면 약 7GB |
+| 원본 만들기 | 1시간 녹음당 약 15분 (받아쓰기와 화자 구분을 동시에) |
+| 녹음 파일 | 녹음 중 WAV 1시간 약 115MB → 다 만든 뒤 m4a 1시간 약 29MB (5시간 약 0.14GB) |
 
-M4 Pro 공개 수치를 M3 Pro 메모리 대역폭 비율로 환산한 추정치입니다. 첫 실행 때 10분짜리 녹음으로 직접 확인해 보세요.
+M4 Pro 공개 수치를 M3 Pro 메모리 대역폭 비율로 환산한 추정치입니다. `python -m scribe.selftest`로 직접 확인해 보세요.
+
+## 가볍게 운영하기
+
+| 기능 | 하는 일 | 바꾸는 법 (`.env`) |
+|---|---|---|
+| 8bit 모델 | mlx-qwen3-asr가 검증해 올린 8bit 모델을 기본으로 씁니다 (영어 기준 fp16과 같은 결과, 크기 절반 이하). 한국어는 `selftest --compare`로 확인하세요 | `SCRIBE_PRECISION=fp16` |
+| 녹음 파일 줄이기 | 원본까지 만들고 6시간 손대지 않은 회의는 WAV를 m4a로 줄입니다. 재생·다시 만들기·이어서 녹음은 그대로 됩니다 | `SCRIBE_COMPRESS_AFTER_H` (음수면 끔) |
+| 올린 파일 사본 | 원본을 다 만들면 앱 안의 사본은 지웁니다 (원래 파일은 그대로) | - |
+| 원본 버전 | 최근 2개만 남깁니다 | - |
+| 쉬는 모델 내리기 | 녹음 없이 30분이 지나면 실시간 모델을 메모리에서 내리고, 앱을 다시 보면 미리 올립니다 | `SCRIBE_LIVE_IDLE_UNLOAD_MIN` (0이면 안 내림) |
+| 배터리 절약 | 배터리로 쓸 때는 진행 중 문장을 2초마다 갱신합니다. 받아 적기가 느리면 간격을 스스로 늘립니다 | - |
+| 동시 처리 | 10분이 넘는 녹음은 화자 구분을 받아쓰기와 동시에 돌립니다 | `SCRIBE_PARALLEL_DIARIZE_MIN_S` |
+| 검색 | 모든 회의의 기록·노트·제목을 SQLite 색인(FTS5)으로 찾습니다 | - |
+| 목소리 기억 | 원본의 화자에 이름을 붙이면 목소리를 기억해 두었다가 다음 회의에서 "김민지?"처럼 제안합니다. 회의를 지우면 그 회의에서 배운 목소리도 지웁니다 | `SCRIBE_VOICE_MATCH` (0.55) |
+| 백업 | 설정 → "전체 백업 내려받기": DB, 녹음, 사람이 읽는 회의록(.md)을 zip 하나로 | - |
+| Docker | 쓰지 않습니다. 맥의 Docker에서는 GPU(Metal)를 쓸 수 없어 받아쓰기가 크게 느려집니다 | - |
 
 ## 개발
 
@@ -223,5 +248,7 @@ frontend/src/
 
 - 실시간 기록에는 화자 구분이 없습니다. 화자는 원본에서 나뉩니다.
 - 화자 구분은 5명 이상이거나 여러 명이 동시에 말할 때 정확도가 떨어집니다.
-- 실제 MLX 엔진 코드는 패키지 API(mlx-qwen3-asr 0.4.4)에 맞춰 작성했지만, 개발 환경이 리눅스라 맥 실기기 실행은 아직 확인하지 않았습니다. 처음 실행 후 문제가 있으면 `~/MeetingScribe/meetings/<회의ID>/worker.log`를 확인해 주세요.
+- 실제 MLX 엔진 코드는 패키지 API(mlx-qwen3-asr 0.4.4)에 맞춰 작성했지만, 개발 환경이 리눅스라 맥 실기기 실행은 아직 확인하지 않았습니다. [맥 점검표](docs/MAC_CHECKLIST.md)대로 확인해 주시고, 문제가 있으면 `~/MeetingScribe/meetings/<회의ID>/worker.log`와 `~/MeetingScribe/server.log`를 봐 주세요.
+- 8bit 모델은 패키지 제작자가 영어로 검증한 것입니다. 한국어 정확도는 `selftest --compare`로 확인하세요.
+- 목소리 기억은 화자 구분이 목소리 특징을 내줄 때(pyannote community-1)만 동작합니다.
 - 녹음 동의는 참석자에게 꼭 받아 주세요.

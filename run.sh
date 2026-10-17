@@ -10,6 +10,9 @@ if [[ ! -x .venv/bin/python ]]; then
   exit 1
 fi
 URL="http://127.0.0.1:${PORT}"
-( sleep 2; command -v open >/dev/null 2>&1 && open "$URL" ) &
+# --no-open: 로그인할 때 자동 실행(LaunchAgent)처럼 브라우저를 열지 않는다
+if [[ "${1:-}" != "--no-open" ]]; then
+  ( sleep 2; command -v open >/dev/null 2>&1 && open "$URL" ) &
+fi
 echo "회의 노트: $URL  (종료: Ctrl+C)"
 exec .venv/bin/python -m uvicorn scribe.main:app --host 127.0.0.1 --port "$PORT" --log-level warning

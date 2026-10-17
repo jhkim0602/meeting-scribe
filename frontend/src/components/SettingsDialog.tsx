@@ -94,6 +94,10 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                   회의 {storage.meetings}개 · 녹음 {fmtBytes(storage.audio_bytes)} · 기록과 노트 {fmtBytes(storage.other_bytes)}
                   <span className="muted"> · 남은 공간 {fmtBytes(storage.free_bytes)} (약 {Math.floor(storage.free_s / 3600)}시간 더 녹음할 수 있어요)</span>
                 </p>
+                <p className="storage-help muted">
+                  원본까지 만든 회의는 6시간 뒤 녹음 파일을 m4a로 줄여 1시간에 약 29MB만 써요.
+                  <a className="storage-backup" href="/api/backup.zip" download>전체 백업 내려받기</a>
+                </p>
               </>
             ) : (
               <p className="muted">계산하는 중…</p>

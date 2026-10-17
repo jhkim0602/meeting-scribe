@@ -91,6 +91,11 @@ JSON_FIELDS_MEETING = ("speakers", "clock")
 KEEP_FINAL_VERSIONS = 2
 
 
+def _note_rows(md: str) -> list[tuple]:
+    """노트 마크다운을 문단 단위로 색인한다 (찾은 곳 주변만 보여 주려고)."""
+    return [(None, None, part.strip()) for part in md.split("\n\n") if part.strip()]
+
+
 def new_id() -> str:
     """시간순 정렬이 되는 짧은 ID."""
     return f"{int(time.time() * 1000):x}{secrets.token_hex(3)}"
@@ -104,6 +109,7 @@ class Store:
         with self.conn() as c:
             c.executescript(SCHEMA)
             self._migrate(c)
+        self.fts = self._init_fts()
 
     @staticmethod
     def _migrate(c: sqlite3.Connection) -> None:
@@ -119,6 +125,11 @@ class Store:
             c.execute("ALTER TABLE meetings ADD COLUMN paused_wall REAL")
         if "paused_t" not in mcols:
             c.execute("ALTER TABLE meetings ADD COLUMN paused_t REAL")
+        # 화자 목소리 기억 (이름 붙인 화자의 목소리 특징)
+        c.execute(
+            "CREATE TABLE IF NOT EXISTS voice_samples (meeting_id TEXT NOT NULL, label TEXT NOT NULL, name TEXT NOT NULL,"
+            " embedding TEXT NOT NULL, updated_at REAL NOT NULL, PRIMARY KEY (meeting_id, label))"
+        )
         # 녹음 시간 → 실제 시각: [[녹음 시간(초), 그때의 실제 시각(epoch)], ...]
         if "clock" not in mcols:
             c.execute("ALTER TABLE meetings ADD COLUMN clock TEXT NOT NULL DEFAULT '[]'")
@@ -140,6 +151,64 @@ class Store:
         yield conn
 
     # ---------- meetings ----------
+    # ---------- 검색 색인 (FTS5 trigram: 글자 3개 이상은 색인, 더 짧으면 LIKE) ----------
+    FTS_VERSION = 1
+
+    def _init_fts(self) -> bool:
+        try:
+            with self.conn() as c:
+                c.execute(
+                    "CREATE VIRTUAL TABLE IF NOT EXISTS search_fts USING fts5("
+                    "meeting_id UNINDEXED, kind UNINDEXED, ref UNINDEXED, t UNINDEXED, text, tokenize='trigram')"
+                )
+        except sqlite3.OperationalError:
+            return False  # FTS5가 없는 SQLite: 파이썬으로 훑어 찾는다
+        if self.get_setting("fts_version") != self.FTS_VERSION:
+            self.rebuild_search_index()
+            self.set_setting("fts_version", self.FTS_VERSION)
+        return True
+
+    def rebuild_search_index(self) -> None:
+        with self.conn() as c:
+            c.execute("DELETE FROM search_fts")
+        for m in self.list_meetings():
+            mid = m["id"]
+            self._fts_replace(mid, "title", [(None, None, m.get("title") or "")])
+            self._fts_replace(mid, "live", [(s["id"], s["t0"], s["text"]) for s in self.list_live_segments(mid)])
+            final = self.get_final(mid)
+            if final:
+                self._fts_replace(mid, "final", [(u["id"], u["t0"], u["text"]) for u in final["data"].get("utterances", [])])
+            full = self.get_meeting(mid, with_notes=True) or {}
+            self._fts_replace(mid, "notes", _note_rows(full.get("notes_md") or ""))
+
+    def _fts_replace(self, meeting_id: str, kind: str, rows: list[tuple]) -> None:
+        if getattr(self, "fts", True) is False:
+            return
+        with self.conn() as c:
+            c.execute("DELETE FROM search_fts WHERE meeting_id=? AND kind=?", (meeting_id, kind))
+            c.executemany(
+                "INSERT INTO search_fts(meeting_id,kind,ref,t,text) VALUES(?,?,?,?,?)",
+                [(meeting_id, kind, ref, t, text) for ref, t, text in rows if text],
+            )
+
+    def search_rows(self, q: str, limit: int = 300) -> list[dict]:
+        """색인에서 찾은 줄들. 3글자 이상이면 색인(MATCH), 짧으면 LIKE로 훑는다.
+        원본이 있는 회의는 실시간 기록 대신 원본에서만 찾는다."""
+        skip_live = "NOT (kind='live' AND meeting_id IN (SELECT id FROM meetings WHERE final_version > 0))"
+        with self.conn() as c:
+            if len(q) >= 3:
+                rows = c.execute(
+                    f"SELECT meeting_id, kind, ref, t, text FROM search_fts WHERE search_fts MATCH ? AND {skip_live} LIMIT ?",
+                    ('"' + q.replace('"', '""') + '"', limit),
+                ).fetchall()
+            else:
+                esc = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                rows = c.execute(
+                    f"SELECT meeting_id, kind, ref, t, text FROM search_fts WHERE text LIKE ? ESCAPE '\\' AND {skip_live} LIMIT ?",
+                    (f"%{esc}%", limit),
+                ).fetchall()
+        return [dict(r) for r in rows]
+
     def create_meeting(self, title: str, source: str = "live", original_name: Optional[str] = None) -> dict:
         now = time.time()
         mid = new_id()
@@ -148,6 +217,7 @@ class Store:
                 "INSERT INTO meetings(id,title,created_at,updated_at,status,source,original_name) VALUES(?,?,?,?,?,?,?)",
                 (mid, title, now, now, "empty", source, original_name),
             )
+        self._fts_replace(mid, "title", [(None, None, title or "")])
         return self.get_meeting(mid)  # type: ignore[return-value]
 
     def get_meeting(self, meeting_id: str, *, with_notes: bool = False) -> Optional[dict]:
@@ -183,14 +253,20 @@ class Store:
         vals.append(meeting_id)
         with self.conn() as c:
             c.execute(f"UPDATE meetings SET {', '.join(cols)} WHERE id=?", vals)
+        if "title" in fields:
+            self._fts_replace(meeting_id, "title", [(None, None, fields["title"] or "")])
+        if "notes_md" in fields:
+            self._fts_replace(meeting_id, "notes", _note_rows(fields["notes_md"] or ""))
         return self.get_meeting(meeting_id)
 
     def delete_meeting(self, meeting_id: str) -> None:
         with self.conn() as c:
             c.execute("BEGIN")
-            for table in ("live_segments", "final_versions", "annotations", "jobs"):
+            for table in ("live_segments", "final_versions", "annotations", "jobs", "voice_samples"):
                 c.execute(f"DELETE FROM {table} WHERE meeting_id=?", (meeting_id,))
             c.execute("DELETE FROM meetings WHERE id=?", (meeting_id,))
+            if self.fts:
+                c.execute("DELETE FROM search_fts WHERE meeting_id=?", (meeting_id,))
             c.execute("COMMIT")
 
     def _meeting_row(self, row: sqlite3.Row, *, with_notes: bool = False) -> dict:
@@ -214,6 +290,8 @@ class Store:
                 "INSERT INTO live_segments(id,meeting_id,idx,t0,t1,text,created_at) VALUES(:id,:meeting_id,:idx,:t0,:t1,:text,:created_at)",
                 seg,
             )
+            if getattr(self, "fts", False) and text:
+                c.execute("INSERT INTO search_fts(meeting_id,kind,ref,t,text) VALUES(?,?,?,?,?)", (meeting_id, "live", seg["id"], seg["t0"], text))
         return seg
 
     def list_live_segments(self, meeting_id: str) -> list[dict]:
@@ -235,6 +313,7 @@ class Store:
             # 원본은 최근 KEEP_FINAL_VERSIONS개만 남긴다 (첨삭은 시간+인용문으로 묶여 있어 옛 버전이 없어도 된다)
             c.execute("DELETE FROM final_versions WHERE meeting_id=? AND version<=?", (meeting_id, version - KEEP_FINAL_VERSIONS))
             c.execute("COMMIT")
+        self._fts_replace(meeting_id, "final", [(u["id"], u["t0"], u["text"]) for u in data.get("utterances", [])])
         return version
 
     def get_final(self, meeting_id: str, version: Optional[int] = None) -> Optional[dict]:
@@ -384,4 +463,22 @@ class Store:
         points = [p for p in m.get("clock") or [] if p[0] < t - 1e-3]
         points.append([round(float(t), 3), round(float(wall), 3)])
         self.update_meeting(meeting_id, clock=points)
+
+    # ---------- 화자 목소리 기억 ----------
+    def set_voice_sample(self, meeting_id: str, label: str, name: str, embedding: list) -> None:
+        with self.conn() as c:
+            c.execute(
+                "INSERT INTO voice_samples(meeting_id,label,name,embedding,updated_at) VALUES(?,?,?,?,?) "
+                "ON CONFLICT(meeting_id,label) DO UPDATE SET name=excluded.name, embedding=excluded.embedding, updated_at=excluded.updated_at",
+                (meeting_id, label, name, json.dumps(embedding), time.time()),
+            )
+
+    def delete_voice_sample(self, meeting_id: str, label: str) -> None:
+        with self.conn() as c:
+            c.execute("DELETE FROM voice_samples WHERE meeting_id=? AND label=?", (meeting_id, label))
+
+    def list_voice_samples(self) -> list[dict]:
+        with self.conn() as c:
+            rows = c.execute("SELECT meeting_id, label, name, embedding FROM voice_samples").fetchall()
+        return [{**dict(r), "embedding": json.loads(r["embedding"])} for r in rows]
 

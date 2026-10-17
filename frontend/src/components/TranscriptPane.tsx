@@ -82,6 +82,22 @@ function AnnList({ anns, onClose, rect, view, meetingId }: { anns: Annotation[];
   )
 }
 
+/** 지난 회의에서 이름 붙인 목소리와 비슷하면 이름을 제안한다. 누르면 그 이름으로 정한다. */
+function VoiceChip({ meetingId, label, name }: { meetingId: string; label: string; name: string }) {
+  const accept = async () => {
+    const st = useStore.getState()
+    const names = st.meeting?.speakers || {}
+    await api.patchMeeting(meetingId, { speakers: { ...names, [label]: name } })
+    await Promise.all([st.refreshMeeting(), st.refreshFinal()])
+    st.toast(`${name}(으)로 정했어요. 목소리를 더 잘 기억할게요.`, 'success')
+  }
+  return (
+    <button className="voice-chip" onClick={accept} title={`지난 회의에서 "${name}"(으)로 이름 붙인 목소리와 비슷해요. 누르면 이 이름으로 정해요.`}>
+      {name}?
+    </button>
+  )
+}
+
 /** 구분선으로 나뉜 구간 목차. 구분선이 있을 때만 보인다. */
 function Toc({ anns, units, rect, onClose }: { anns: Annotation[]; units: Unit[]; rect: DOMRect; onClose: () => void }) {
   const dividers = anns.filter((a) => a.kind === 'divider' && a.pos && 'after' in a.pos).sort((a, b) => (a.anchor.t ?? 0) - (b.anchor.t ?? 0))
@@ -339,7 +355,12 @@ export function TranscriptPane() {
                 )}
                 <div className="final-meta">
                   <div className="speakers-legend">
-                    {final.speakers.length ? final.speakers.map((sp) => <SpeakerLabel key={sp} label={sp} compact />) : <span className="muted">화자 구분 없음</span>}
+                    {final.speakers.length ? final.speakers.map((sp) => (
+                      <span key={sp} className="legend-item">
+                        <SpeakerLabel label={sp} compact />
+                        {final.speaker_suggestions?.[sp] && <VoiceChip meetingId={meeting.id} label={sp} name={final.speaker_suggestions[sp].name} />}
+                      </span>
+                    )) : <span className="muted">화자 구분 없음</span>}
                   </div>
                   <span className="spacer" />
                   <span className="meta-text" title={`${final.engine} · ${final.diarizer}`}>

@@ -462,3 +462,87 @@ def test_upload_copy_is_removed_after_processing(client, tmp_path):
     assert _wait_job(client, m["id"])["status"] == "done"
     mdir = config.settings.meetings_dir / m["id"]
     assert not list(mdir.glob("source.*")) and (mdir / "audio.wav").exists()
+
+
+def test_search_index_follows_writes(client):
+    """검색 색인: 실시간 기록, 원본, 노트, 제목이 바뀌면 바로 찾아지고, 지우면 사라진다."""
+    from scribe import main as appmain
+
+    mid = client.post("/api/meetings", json={"title": "색인 시험 회의"}).json()["id"]
+    pcm = _speech_pcm([("s", 2.5), ("n", 1.0)] * 2)
+    _record(client, mid, pcm, messages=[{"type": "pause"}])
+    live_text = client.get(f"/api/meetings/{mid}/live").json()["units"][0]["text"]
+    word = live_text.replace(" ", "")[:4]
+    hits = [h for h in client.get("/api/search", params={"q": live_text[:5]}).json() if h["meeting_id"] == mid]
+    assert hits and hits[0]["kind"] == "live" and hits[0]["unit"]
+    client.put(f"/api/meetings/{mid}/notes", json={"blocks": [{"type": "paragraph", "content": [{"type": "text", "text": "다음 주 화요일까지 견적서 보내기", "styles": {}}], "children": []}]})
+    assert any(h["kind"] == "notes" and "견적서" in h["snippet"] for h in client.get("/api/search", params={"q": "견적서"}).json())
+    client.patch(f"/api/meetings/{mid}", json={"title": "분기 결산 회의"})
+    assert any(h["kind"] == "title" for h in client.get("/api/search", params={"q": "결산"}).json() if h["meeting_id"] == mid)
+    assert not any(h["kind"] == "title" for h in client.get("/api/search", params={"q": "색인 시험"}).json() if h["meeting_id"] == mid)
+    # 원본을 만들면 실시간 대신 원본에서 찾는다
+    client.post(f"/api/meetings/{mid}/process")
+    assert _wait_job(client, mid)["status"] == "done"
+    kinds = {h["kind"] for h in client.get("/api/search", params={"q": live_text[:5]}).json() if h["meeting_id"] == mid}
+    assert "final" in kinds and "live" not in kinds
+    # 짧은 검색어(LIKE)도 실시간 기록 줄에 밀려 원본 결과가 빠지지 않는다
+    short = live_text.replace(" ", "")[:2]
+    assert any(h["kind"] == "final" for h in client.get("/api/search", params={"q": short, "limit": 5}).json() if h["meeting_id"] == mid)
+    # 색인을 처음부터 다시 만들어도 같은 결과
+    before = client.get("/api/search", params={"q": "견적서"}).json()
+    appmain.store.rebuild_search_index()
+    assert client.get("/api/search", params={"q": "견적서"}).json() == before
+    assert word
+    client.delete(f"/api/meetings/{mid}")
+    assert not any(h["meeting_id"] == mid for h in client.get("/api/search", params={"q": "견적서"}).json())
+
+
+def test_named_voices_are_suggested_in_later_meetings(client):
+    """화자에 이름을 붙이면 목소리를 기억했다가, 다음 회의의 비슷한 목소리에 그 이름을 제안한다."""
+    def processed_meeting():
+        mid = client.post("/api/meetings", json={}).json()["id"]
+        _record(client, mid, _speech_pcm([("s", 3.0), ("n", 1.0)] * 8), messages=[{"type": "stop"}], until="stopped")
+        assert _wait_job(client, mid)["status"] == "done"
+        return mid
+
+    a = processed_meeting()
+    fa = client.get(f"/api/meetings/{a}/final").json()["final"]
+    assert fa["speaker_suggestions"] == {} and len(fa["speakers"]) == 3
+    client.patch(f"/api/meetings/{a}", json={"speakers": {"S1": "김민지", "S2": "박준호"}})
+
+    b = processed_meeting()
+    sug = client.get(f"/api/meetings/{b}/final").json()["final"]["speaker_suggestions"]
+    assert sug["S1"]["name"] == "김민지" and sug["S2"]["name"] == "박준호" and "S3" not in sug
+    # 이름을 정하면 그 화자는 더 제안하지 않고, 같은 이름을 다른 화자에게 주지 않는다
+    client.patch(f"/api/meetings/{b}", json={"speakers": {"S1": "김민지"}})
+    sug = client.get(f"/api/meetings/{b}/final").json()["final"]["speaker_suggestions"]
+    assert "S1" not in sug and sug["S2"]["name"] == "박준호"
+    # 회의를 지우면 그 회의에서 배운 목소리도 잊는다
+    client.delete(f"/api/meetings/{a}")
+    client.delete(f"/api/meetings/{b}")
+    c = processed_meeting()
+    assert client.get(f"/api/meetings/{c}/final").json()["final"]["speaker_suggestions"] == {}
+    client.delete(f"/api/meetings/{c}")
+
+
+def test_backup_zip_contains_everything(client, tmp_path):
+    import io
+    import sqlite3
+    import zipfile
+
+    mid = client.post("/api/meetings", json={"title": "백업/시험: 회의"}).json()["id"]
+    _record(client, mid, _speech_pcm([("s", 2.0), ("n", 1.0)]), messages=[{"type": "pause"}])
+    r = client.get("/api/backup.zip")
+    assert r.status_code == 200 and "attachment" in r.headers["content-disposition"]
+    zf = zipfile.ZipFile(io.BytesIO(r.content))
+    names = zf.namelist()
+    assert "scribe.db" in names and "복원 방법.txt" in names
+    assert f"meetings/{mid}/audio.wav" in names
+    md = [n for n in names if n.startswith("회의록/") and "백업_시험_ 회의" in n]
+    assert md and "백업/시험" in zf.read(md[0]).decode()
+    db = tmp_path / "restored.db"
+    db.write_bytes(zf.read("scribe.db"))
+    with sqlite3.connect(db) as c:
+        assert c.execute("SELECT title FROM meetings WHERE id=?", (mid,)).fetchone()[0] == "백업/시험: 회의"
+    client.post(f"/api/meetings/{mid}/cancel")
+

@@ -110,6 +110,8 @@ export interface FinalView {
   speakers: string[]
   duration: number | null
   annotations: Annotation[]
+  /** 지난 회의에서 이름 붙인 목소리와 비슷한 화자: {라벨: {name, score}} */
+  speaker_suggestions?: Record<string, { name: string; score: number }>
 }
 
 export interface Health {
