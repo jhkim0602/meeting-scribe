@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import errno
 import os
 import re
 import shutil
@@ -92,12 +93,13 @@ class WavAppender:
             info = wav_info(self.path)
             if info.data_offset != HEADER_SIZE or info.sample_rate != SAMPLE_RATE or info.channels != 1:
                 raise ValueError("이어 붙일 수 없는 WAV 형식입니다")
-            self._f = open(self.path, "r+b")
+            # 버퍼 없이 써서 저장 공간이 모자랄 때 어디까지 써졌는지 정확히 안다
+            self._f = open(self.path, "r+b", buffering=0)
             self._data_size = info.data_size - (info.data_size % 2)
             self._f.truncate(HEADER_SIZE + self._data_size)
             self._f.seek(HEADER_SIZE + self._data_size)
         else:
-            self._f = open(self.path, "w+b")
+            self._f = open(self.path, "w+b", buffering=0)
             self._data_size = 0
             self._f.write(_header(0))
         self._write_header()
@@ -116,7 +118,19 @@ class WavAppender:
         if len(pcm16) % 2:
             pcm16 = pcm16[:-1]
         with self._lock:
-            self._f.write(pcm16)
+            try:
+                written = self._f.write(pcm16) or 0
+            except OSError:
+                written = -1
+            if written != len(pcm16):
+                # 저장 공간 부족: 반쯤 쓴 조각을 버려 파일을 온전하게 둔다
+                try:
+                    self._f.truncate(HEADER_SIZE + self._data_size)
+                    self._f.seek(HEADER_SIZE + self._data_size)
+                    self._write_header()
+                except OSError:
+                    pass
+                raise OSError(errno.ENOSPC, "저장 공간이 부족합니다")
             self._data_size += len(pcm16)
             self._since_header += len(pcm16)
             if self._since_header >= self._header_every:

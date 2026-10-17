@@ -12,13 +12,42 @@ export interface Toast {
   action?: { label: string; run: () => void }
 }
 
-/** 녹음 중 화면 아래에 띄우는 알림 */
+/** 녹음 중 띄우는 알림. 한 번 띄우는 것(paused-speech, silence)은 잠시 뒤 녹음 표시줄로 접히고,
+ *  계속 보이는 것(나머지)은 해결될 때까지 남는다. */
 export type RecAlert =
   | { kind: 'paused-speech' }
   | { kind: 'silence'; fromT: number; fromWall: number; minutes: number }
-  | { kind: 'mic-lost'; state: 'reconnecting' | 'failed' }
+  | { kind: 'mic-lost' }
   | { kind: 'mic-silent' }
   | { kind: 'server-lost'; since: number }
+  | { kind: 'disk-low'; freeS: number }
+  | { kind: 'disk-full' }
+
+const PERSISTENT = new Set<RecAlert['kind']>(['mic-lost', 'mic-silent', 'server-lost', 'disk-low', 'disk-full'])
+export const isPersistent = (a: RecAlert | null) => !!a && PERSISTENT.has(a.kind)
+
+/** 녹음 표시줄 아이콘 상태: ok는 숨김, warn은 주황, bad는 빨강 */
+export type Signal = 'ok' | 'warn' | 'bad'
+
+export interface RecState {
+  status: RecStatus
+  meetingId: string | null
+  offset: number
+  elapsed: number
+  level: number
+  pausedAt: number | null
+  alert: RecAlert | null
+  alertCollapsed: boolean
+  mic: Signal
+  net: Signal
+  /** 일시정지 중에 말소리가 들렸음 (표시줄의 점) */
+  heard: boolean
+}
+
+export const REC_IDLE: RecState = {
+  status: 'idle', meetingId: null, offset: 0, elapsed: 0, level: 0, pausedAt: null,
+  alert: null, alertCollapsed: false, mic: 'ok', net: 'ok', heard: false,
+}
 
 interface State {
   health: Health | null
@@ -36,7 +65,7 @@ interface State {
   follow: boolean
   sidebarOpen: boolean
   theme: Theme
-  rec: { status: RecStatus; meetingId: string | null; offset: number; elapsed: number; level: number; pausedAt: number | null; alert: RecAlert | null }
+  rec: RecState
   playerTime: number
   playing: boolean
   toasts: Toast[]
@@ -86,7 +115,7 @@ export const useStore = create<State>((set, get) => ({
   follow: true,
   sidebarOpen: true,
   theme: readTheme(),
-  rec: { status: 'idle', meetingId: null, offset: 0, elapsed: 0, level: 0, pausedAt: null, alert: null },
+  rec: REC_IDLE,
   playerTime: 0,
   playing: false,
   toasts: [],

@@ -103,6 +103,10 @@ export interface Health {
   installed: Record<string, boolean>
   ffmpeg: boolean
   data_dir: string
+  disk_free_bytes: number
+  disk_free_s: number
+  /** 서버가 녹음 중 잠자기를 막는지 (맥 caffeinate) */
+  keep_awake: boolean
   project_root: string
   language: string
 }

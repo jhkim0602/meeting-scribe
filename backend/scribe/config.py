@@ -32,6 +32,9 @@ class Settings:
     # 화자 분리: auto | speakrs | pyannote | none | mock
     diarizer: str = field(default_factory=lambda: _env("SCRIBE_DIARIZER", "auto"))
     hf_token: str = field(default_factory=lambda: _env("HF_TOKEN", os.environ.get("HUGGINGFACE_TOKEN", "")))
+    # 127.0.0.1/localhost 외에 허용할 Host, Origin (쉼표로 구분, 보통은 비워 둔다)
+    extra_hosts: tuple = field(default_factory=lambda: tuple(h.strip().lower() for h in _env("SCRIBE_ALLOWED_HOSTS", "").split(",") if h.strip()))
+    extra_origins: tuple = field(default_factory=lambda: tuple(o.strip().lower().rstrip("/") for o in _env("SCRIBE_ALLOWED_ORIGINS", "").split(",") if o.strip()))
     frontend_dist: Path = field(default_factory=lambda: Path(_env("SCRIBE_FRONTEND_DIST", str(Path(__file__).resolve().parents[2] / "frontend" / "dist"))))
 
     @property

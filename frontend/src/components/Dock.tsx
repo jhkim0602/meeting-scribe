@@ -1,4 +1,4 @@
-import { ChevronDown, Loader2, Mic, Pause, Play, RotateCcw, RotateCw, Square, StickyNote } from 'lucide-react'
+import { ChevronDown, Coffee, HardDrive, Loader2, Mic, MicOff, Pause, Play, RotateCcw, RotateCw, Square, StickyNote, WifiOff } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { ConfirmStop } from './ConfirmStop'
 import { listMics, pauseRecording, resumeRecording, startRecording, stopRecording } from '../hooks/recorder'
@@ -32,6 +32,14 @@ function useMicChoice() {
   return { mics, mic, choose, refresh }
 }
 
+// 블루투스 마이크는 통화 모드(낮은 음질)로 바뀌어 받아쓰기가 부정확해진다
+const BLUETOOTH = /airpods|bluetooth|buds|beats|hands-?free|headset|블루투스/i
+
+function isBluetooth(mics: MediaDeviceInfo[], mic: string) {
+  const d = mics.find((m) => m.deviceId === (mic || 'default'))
+  return BLUETOOTH.test(d?.label || '')
+}
+
 function MicSelect({ mics, mic, choose }: { mics: MediaDeviceInfo[]; mic: string; choose: (id: string) => void }) {
   return (
     <label className="mic-select" title="마이크 선택">
@@ -61,13 +69,55 @@ function Level() {
   )
 }
 
-function PausedFor({ since }: { since: number }) {
+function PausedFor({ since, heard }: { since: number; heard: boolean }) {
   const [now, setNow] = useState(Date.now())
+  const setRec = useStore((s) => s.setRec)
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(id)
   }, [])
-  return <span className="chip chip-paused">일시정지 · {fmtDuration((now - since) / 1000)} 지남</span>
+  return (
+    <span className="chip chip-paused">
+      일시정지 · {fmtDuration((now - since) / 1000)} 지남
+      {heard && (
+        <button
+          className="heard-dot"
+          title="일시정지 중에 말소리가 들렸어요"
+          aria-label="일시정지 중에 말소리가 들렸어요"
+          onClick={() => setRec({ alert: { kind: 'paused-speech' }, alertCollapsed: false })}
+        />
+      )}
+    </span>
+  )
+}
+
+/** 녹음 표시줄의 상태 아이콘. 문제가 있을 때만 보인다. */
+function Signals() {
+  const mic = useStore((s) => s.rec.mic)
+  const net = useStore((s) => s.rec.net)
+  const alert = useStore((s) => s.rec.alert)
+  const collapsed = useStore((s) => s.rec.alertCollapsed)
+  const setRec = useStore((s) => s.setRec)
+  const expand = () => setRec({ alertCollapsed: false })
+  return (
+    <>
+      {mic !== 'ok' && (
+        <span className={`sig ${mic}`} title={mic === 'bad' ? '마이크를 찾을 수 없어요' : '마이크 소리가 들어오지 않거나 다시 연결하는 중이에요'}>
+          <MicOff size={15} />
+        </span>
+      )}
+      {net !== 'ok' && (
+        <span className="sig warn" title="서버에 다시 연결하는 중이에요. 소리는 브라우저에 모아 두고 있어요.">
+          <WifiOff size={15} />
+        </span>
+      )}
+      {alert && collapsed && (
+        <button className={`sig sig-btn ${alert.kind === 'silence' ? 'info' : 'warn'}`} onClick={expand} title="알림 다시 보기">
+          {alert.kind === 'silence' ? <Coffee size={15} /> : alert.kind === 'disk-low' ? <HardDrive size={15} /> : <MicOff size={15} />}
+        </button>
+      )}
+    </>
+  )
 }
 
 function Recorder() {
@@ -85,7 +135,8 @@ function Recorder() {
         {rec.status === 'recording' ? <span className="rec-dot big" /> : <span className="rec-dot big paused" />}
         <span className="rec-time">{fmtTime(rec.elapsed, rec.elapsed >= 3600)}</span>
         <Level />
-        {rec.status === 'paused' && rec.pausedAt && <PausedFor since={rec.pausedAt} />}
+        <Signals />
+        {rec.status === 'paused' && rec.pausedAt && <PausedFor since={rec.pausedAt} heard={rec.heard} />}
         {rec.status === 'stopping' && <span className="chip"><Loader2 size={12} className="spin" />마무리 중</span>}
       </div>
       <div className="rec-center">
@@ -241,7 +292,11 @@ export function Dock() {
         녹음 시작
       </button>
       <MicSelect mics={mics} mic={mic} choose={choose} />
-      <span className="muted dock-hint">말하는 동안 실시간으로 받아 적고, 끝나면 화자를 나눈 원본을 만들어요.</span>
+      {isBluetooth(mics, mic) ? (
+        <span className="dock-hint warn-hint">블루투스 마이크는 통화 음질로 바뀌어 받아쓰기가 부정확해질 수 있어요. 맥북 내장 마이크를 권해요.</span>
+      ) : (
+        <span className="muted dock-hint">말하는 동안 실시간으로 받아 적고, 끝나면 화자를 나눈 원본을 만들어요.</span>
+      )}
     </div>
   )
 }

@@ -132,9 +132,15 @@ class LiveSegmenter:
             self.buf_start += drop
             return events
 
-        cut_f = len(speech) if force else self._find_cut(speech)
-        while cut_f:
-            cut = len(self.buf) if force else cut_f * FRAME
+        # 밀린 오디오는 force여도 말 끊김마다 나누고, 남은 꼬리만 한 문장으로 확정한다
+        cut_f = self._find_cut(speech) if len(speech) else None
+        while True:
+            last = False
+            if not cut_f:
+                if not (force and len(self.buf)):
+                    break
+                cut_f, last = len(speech), True
+            cut = len(self.buf) if last else cut_f * FRAME
             seg_audio = self.buf[:cut]
             seg_speech = speech[:cut_f]
             speech_s = float(seg_speech.sum()) * FRAME_S
@@ -154,7 +160,7 @@ class LiveSegmenter:
             if self._partial_shown:
                 events.append(LiveEvent("partial", self._t(0), self._t(0), ""))
                 self._partial_shown = False
-            if force:
+            if last:
                 break
             cut_f = self._find_cut(speech) if len(speech) else None
 

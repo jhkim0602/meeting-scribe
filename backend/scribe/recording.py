@@ -16,12 +16,19 @@ from .config import settings
 from .db import Store
 from .engines import LiveEngineHolder
 from .live import LiveEvent, LiveSegmenter
+from .system import disk_free_seconds, keep_awake
 
 _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="live-asr")
 
 # 이보다 짧게 멈춘 것은 구분선을 만들지 않는다 (실수로 누른 일시정지, 짧은 연결 끊김)
 MIN_BREAK_S = float(os.environ.get("SCRIBE_MIN_BREAK_S", "20"))
 BREAK_LABEL = "쉬는 시간"
+
+# 저장 공간: 녹음 시간 30초마다 확인, 10분 분량 아래면 알리고 20초 분량 아래면 녹음을 멈춘다
+DISK_CHECK_EVERY_S = 30.0
+DISK_WARN_S = 600.0
+DISK_STOP_S = 20.0
+DISK_START_MIN_S = 60.0
 
 
 def make_break_divider(store: Store, meeting_id: str, t: float, wall_from: float, wall_to: float) -> Optional[dict]:
@@ -100,6 +107,8 @@ class RecordingSession:
         self._task: Optional[asyncio.Task] = None
         self._send_lock = asyncio.Lock()
         self.closed = False
+        self.disk_full = False
+        self._next_disk_check = self.start_s + DISK_CHECK_EVERY_S
 
     async def send(self, payload: dict) -> None:
         if self.closed:
@@ -116,7 +125,20 @@ class RecordingSession:
         return self.seg.engine is not None
 
     def on_audio(self, pcm: bytes) -> None:
-        self.writer.append(pcm)
+        if self.disk_full:
+            return
+        try:
+            self.writer.append(pcm)
+        except OSError:
+            self.disk_full = True
+            return
+        if self.writer.duration >= self._next_disk_check:
+            self._next_disk_check = self.writer.duration + DISK_CHECK_EVERY_S
+            free = disk_free_seconds(settings.data_dir)
+            if free < DISK_STOP_S:
+                self.disk_full = True
+            elif free < DISK_WARN_S:
+                asyncio.create_task(self.send({"type": "disk", "free_s": round(free)}))
         self.seg.feed(pcm16_to_float(pcm))
         if self._engine_ready() and (self._task is None or self._task.done()):
             self._task = asyncio.create_task(self._step())
@@ -171,14 +193,23 @@ async def handle_recording(
         await ws.send_text(json.dumps({"type": "error", "message": "이미 다른 창에서 녹음 중입니다"}))
         await ws.close()
         return
+    free_s = disk_free_seconds(settings.data_dir)
+    if free_s < DISK_START_MIN_S:
+        await ws.send_text(json.dumps({"type": "error", "message": "저장 공간이 거의 없어 녹음할 수 없어요. 공간을 비운 뒤 다시 시도해 주세요."}))
+        await ws.close()
+        return
     # 원본을 만드는 중이면(예: 실수로 녹음 종료) 그 작업을 멈추고 이어서 녹음한다
     cancelled_job = bool(on_resume(meeting_id)) if on_resume and meeting["status"] == "processing" else False
     holder.start_loading()
     session = RecordingSession(store, holder, meeting_id, ws)
     sessions[meeting_id] = session
+    keep_awake.acquire()
     store.update_meeting(meeting_id, status="recording")
     divider = begin_session_break(store, meeting_id, session.start_s, dict(ws.query_params))
-    await session.send({"type": "ready", "offset": session.start_s, "engine": holder.info(), "divider": divider, "cancelled_job": cancelled_job})
+    await session.send({
+        "type": "ready", "offset": session.start_s, "engine": holder.info(), "divider": divider,
+        "cancelled_job": cancelled_job, "disk_free_s": round(free_s),
+    })
     stop = False
     try:
         while True:
@@ -188,6 +219,10 @@ async def handle_recording(
                 break
             if msg.get("bytes"):
                 session.on_audio(msg["bytes"])
+                if session.disk_full:
+                    # 여기까지 저장하고 녹음을 멈춘다. 공간을 비우면 이어서 녹음할 수 있다.
+                    await session.send({"type": "disk-full", "duration": session.writer.duration})
+                    break
             elif msg.get("text"):
                 data = json.loads(msg["text"])
                 kind = data.get("type")
@@ -222,6 +257,7 @@ async def handle_recording(
         finally:
             duration = session.close()
             sessions.pop(meeting_id, None)
+            keep_awake.release()
             store.update_meeting(meeting_id, duration=duration, status="recorded")
             # 녹음이 끝나거나 끊긴 시각 → 다시 이어서 녹음하면 그 사이를 쉬는 시간으로 표시
             mark_paused(store, meeting_id, duration, time.time())
@@ -229,6 +265,11 @@ async def handle_recording(
                 job = on_stop(meeting_id)
                 try:
                     await session.send({"type": "stopped", "duration": duration, "job": job})
+                    await ws.close()
+                except BaseException:  # noqa: BLE001
+                    pass
+            elif session.disk_full and not session.closed:
+                try:
                     await ws.close()
                 except BaseException:  # noqa: BLE001
                     pass

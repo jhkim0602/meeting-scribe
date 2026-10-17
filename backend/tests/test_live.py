@@ -82,3 +82,14 @@ def test_feed_from_other_thread_is_safe():
     events += seg.step(force=True)
     total = sum(e.t1 - e.t0 for e in events if e.type == "segment")
     assert total > 6.0
+
+
+def test_forced_flush_of_backlog_still_cuts_at_silences():
+    # 엔진이 늦게 준비되어 밀린 오디오를 한꺼번에 확정해도 말 끊김마다 나뉜다
+    seg = LiveSegmenter(MockAsr(), language="ko")
+    audio = np.concatenate([_speech(3.0), _silence(1.0), _speech(4.0), _silence(1.0), _speech(3.5), _silence(1.2), _speech(20.0)])
+    seg.feed(audio)
+    finals = [e for e in seg.step(force=True) if e.type == "segment"]
+    assert len(finals) >= 4, finals
+    assert all(e.t1 - e.t0 <= 15.0 for e in finals)
+    assert finals[-1].t1 >= 33.0

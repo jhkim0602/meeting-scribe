@@ -634,6 +634,15 @@ code { font-family: var(--font-mono); font-size: 0.88em; background: var(--bg-ho
 .btn.btn-round:hover:not(:disabled) { background: var(--bg-active); }
 .btn.btn-round.play:hover:not(:disabled) { background: var(--text); filter: opacity(0.88); }
 .chip-paused { background: rgba(183, 121, 31, 0.14); color: var(--warn); font-variant-numeric: tabular-nums; }
+.heard-dot { width: 7px; height: 7px; margin-left: 6px; padding: 0; border: 0; border-radius: 50%; background: var(--warn); cursor: pointer; }
+.heard-dot:hover { box-shadow: 0 0 0 3px rgba(183, 121, 31, 0.2); }
+.sig { display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 6px; flex: none; }
+.sig.warn { color: var(--warn); }
+.sig.bad { color: var(--rec); }
+.sig.info { color: var(--accent); }
+.sig-btn { border: 0; background: none; padding: 0; cursor: pointer; }
+.sig-btn:hover { background: var(--bg-hover); }
+.warn-hint { color: var(--warn); }
 .btn-stop { display: inline-flex; align-items: center; gap: 8px; height: 38px; padding: 0 16px; border-radius: 19px; background: var(--text); color: var(--bg); font-weight: 650; }
 .engine-note { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--warn); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .engine-note.ok { color: var(--text-3); }

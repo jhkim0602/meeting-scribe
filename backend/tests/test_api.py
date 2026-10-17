@@ -20,6 +20,7 @@ def client(tmp_path_factory):
     config.settings.data_dir = data
     config.settings.live_engine = config.settings.final_engine = "mock"
     config.settings.diarizer = "mock"
+    config.settings.extra_hosts = ("testserver",)  # TestClient의 Host
     from fastapi.testclient import TestClient
 
     from scribe import recording
@@ -283,3 +284,89 @@ def test_manual_divider_and_settings(client):
     s = client.put("/api/settings", json={"break_prompt_minutes": 5}).json()
     assert s["break_prompt_minutes"] == 5
     client.post(f"/api/meetings/{mid}/cancel")
+
+
+def test_local_only_blocks_other_sites(client):
+    from starlette.websockets import WebSocketDisconnect
+
+    from scribe.security import hostname
+
+    assert hostname("[::1]:8765") == "::1" and hostname("LocalHost:8765") == "localhost" and hostname("127.0.0.1") == "127.0.0.1"
+    # DNS 리바인딩: Host가 다른 이름이면 거절
+    assert client.get("/api/meetings", headers={"host": "evil.example:8765"}).status_code == 403
+    # 다른 사이트 페이지에서 온 요청은 거절, 같은 출처와 개발 서버는 통과
+    assert client.get("/api/meetings", headers={"origin": "https://evil.example"}).status_code == 403
+    assert client.get("/api/meetings", headers={"host": "127.0.0.1:8765", "origin": "http://localhost:3000"}).status_code == 403
+    assert client.get("/api/meetings", headers={"host": "127.0.0.1:8765", "origin": "http://127.0.0.1:8765"}).status_code == 200
+    assert client.get("/api/meetings", headers={"host": "localhost:8765", "origin": "http://localhost:5173"}).status_code == 200
+    assert client.post("/api/meetings", json={}, headers={"origin": "null"}).status_code == 403
+    mid = client.post("/api/meetings", json={}).json()["id"]
+    with pytest.raises(WebSocketDisconnect):
+        with client.websocket_connect(f"/api/meetings/{mid}/record", headers={"origin": "https://evil.example"}) as ws:
+            ws.receive_text()
+    assert client.get(f"/api/meetings/{mid}").json()["status"] == "empty"
+
+
+def test_disk_space_guard(client, monkeypatch):
+    from scribe import recording
+
+    mid = client.post("/api/meetings", json={}).json()["id"]
+    # 시작할 때 공간이 거의 없으면 녹음하지 않는다
+    monkeypatch.setattr(recording, "disk_free_seconds", lambda path: 10.0)
+    with client.websocket_connect(f"/api/meetings/{mid}/record") as ws:
+        msg = json.loads(ws.receive_text())
+    assert msg["type"] == "error" and "저장 공간" in msg["message"]
+
+    # 녹음 중에 공간이 줄면 알리고, 바닥나면 여기까지 저장하고 멈춘다
+    free = iter([5000.0, 300.0, 5.0])
+    monkeypatch.setattr(recording, "disk_free_seconds", lambda path: next(free, 5.0))
+    got = []
+    chunk = _speech_pcm([("n", 1.0)])
+    with client.websocket_connect(f"/api/meetings/{mid}/record") as ws:
+        ready = json.loads(ws.receive_text())
+        assert ready["disk_free_s"] == 5000
+        try:
+            for _ in range(70):
+                ws.send_bytes(chunk)
+            while True:
+                m = json.loads(ws.receive_text())
+                got.append(m)
+                if m["type"] == "disk-full":
+                    break
+        except Exception:  # noqa: BLE001 - 서버가 연결을 닫음
+            pass
+    kinds = [m["type"] for m in got]
+    assert "disk" in kinds and kinds[-1] == "disk-full", kinds
+    warn = next(m for m in got if m["type"] == "disk")
+    assert warn["free_s"] == 300
+    full = got[-1]
+    assert 59.0 <= full["duration"] <= 61.0
+    time.sleep(0.3)
+    m = client.get(f"/api/meetings/{mid}").json()
+    assert m["status"] == "recorded" and abs(m["duration"] - full["duration"]) < 0.01
+
+
+def test_wav_appender_survives_disk_full(tmp_path):
+    from scribe.audio import WavAppender, wav_info
+
+    w = WavAppender(tmp_path / "a.wav")
+    w.append(b"\x01\x00" * 1000)
+
+    class Half:
+        def __init__(self, f):
+            self.f = f
+
+        def write(self, b):
+            return self.f.write(b[: len(b) // 2])  # 공간이 모자라 절반만 써짐
+
+        def __getattr__(self, name):
+            return getattr(self.f, name)
+
+    w._f = Half(w._f)
+    with pytest.raises(OSError):
+        w.append(b"\x02\x00" * 1000)
+    w._f = w._f.f
+    w.close()
+    info = wav_info(tmp_path / "a.wav")
+    assert info.num_samples == 1000 and (tmp_path / "a.wav").stat().st_size == 44 + 2000
+

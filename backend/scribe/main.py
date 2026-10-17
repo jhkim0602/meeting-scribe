@@ -26,6 +26,8 @@ from .jobs import JobManager
 from .notes_md import blocks_to_markdown
 from .recording import handle_recording
 from .search import search_all
+from .security import LocalOnlyMiddleware
+from .system import KeepAwake, disk_free_bytes, disk_free_seconds
 from .views import Views
 
 settings.ensure_dirs()
@@ -49,6 +51,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Meeting Scribe", version=__version__, lifespan=lifespan)
+app.add_middleware(LocalOnlyMiddleware)
 
 
 # ---------------- 공통 ----------------
@@ -83,6 +86,10 @@ def health() -> dict:
         **engines_info(),
         "ffmpeg": bool(ffmpeg_path()),
         "data_dir": str(settings.data_dir),
+        "disk_free_bytes": disk_free_bytes(settings.data_dir),
+        "disk_free_s": round(disk_free_seconds(settings.data_dir)),
+        # 서버가 녹음 중 잠자기를 막는지 (맥: caffeinate). 아니면 브라우저가 화면 꺼짐을 막는다.
+        "keep_awake": KeepAwake.available(),
         "project_root": str(Path(__file__).resolve().parents[2]),
         "language": settings.language,
     }
