@@ -71,6 +71,7 @@ export interface Annotation {
   replies: { text: string; at: number }[]
   created_at: number
   updated_at: number
+  exported_at: number | null
   pos: null | { after: string | null } | { start: Pos; end: Pos; approx: boolean; score: number; text: string }
   match?: 'same' | 'differs'
 }
@@ -159,6 +160,8 @@ export const api = {
   patchAnnotation: (annId: string, patch: Partial<Pick<Annotation, 'body' | 'replacement' | 'status' | 'color'>>, view = 'live') =>
     req<Annotation>('PATCH', `/api/annotations/${annId}?view=${view}`, patch),
   reply: (annId: string, text: string, view = 'live') => req<Annotation>('POST', `/api/annotations/${annId}/replies?view=${view}`, { text }),
+  markExported: (id: string, ids: string[], exported = true) =>
+    req<{ updated: number }>('POST', `/api/meetings/${id}/annotations/exported`, { ids, exported }),
   deleteAnnotation: (annId: string) => req<{ ok: boolean }>('DELETE', `/api/annotations/${annId}`),
   search: (q: string) => req<SearchHit[]>('GET', `/api/search?q=${encodeURIComponent(q)}`),
   exportMd: async (id: string) => (await fetch(`/api/meetings/${id}/export.md`)).text(),

@@ -33,3 +33,17 @@ def test_blocks_to_markdown():
     assert "## 결정 사항" in md
     assert "- [x] **예산** [01:15]" in md
     assert "  - 하위" in md
+
+
+def test_comment_note_block_markdown():
+    """노트로 내보낸 댓글 블록(시각 + 댓글, 아래에 인용과 답글)의 Markdown."""
+    blocks = [
+        {"type": "bulletListItem", "props": {}, "content": [
+            {"type": "timestamp", "props": {"t": 125}}, {"type": "text", "text": " 재무팀 확인 필요", "styles": {"bold": True}},
+        ], "children": [
+            {"type": "quote", "props": {}, "content": [{"type": "text", "text": "마케팅 비용이 20% 넘게", "styles": {}}], "children": []},
+            {"type": "bulletListItem", "props": {}, "content": [{"type": "text", "text": "답글: 다음 주 확인", "styles": {}}], "children": []},
+        ]},
+    ]
+    md = blocks_to_markdown(blocks)
+    assert md.splitlines() == ["- [02:05] **재무팀 확인 필요**", "  > 마케팅 비용이 20% 넘게", "  - 답글: 다음 주 확인"]

@@ -123,3 +123,15 @@ def test_time_fallback_when_text_unrecognizable():
 
 def test_empty_index():
     assert resolve({"t0": 1, "t1": 2, "quote": "x"}, TextIndex([])) is None
+
+
+def test_fuzzy_match_snaps_to_word_boundaries():
+    live = TextIndex([{"id": "L", "t0": 0.0, "t1": 6.0, "text": "산 검토부터 시작하겠습니다 지난달 마케팅 비용이 계획보다 이십"}])
+    final = TextIndex([{"id": "u", "t0": 0.0, "t1": 7.0, "text": "오늘 회의는 3분기 예산 검토부터 시작하겠습니다. 지난달 마케팅 비용이 계획보다 20% 넘게"}])
+    a = compute_anchor(live, {"unit": "L", "offset": 0}, {"unit": "L", "offset": len(live.units[0]["text"])})
+    pos = resolve(a, final)
+    full = final.units[0]["text"]
+    s, e = pos["start"]["offset"], pos["end"]["offset"]
+    assert s == 0 or full[s - 1] == " ", full[s:e]
+    assert e == len(full) or not full[e].isalnum(), full[s:e]
+    assert "검토부터" in pos["text"] and "산 검토부터" not in pos["text"].split("예산")[0]

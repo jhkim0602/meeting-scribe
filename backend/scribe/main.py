@@ -334,6 +334,11 @@ class ReplyIn(BaseModel):
     text: str
 
 
+class ExportedIn(BaseModel):
+    ids: list[str]
+    exported: bool = True
+
+
 KINDS = {"comment", "edit", "memo", "highlight"}
 
 
@@ -400,6 +405,13 @@ def add_reply(ann_id: str, body: ReplyIn, view: str = "live") -> dict:
     replies.append({"text": body.text.strip(), "at": time.time()})
     ann = store.update_annotation(ann_id, replies=replies)
     return _resolved_one(ann, view)  # type: ignore[arg-type]
+
+
+@app.post("/api/meetings/{meeting_id}/annotations/exported")
+def mark_exported(meeting_id: str, body: ExportedIn) -> dict:
+    """댓글/메모를 노트로 내보냈다고 표시한다."""
+    _meeting_or_404(meeting_id)
+    return {"updated": store.mark_exported(meeting_id, body.ids, body.exported)}
 
 
 @app.delete("/api/annotations/{ann_id}")

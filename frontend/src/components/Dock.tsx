@@ -93,7 +93,7 @@ function Recorder() {
       <div className="rec-right">
         {engine?.state === 'loading' && <span className="engine-note"><Loader2 size={12} className="spin" />모델 준비 중 · 녹음은 계속 저장돼요</span>}
         {engine?.state === 'error' && <span className="engine-note err" title={engine.error || ''}>실시간 받아쓰기 오류 · 녹음은 저장 중</span>}
-        {engine?.state === 'ready' && <span className="engine-note ok"><StickyNote size={12} />아래 입력창이나 드래그로 메모</span>}
+        {engine?.state === 'ready' && <span className="engine-note ok"><StickyNote size={12} />글자를 드래그하고 C를 누르면 댓글</span>}
       </div>
     </div>
   )

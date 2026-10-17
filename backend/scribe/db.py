@@ -102,6 +102,14 @@ class Store:
         self._local = threading.local()
         with self.conn() as c:
             c.executescript(SCHEMA)
+            self._migrate(c)
+
+    @staticmethod
+    def _migrate(c: sqlite3.Connection) -> None:
+        """이전 버전 DB에 새 열을 더한다."""
+        cols = {r["name"] for r in c.execute("PRAGMA table_info(annotations)").fetchall()}
+        if "exported_at" not in cols:
+            c.execute("ALTER TABLE annotations ADD COLUMN exported_at REAL")
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path, timeout=30, isolation_level=None, check_same_thread=False)
@@ -265,7 +273,7 @@ class Store:
         return [self._ann_row(r) for r in rows]
 
     def update_annotation(self, ann_id: str, **fields: Any) -> Optional[dict]:
-        allowed = {"body", "replacement", "color", "status", "replies", "anchor"}
+        allowed = {"body", "replacement", "color", "status", "replies", "anchor", "exported_at"}
         cols, vals = [], []
         for key, value in fields.items():
             if key not in allowed:
@@ -281,6 +289,19 @@ class Store:
             with self.conn() as c:
                 c.execute(f"UPDATE annotations SET {', '.join(cols)} WHERE id=?", vals)
         return self.get_annotation(ann_id)
+
+    def mark_exported(self, meeting_id: str, ids: list[str], exported: bool = True) -> int:
+        """노트로 내보낸 댓글/메모 표시 (중복 내보내기 방지용)."""
+        if not ids:
+            return 0
+        value = time.time() if exported else None
+        marks = ",".join("?" * len(ids))
+        with self.conn() as c:
+            cur = c.execute(
+                f"UPDATE annotations SET exported_at=?, updated_at=? WHERE meeting_id=? AND id IN ({marks})",
+                [value, time.time(), meeting_id, *ids],
+            )
+        return cur.rowcount
 
     def delete_annotation(self, ann_id: str) -> None:
         with self.conn() as c:

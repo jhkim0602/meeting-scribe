@@ -48,7 +48,7 @@ export default function App() {
               await st.refreshMeeting()
               await st.refreshFinal()
               await st.loadMeetings()
-              if (j.status === 'done') st.toast('원본이 준비됐어요. 회의 중 남긴 첨삭을 같은 자리에 옮겨 놓았어요.', 'success')
+              if (j.status === 'done') st.toast('원본이 준비됐어요. 회의 중 남긴 댓글·메모를 같은 자리에 옮겨 놓았어요.', 'success')
               if (j.status === 'error') st.toast(`원본을 만들지 못했어요: ${j.error}`, 'error')
             }
             lastStatus = j.status

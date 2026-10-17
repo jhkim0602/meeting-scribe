@@ -1,4 +1,4 @@
-// 브라우저 E2E: 가짜 마이크로 녹음 → 댓글/수정/메모 → 원본 → 첨삭 재배치 확인
+// 브라우저 E2E: 가짜 마이크로 녹음 → 댓글(입력창/드래그+C/문장 전체) → 노트로 내보내기 → 원본 → 댓글 재배치 확인
 // 사용법: 서버를 시연용 엔진으로 띄운 뒤 (README '개발' 참고)
 //   OUT=scripts/e2e/out FAKE_AUDIO=scripts/e2e/out/speech.wav node scripts/e2e/run.cjs
 const { chromium } = require(process.env.PLAYWRIGHT || 'playwright')
@@ -7,14 +7,16 @@ const FAKE_AUDIO = process.env.FAKE_AUDIO || `${OUT}/speech.wav`
 const BASE = process.env.BASE || 'http://127.0.0.1:8765'
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
-async function selectText(page, unitIndex, startWord, wordCount) {
-  // unitIndex번째 기록 문장에서 startWord번째 단어부터 wordCount개 단어를 선택하고 mouseup
-  return page.evaluate(({ unitIndex, startWord, wordCount }) => {
-    const p = document.querySelectorAll('.utext')[unitIndex]
-    const span = p.querySelector('[data-k="o"]')
-    const node = span.firstChild
-    const text = node.textContent
-    const words = text.split(' ')
+function check(cond, msg) {
+  if (!cond) throw new Error('확인 실패: ' + msg)
+  console.log('✓', msg)
+}
+
+async function selectWords(page, unitIndex, startWord, wordCount, view = 'live') {
+  return page.evaluate(({ unitIndex, startWord, wordCount, view }) => {
+    const p = document.querySelectorAll(`.view-${view} .utext`)[unitIndex]
+    const node = p.querySelector('[data-k="o"]').firstChild
+    const words = node.textContent.split(' ')
     startWord = Math.min(startWord, Math.max(0, words.length - 1))
     wordCount = Math.max(1, Math.min(wordCount, words.length - startWord))
     let a = 0
@@ -28,14 +30,18 @@ async function selectText(page, unitIndex, startWord, wordCount) {
     sel.removeAllRanges()
     sel.addRange(r)
     p.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }))
-    return text.slice(a, b)
-  }, { unitIndex, startWord, wordCount })
+    return node.textContent.slice(a, b)
+  }, { unitIndex, startWord, wordCount, view })
+}
+
+async function notesMarkdown(mid) {
+  return (await (await fetch(`${BASE}/api/meetings/${mid}/notes`)).json()).markdown
 }
 
 ;(async () => {
   const browser = await chromium.launch({
     executablePath: process.env.CHROME || undefined,
-    args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', `--use-file-for-fake-audio-capture=${FAKE_AUDIO}`, '--autoplay-policy=no-user-gesture-required'],
+    args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', `--use-file-for-fake-audio-capture=${FAKE_AUDIO}`],
   })
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, permissions: ['microphone'], colorScheme: 'light' })
   const page = await ctx.newPage()
@@ -45,119 +51,95 @@ async function selectText(page, unitIndex, startWord, wordCount) {
 
   await page.goto(BASE)
   await page.waitForSelector('.welcome h1')
-  await page.screenshot({ path: `${OUT}/01-welcome.png` })
-
   await page.click('.start-card.primary')
   await page.waitForSelector('.dock-rec', { timeout: 15000 })
   await page.fill('.page-title', '3분기 마케팅 예산 회의')
   await page.keyboard.press('Enter')
-  await sleep(13000)
-  const n1 = await page.locator('.view-live .unit:not(.partial)').count()
-  console.log('live units after 13s:', n1)
-  await page.screenshot({ path: `${OUT}/02-recording.png` })
+  const mid = (await (await fetch(`${BASE}/api/meetings`)).json())[0].id
+  await sleep(9000)
 
-  // 지금 메모
-  await page.fill('.memo-bar input', '예산 숫자 다시 확인하기')
+  // 1) 녹음 중 아래 입력창: 기본이 '댓글' → 방금 문장에 댓글
+  await page.fill('.memo-bar input', '방금 말한 예산 숫자 확인')
   await page.keyboard.press('Enter')
-  await sleep(600)
+  await sleep(700)
+  check((await page.locator('.view-live .cmt').count()) === 1, '입력창으로 방금 문장에 댓글')
 
-  // 댓글
-  const q1 = await selectText(page, 0, 1, 2)
-  console.log('comment on:', q1)
-  await page.waitForSelector('.sel-toolbar')
-  await page.screenshot({ path: `${OUT}/03-selection.png` })
-  await page.click('.sel-toolbar button:has-text("댓글")')
-  await page.fill('.composer textarea', '이 숫자 맞는지 재무팀 확인')
+  // 2) 메모 모드로 바꿔 메모
+  await page.click('.bar-mode button:has-text("메모")')
+  await page.fill('.memo-bar input', '여기서 결론 나옴')
   await page.keyboard.press('Enter')
-  await sleep(600)
+  await sleep(700)
+  check((await page.locator('.view-live .memo-card').count()) === 1, '입력창 메모 모드')
 
-  // 수정
-  const q2 = await selectText(page, 1, 0, 2)
-  console.log('edit on:', q2)
+  // 3) 드래그 + C 키 → 댓글, '노트에도 추가' 체크
+  const q = await selectWords(page, 0, 0, 2)
   await page.waitForSelector('.sel-toolbar')
-  await page.click('.sel-toolbar button:has-text("수정")')
-  await page.fill('.composer textarea', q2.replace(/ /, ' (수정) '))
+  await page.screenshot({ path: `${OUT}/c1-toolbar.png` })
+  await page.keyboard.press('c')
+  await page.waitForSelector('.composer')
+  await page.check('.composer .to-notes input')
+  await page.fill('.composer textarea', '이 부분 재무팀 확인')
   await page.keyboard.press('Enter')
-  await sleep(600)
-
-  // 노트로 보내기
-  await selectText(page, 2, 0, 3)
-  await page.waitForSelector('.sel-toolbar')
-  await page.click('.sel-toolbar button:has-text("노트로")')
-  await sleep(500)
-
-  // 노트 작성
-  await page.click('.notes-editor .bn-editor')
-  await page.keyboard.press('Control+End')
-  await page.keyboard.type('결정: 영상 광고 예산을 줄이고 검색 광고로 옮긴다 ')
-  await page.click('.notes-toolbar button:has-text("시각 넣기")')
   await sleep(1500)
-  await page.screenshot({ path: `${OUT}/04-annotated-live.png` })
+  let md = await notesMarkdown(mid)
+  check(md.includes('**이 부분 재무팀 확인**') && md.includes(`> ${q}`), '드래그+C 댓글이 노트에도 들어감')
+  await page.uncheck('.composer .to-notes input').catch(() => undefined)
 
-  // 녹음 종료 → 원본
+  // 4) 문장에 마우스 올려 '이 문장에 댓글' (노트 체크 해제)
+  await sleep(4000)
+  const unit = page.locator('.view-live .unit:not(.partial)').nth(1)
+  await unit.hover()
+  await unit.locator('.u-act[title="이 문장에 댓글"]').click()
+  await page.waitForSelector('.composer')
+  await page.uncheck('.composer .to-notes input')
+  await page.fill('.composer textarea', '채널별 데이터 요청하기')
+  await page.keyboard.press('Enter')
+  await sleep(800)
+  const cmts = await page.locator('.view-live .cmt').count()
+  check(cmts === 3, `댓글 3개가 문장 아래에 보임 (${cmts})`)
+  await page.screenshot({ path: `${OUT}/c2-live-comments.png` })
+
+  // 5) 댓글 목록 → 아직 안 보낸 것 한 번에 노트로
+  await page.click('.pane-head .tool-btn:has-text("댓글")')
+  await page.waitForSelector('.ann-list')
+  await page.screenshot({ path: `${OUT}/c3-list.png` })
+  await page.click('.ann-list-export .btn-primary')
+  await sleep(1500)
+  await page.keyboard.press('Escape')
+  md = await notesMarkdown(mid)
+  check(md.includes('### 회의 중 댓글') && md.includes('**방금 말한 예산 숫자 확인**') && md.includes('메모 **여기서 결론 나옴**') && md.includes('**채널별 데이터 요청하기**'), '나머지 댓글·메모를 한 번에 노트로')
+  check((md.match(/이 부분 재무팀 확인/g) || []).length === 1, '이미 보낸 댓글은 다시 넣지 않음')
+  check((await page.locator('.view-live .cmt .chip-ok').count()) === 3, '댓글에 "노트" 표시')
+
+  // 6) 답글 + 해결
+  const first = page.locator('.view-live .cmt').first()
+  await first.hover()
+  await first.locator('button[title="답글"]').click()
+  await page.fill('.view-live .cmt input.cmt-input', '다음 회의 때 다시')
+  await page.keyboard.press('Enter')
+  await sleep(600)
+  check((await page.locator('.view-live .cmt-reply').count()) === 1, '답글')
+
+  // 7) 녹음 종료 → 원본에 댓글이 옮겨짐
   await page.click('.btn-stop')
   await page.waitForSelector('.dock-player', { timeout: 30000 })
   await page.click('.tab:has-text("원본")')
   await page.waitForSelector('.view-final .unit', { timeout: 60000 })
   await sleep(800)
-  await page.screenshot({ path: `${OUT}/05-final.png` })
-  const finalInfo = await page.evaluate(() => ({
-    units: document.querySelectorAll('.view-final .unit').length,
-    speakers: [...document.querySelectorAll('.speakers-legend .sp-name')].map((e) => e.textContent),
-    memos: document.querySelectorAll('.view-final .memo-card').length,
-    comments: document.querySelectorAll('.view-final .mk-comment').length,
-    proof: document.querySelectorAll('.view-final .mk-edit.proof').length,
-    moved: document.querySelector('.moved-note')?.textContent,
-  }))
-  console.log('final:', JSON.stringify(finalInfo))
+  const fc = await page.locator('.view-final .cmt').count()
+  check(fc === 3, `원본에 댓글 3개가 옮겨짐 (${fc})`)
+  await page.screenshot({ path: `${OUT}/c4-final-comments.png` })
 
-  // 수정 첨삭 열기 → 원본에 적용
-  const proof = page.locator('.view-final .mk-edit').first()
-  if (await proof.count()) {
-    await proof.click()
-    await page.waitForSelector('.ann-pop')
-    await page.screenshot({ path: `${OUT}/06-edit-popover.png` })
-    const apply = page.locator('.ann-pop button:has-text("원본에 적용")')
-    if (await apply.count()) {
-      await apply.click()
-      await sleep(600)
-    }
-    await page.keyboard.press('Escape')
-  }
-  // 댓글 팝업
-  const c = page.locator('.view-final .comment-badge').first()
-  if (await c.count()) {
-    await c.click()
-    await page.waitForSelector('.ann-pop')
-    await page.screenshot({ path: `${OUT}/07-comment-popover.png` })
-    await page.keyboard.press('Escape')
-  }
-
-  // 화자 이름 바꾸기
-  await page.click('.speakers-legend .sp-name >> nth=0')
-  await page.fill('.sp-input', '김민지')
-  await page.keyboard.press('Enter')
-  await sleep(600)
-
-  // AI 요약 탭
-  await page.click('.tab:has-text("AI 요약")')
+  // 8) 원본에서 댓글 하이라이트를 누르면 해당 댓글로 이동
+  await page.locator('.view-final .mk-comment').first().click()
   await sleep(300)
-  await page.screenshot({ path: `${OUT}/08-summary-empty.png` })
+  check((await page.locator('.view-final .cmt.flash').count()) === 1, '하이라이트 클릭 → 댓글 강조')
 
-  // 다크 모드
-  await page.click('.tab:has-text("원본")')
   await page.click('.theme-switch button[title="어둡게"]')
-  await sleep(500)
-  await page.screenshot({ path: `${OUT}/09-final-dark.png` })
-
-  // 노트 저장 확인
-  const notes = await (await fetch(`${BASE}/api/meetings`)).json()
-  const mid = notes[0].id
-  const md = await (await fetch(`${BASE}/api/meetings/${mid}/notes`)).json()
-  console.log('notes md:', JSON.stringify(md.markdown))
-  const exp = await (await fetch(`${BASE}/api/meetings/${mid}/export.md`)).text()
-  console.log('export head:\n' + exp.split('\n').slice(0, 30).join('\n'))
-  console.log('console errors:', JSON.stringify(errors, null, 1))
+  await sleep(400)
+  await page.screenshot({ path: `${OUT}/c5-final-dark.png` })
+  console.log('노트:\n' + (await notesMarkdown(mid)))
+  check(errors.length === 0, `콘솔 오류 없음 ${JSON.stringify(errors)}`)
   await browser.close()
 })().catch((e) => {
   console.error('E2E FAILED', e)

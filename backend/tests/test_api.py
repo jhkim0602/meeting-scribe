@@ -164,3 +164,29 @@ def test_upload_file(client, tmp_path):
     fin = client.get(f"/api/meetings/{m['id']}/final").json()["final"]
     assert fin["units"]
     assert abs(client.get(f"/api/meetings/{m['id']}").json()["duration"] - 20.0) < 0.2
+
+
+def test_comment_export_flag_and_whole_sentence_comment(client):
+    mid = client.post("/api/meetings", json={}).json()["id"]
+    pcm = _speech_pcm([("s", 2.5), ("n", 1.0), ("s", 2.5), ("n", 1.0)])
+    with client.websocket_connect(f"/api/meetings/{mid}/record") as ws:
+        json.loads(ws.receive_text())
+        ws.send_bytes(pcm)
+        ws.send_text(json.dumps({"type": "pause"}))
+        while json.loads(ws.receive_text())["type"] != "paused":
+            pass
+    units = client.get(f"/api/meetings/{mid}/live").json()["units"]
+    u = units[-1]
+    # 문장 전체에 댓글 (선택 없이)
+    c = client.post(f"/api/meetings/{mid}/annotations", json={
+        "kind": "comment", "view": "live", "body": "전체 문장 댓글",
+        "start": {"unit": u["id"], "offset": 0}, "end": {"unit": u["id"], "offset": len(u["text"])},
+    }).json()
+    assert c["anchor"]["quote"] == u["text"] and c["exported_at"] is None
+    r = client.post(f"/api/meetings/{mid}/annotations/exported", json={"ids": [c["id"]]}).json()
+    assert r["updated"] == 1
+    ann = client.get(f"/api/meetings/{mid}/live").json()["annotations"][0]
+    assert ann["exported_at"] is not None
+    client.post(f"/api/meetings/{mid}/annotations/exported", json={"ids": [c["id"]], "exported": False})
+    assert client.get(f"/api/meetings/{mid}/live").json()["annotations"][0]["exported_at"] is None
+    client.post(f"/api/meetings/{mid}/cancel")

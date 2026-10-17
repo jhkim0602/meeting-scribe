@@ -65,6 +65,7 @@ export function buildModel(units: Unit[], annotations: Annotation[]): RenderMode
     }
   }
   for (const list of memosAfter.values()) list.sort((a, b) => (a.anchor.t ?? 0) - (b.anchor.t ?? 0))
+  for (const list of commentEnds.values()) list.sort((a, b) => (a.anchor.t0 ?? 0) - (b.anchor.t0 ?? 0) || a.created_at - b.created_at)
   return { perUnit, memosAfter, memosBefore, commentEnds, unplaced }
 }
 

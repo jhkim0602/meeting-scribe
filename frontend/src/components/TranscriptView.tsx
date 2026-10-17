@@ -1,11 +1,13 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as RMouseEvent } from 'react'
-import { Highlighter, MessageSquarePlus, NotebookPen, PenLine, Plus, MessageSquare } from 'lucide-react'
+import { Highlighter, MessageSquarePlus, NotebookPen, PenLine, StickyNote } from 'lucide-react'
 import { api, type Annotation, type Unit } from '../lib/api'
 import { buildModel, piecesFor, timeAtOffset, unitAtTime, type Piece, type View } from '../lib/model'
 import { readSelection, type TextSelection } from '../lib/selection'
 import { bridges, seekTo, useStore } from '../lib/store'
 import { fmtTime } from '../lib/time'
+import { sendToNotes } from '../lib/notesExport'
 import { AnnotationPopover } from './AnnotationPopover'
+import { CommentThread } from './CommentThread'
 import { Composer } from './Composer'
 import { Floating } from './Floating'
 import { MemoCard } from './MemoCard'
@@ -34,8 +36,9 @@ function markClasses(anns: Annotation[]): string {
   return cls.filter(Boolean).join(' ')
 }
 
-function PieceView({ p, onOpen }: { p: Piece; onOpen: (ids: string[], el: HTMLElement) => void }) {
+function PieceView({ p, onOpen, hover }: { p: Piece; onOpen: (ids: string[], el: HTMLElement) => void; hover: string | null }) {
   const ids = p.type === 'edit' ? [p.ann.id, ...p.anns.map((a) => a.id)] : p.anns.map((a) => a.id)
+  const hot = hover !== null && ids.includes(hover) ? ' hot' : ''
   const click = ids.length
     ? (e: RMouseEvent<HTMLElement>) => {
         if (window.getSelection()?.isCollapsed !== false) onOpen(ids, e.currentTarget)
@@ -43,7 +46,7 @@ function PieceView({ p, onOpen }: { p: Piece; onOpen: (ids: string[], el: HTMLEl
     : undefined
   if (p.type === 'text') {
     return (
-      <span data-o={p.o} data-k="o" data-len={p.text.length} className={markClasses(p.anns) || undefined} onClick={click}>
+      <span data-o={p.o} data-k="o" data-len={p.text.length} className={(markClasses(p.anns) + hot) || undefined} onClick={click}>
         {p.text}
       </span>
     )
@@ -86,12 +89,17 @@ interface RowProps {
   comments: Annotation[] | undefined
   memos: Annotation[] | undefined
   view: View
+  meetingId: string
   showMarks: boolean
+  hover: string | null
+  flashAnn: string | null
   onOpen: (ids: string[], el: HTMLElement) => void
   onMemo: (u: Unit, el: HTMLElement) => void
+  onComment: (u: Unit, el: HTMLElement) => void
+  onHover: (id: string | null) => void
 }
 
-const UnitRow = memo(function UnitRow({ u, pieces, showSpeaker, active, flash, comments, memos, view, showMarks, onOpen, onMemo }: RowProps) {
+const UnitRow = memo(function UnitRow({ u, pieces, showSpeaker, active, flash, comments, memos, view, meetingId, showMarks, hover, flashAnn, onOpen, onMemo, onComment, onHover }: RowProps) {
   return (
     <>
       {showSpeaker && (
@@ -105,26 +113,27 @@ const UnitRow = memo(function UnitRow({ u, pieces, showSpeaker, active, flash, c
         </button>
         <p className="utext" data-unit={u.id} data-len={u.text.length}>
           {pieces.map((p, k) => (
-            <PieceView key={k} p={p} onOpen={onOpen} />
+            <PieceView key={k} p={p} onOpen={onOpen} hover={hover} />
           ))}
         </p>
-        <div className="u-margin">
-          {comments && comments.length > 0 && (
-            <button className="comment-badge" onClick={(e) => onOpen(comments.map((c) => c.id), e.currentTarget)} title="댓글 보기">
-              <MessageSquare size={13} />
-              {comments.length}
-            </button>
-          )}
+        <div className="u-actions">
+          <button className="u-act" title="이 문장에 댓글" onClick={(e) => onComment(u, e.currentTarget)}>
+            <MessageSquarePlus size={14} />
+          </button>
+          <button className="u-act" title="이 문장 뒤에 메모" onClick={(e) => onMemo(u, e.currentTarget)}>
+            <StickyNote size={14} />
+          </button>
         </div>
-        <button className="u-add-memo" title="여기에 메모 남기기" onClick={(e) => onMemo(u, e.currentTarget)}>
-          <Plus size={12} />
-          메모
-        </button>
       </div>
+      {showMarks && comments?.map((c) => <CommentThread key={c.id} ann={c} view={view} meetingId={meetingId} flash={flashAnn === c.id} onHover={onHover} />)}
       {showMarks && memos?.map((m) => <MemoCard key={m.id} ann={m} view={view} />)}
     </>
   )
 })
+
+function unitHasAnn(model: ReturnType<typeof buildModel>, unitId: string, annId: string): boolean {
+  return !!model.perUnit.get(unitId)?.some((r) => r.ann.id === annId)
+}
 
 export function TranscriptView({ view, meetingId, units, annotations, partial, recording }: Props) {
   const showMarks = useStore((s) => s.showMarks)
@@ -137,6 +146,8 @@ export function TranscriptView({ view, meetingId, units, annotations, partial, r
   const [sel, setSel] = useState<TextSelection | null>(null)
   const [composer, setComposer] = useState<ComposerState | null>(null)
   const [pop, setPop] = useState<{ ids: string[]; rect: DOMRect } | null>(null)
+  const [hover, setHover] = useState<string | null>(null)
+  const [flashAnn, setFlashAnn] = useState<string | null>(null)
 
   const model = useMemo(() => buildModel(units, annotations), [units, annotations])
   const byId = useMemo(() => new Map(annotations.map((a) => [a.id, a])), [annotations])
@@ -171,10 +182,11 @@ export function TranscriptView({ view, meetingId, units, annotations, partial, r
     document.getElementById(`unit-${flashUnit}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' })
   }, [flashUnit])
 
-  const create = async (body: Record<string, unknown>) => {
+  const create = async (body: Record<string, unknown>, toNotes = false) => {
     try {
-      await api.addAnnotation(meetingId, { view, ...body })
-      await refreshViews()
+      const ann = await api.addAnnotation(meetingId, { view, ...body })
+      if (toNotes) await sendToNotes(meetingId, [ann], view)
+      else await refreshViews()
     } catch (e) {
       toast((e as Error).message, 'error')
     }
@@ -199,8 +211,42 @@ export function TranscriptView({ view, meetingId, units, annotations, partial, r
     }
   }
 
-  const openPop = useCallback((ids: string[], el: HTMLElement) => setPop({ ids, rect: el.getBoundingClientRect() }), [])
+  const openPop = useCallback(
+    (ids: string[], el: HTMLElement) => {
+      const comment = ids.map((id) => byId.get(id)).find((a) => a?.kind === 'comment')
+      if (comment) {
+        // 댓글은 문장 아래에 보이므로 그쪽으로 이동해 깜빡인다
+        document.getElementById(`cmt-${comment.id}`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+        setFlashAnn(comment.id)
+        setTimeout(() => setFlashAnn((v) => (v === comment.id ? null : v)), 1400)
+        return
+      }
+      setPop({ ids, rect: el.getBoundingClientRect() })
+    },
+    [byId],
+  )
   const openMemo = useCallback((u: Unit, el: HTMLElement) => setComposer({ mode: 'memo', rect: el.getBoundingClientRect(), t: u.t1 + 0.01, after: u.id }), [])
+  const openComment = useCallback(
+    (u: Unit, el: HTMLElement) =>
+      setComposer({ mode: 'comment', rect: el.getBoundingClientRect(), start: { unit: u.id, offset: 0 }, end: { unit: u.id, offset: u.text.length }, quote: u.text }),
+    [],
+  )
+
+  // 글자를 선택한 상태에서 C 또는 ⌘⌥M → 댓글
+  useEffect(() => {
+    if (!sel || composer) return
+    const onKey = (e: KeyboardEvent) => {
+      const k = e.key.toLowerCase()
+      const plainC = k === 'c' && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey
+      const docsShortcut = (e.metaKey || e.ctrlKey) && e.altKey && (k === 'm' || e.code === 'KeyM')
+      if (plainC || docsShortcut) {
+        e.preventDefault()
+        act('comment')
+      }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  })
 
   const popAnns = pop ? pop.ids.map((id) => byId.get(id)).filter((a): a is Annotation => !!a) : []
 
@@ -215,12 +261,17 @@ export function TranscriptView({ view, meetingId, units, annotations, partial, r
           showSpeaker={view === 'final' && (i === 0 || units[i - 1].speaker !== u.speaker)}
           active={u.id === activeId}
           flash={u.id === flashUnit}
-          comments={showMarks ? model.commentEnds.get(u.id) : undefined}
+          comments={model.commentEnds.get(u.id)}
           memos={model.memosAfter.get(u.id)}
           view={view}
+          meetingId={meetingId}
           showMarks={showMarks}
+          hover={hover !== null && unitHasAnn(model, u.id, hover) ? hover : null}
+          flashAnn={flashAnn !== null && model.commentEnds.get(u.id)?.some((c) => c.id === flashAnn) ? flashAnn : null}
           onOpen={openPop}
           onMemo={openMemo}
+          onComment={openComment}
+          onHover={setHover}
         />
       ))}
       {partial && partial.text && (
@@ -235,9 +286,9 @@ export function TranscriptView({ view, meetingId, units, annotations, partial, r
 
       {sel && !composer && (
         <Floating rect={sel.rect} placement="above" className="sel-toolbar">
-          <button onMouseDown={(e) => e.preventDefault()} onClick={() => act('comment')}><MessageSquarePlus size={15} />댓글</button>
-          <button onMouseDown={(e) => e.preventDefault()} onClick={() => act('edit')}><PenLine size={15} />수정</button>
+          <button className="primary" onMouseDown={(e) => e.preventDefault()} onClick={() => act('comment')} title="댓글 (C)"><MessageSquarePlus size={15} />댓글<kbd>C</kbd></button>
           <button onMouseDown={(e) => e.preventDefault()} onClick={() => act('highlight')}><Highlighter size={15} />강조</button>
+          <button onMouseDown={(e) => e.preventDefault()} onClick={() => act('edit')}><PenLine size={15} />수정</button>
           <span className="sep" />
           <button onMouseDown={(e) => e.preventDefault()} onClick={() => act('note')}><NotebookPen size={15} />노트로</button>
         </Floating>
@@ -250,17 +301,18 @@ export function TranscriptView({ view, meetingId, units, annotations, partial, r
           quote={composer.quote}
           initial={composer.mode === 'edit' ? composer.quote : ''}
           onClose={() => setComposer(null)}
-          onSubmit={(text) =>
+          onSubmit={(text, toNotes) =>
             create(
               composer.mode === 'comment'
                 ? { kind: 'comment', start: composer.start, end: composer.end, body: text }
                 : { kind: 'edit', start: composer.start, end: composer.end, replacement: text },
+              toNotes,
             )
           }
         />
       )}
       {composer && composer.mode === 'memo' && (
-        <Composer rect={composer.rect} mode="memo" onClose={() => setComposer(null)} onSubmit={(text) => create({ kind: 'memo', t: composer.t, after: composer.after, body: text })} />
+        <Composer rect={composer.rect} mode="memo" onClose={() => setComposer(null)} onSubmit={(text, toNotes) => create({ kind: 'memo', t: composer.t, after: composer.after, body: text }, toNotes)} />
       )}
       {pop && popAnns.length > 0 && <AnnotationPopover anns={popAnns} rect={pop.rect} view={view} onClose={() => setPop(null)} />}
     </div>

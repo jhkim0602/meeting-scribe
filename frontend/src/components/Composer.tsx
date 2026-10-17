@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { COMMENT_TO_NOTES, usePref } from '../lib/prefs'
 import { Floating } from './Floating'
 
 interface Props {
@@ -6,7 +7,7 @@ interface Props {
   mode: 'comment' | 'edit' | 'memo'
   quote?: string
   initial?: string
-  onSubmit: (text: string) => Promise<void> | void
+  onSubmit: (text: string, toNotes: boolean) => Promise<void> | void
   onClose: () => void
 }
 
@@ -16,6 +17,7 @@ const PLACEHOLDERS = { comment: '댓글을 남겨 주세요', edit: '바르게 �
 export function Composer({ rect, mode, quote, initial, onSubmit, onClose }: Props) {
   const [text, setText] = useState(initial ?? '')
   const [busy, setBusy] = useState(false)
+  const [toNotes, setToNotes] = usePref(COMMENT_TO_NOTES, false)
   const ref = useRef<HTMLTextAreaElement>(null)
   useEffect(() => {
     ref.current?.focus()
@@ -31,7 +33,7 @@ export function Composer({ rect, mode, quote, initial, onSubmit, onClose }: Prop
     }
     setBusy(true)
     try {
-      await onSubmit(v)
+      await onSubmit(v, mode !== 'edit' && toNotes)
       onClose()
     } finally {
       setBusy(false)
@@ -57,7 +59,14 @@ export function Composer({ rect, mode, quote, initial, onSubmit, onClose }: Prop
         }}
       />
       <div className="composer-foot">
-        <span className="hint">Enter 저장 · Shift+Enter 줄바꿈 · Esc 닫기</span>
+        {mode !== 'edit' ? (
+          <label className="to-notes" title="저장하면서 오른쪽 노트에도 추가해요. 다음에도 기억해요.">
+            <input type="checkbox" checked={toNotes} onChange={(e) => setToNotes(e.target.checked)} />
+            노트에도 추가
+          </label>
+        ) : (
+          <span className="hint">Enter 저장 · Esc 닫기</span>
+        )}
         <button className="btn btn-primary btn-sm" disabled={!text.trim() || busy} onClick={submit}>
           저장
         </button>

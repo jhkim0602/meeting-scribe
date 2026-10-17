@@ -198,6 +198,20 @@ def _fuzzy(qn: str, wn: str) -> tuple[float, int, int]:
     return best
 
 
+def _snap_to_words(index: TextIndex, gs: int, ge: int, limit: int = 6) -> tuple[int, int]:
+    """다른 버전에 다시 붙일 때 단어 중간에서 시작/끝나지 않게 어절 경계로 넓힌다."""
+    text = index.text
+    k = 0
+    while gs > 0 and k < limit and is_kept(text[gs - 1]):
+        gs -= 1
+        k += 1
+    k = 0
+    while ge < len(text) and k < limit and is_kept(text[ge]):
+        ge += 1
+        k += 1
+    return gs, ge
+
+
 def _resolve_range(anchor: dict, index: TextIndex) -> Optional[Resolved]:
     if not index.units or len(index.text) == 0:
         return None
@@ -237,6 +251,7 @@ def _resolve_range(anchor: dict, index: TextIndex) -> Optional[Resolved]:
                 if score >= MATCH_THRESHOLD and de > ds:
                     gs = int(index.norm_map[n0 + ds])
                     ge = int(index.norm_map[n0 + de - 1]) + 1
+                    gs, ge = _snap_to_words(index, gs, ge)
                     return Resolved(gs, ge, False, score)
 
     # 시간만으로 추정

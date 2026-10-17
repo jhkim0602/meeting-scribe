@@ -161,7 +161,7 @@ export const useStore = create<State>((set, get) => ({
 // ---- 화면 사이 연결고리 (오디오 재생, 노트 삽입) ----
 
 type PlayerBridge = { seek: (t: number, play?: boolean) => void; time: () => number }
-type NotesBridge = { insertQuote: (text: string, t: number) => void; insertTimestamp: (t: number) => void }
+type NotesBridge = { insertQuote: (text: string, t: number) => void; insertTimestamp: (t: number) => void; insertBlocks: (blocks: unknown[]) => void }
 
 export const bridges: { player: PlayerBridge | null; notes: NotesBridge | null } = { player: null, notes: null }
 

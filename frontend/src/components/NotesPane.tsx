@@ -68,20 +68,26 @@ function NotesEditor({ meetingId, initial }: { meetingId: string; initial: Parti
   }
 
   useEffect(() => {
+    // 마지막 빈 줄은 이어 쓰기용으로 남겨 두고 그 앞에 넣는다
+    const insertAtEnd = (blocks: unknown[]) => {
+      const doc = editor.document
+      const last = doc[doc.length - 1]
+      const lastEmpty = last.type === 'paragraph' && Array.isArray(last.content) && last.content.length === 0
+      if (lastEmpty) editor.insertBlocks(blocks as never, last, 'before')
+      else editor.insertBlocks([...blocks, { type: 'paragraph' }] as never, last, 'after')
+      requestAnimationFrame(() => {
+        const el = document.querySelector('.notes-editor')
+        if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+      })
+    }
     bridges.notes = {
       insertTimestamp: (t: number) => {
         editor.focus()
         editor.insertInlineContent([{ type: 'timestamp', props: { t: Math.round(t * 10) / 10 } } as never, ' '])
       },
-      insertQuote: (text: string, t: number) => {
-        const doc = editor.document
-        const last = doc[doc.length - 1]
-        const quote = { type: 'quote', content: [{ type: 'timestamp', props: { t: Math.round(t * 10) / 10 } }, ` ${text}`] } as never
-        const lastEmpty = last.type === 'paragraph' && Array.isArray(last.content) && last.content.length === 0
-        // 마지막 빈 줄은 이어 쓰기용으로 남겨 두고 그 앞에 인용을 넣는다
-        if (lastEmpty) editor.insertBlocks([quote], last, 'before')
-        else editor.insertBlocks([quote, { type: 'paragraph' } as never], last, 'after')
-      },
+      insertBlocks: (blocks: unknown[]) => insertAtEnd(blocks),
+      insertQuote: (text: string, t: number) =>
+        insertAtEnd([{ type: 'quote', content: [{ type: 'timestamp', props: { t: Math.round(t * 10) / 10 } }, ` ${text}`] }]),
     }
     return () => {
       bridges.notes = null

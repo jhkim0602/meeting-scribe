@@ -1,6 +1,9 @@
-import { ArrowDownToLine, Eye, EyeOff, Info, ListChecks, Mic, RefreshCw, Sparkles, StickyNote } from 'lucide-react'
+import { ArrowDownToLine, Eye, EyeOff, Info, MessageSquare, MessageSquarePlus, Mic, NotebookPen, RefreshCw, Sparkles, StickyNote } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, type Annotation } from '../lib/api'
+import type { View } from '../lib/model'
+import { sendToNotes } from '../lib/notesExport'
+import { COMMENT_TO_NOTES, usePref } from '../lib/prefs'
 import { currentClock, useStore, type Tab } from '../lib/store'
 import { fmtRelative, fmtTime } from '../lib/time'
 import { Floating } from './Floating'
@@ -9,8 +12,6 @@ import { SpeakerLabel } from './SpeakerLabel'
 import { SummaryView } from './SummaryView'
 import { TranscriptView } from './TranscriptView'
 
-const KIND_LABEL = { comment: '댓글', edit: '수정', memo: '메모', highlight: '강조' } as const
-
 function engineLabel(engine: string | null): string {
   if (!engine) return ''
   const [kind, model] = engine.split(':')
@@ -18,14 +19,44 @@ function engineLabel(engine: string | null): string {
   return kind === 'mock' ? '시연용 엔진' : name || kind
 }
 
-function AnnList({ anns, onClose, rect }: { anns: Annotation[]; onClose: () => void; rect: DOMRect }) {
+type Filter = 'comment' | 'memo' | 'all'
+
+function AnnList({ anns, onClose, rect, view, meetingId }: { anns: Annotation[]; onClose: () => void; rect: DOMRect; view: View; meetingId: string }) {
   const flash = useStore((s) => s.flash)
+  const toast = useStore((s) => s.toast)
+  const [filter, setFilter] = useState<Filter>('comment')
+  const [auto, setAuto] = usePref(COMMENT_TO_NOTES, false)
   const sorted = [...anns].sort((a, b) => (a.anchor.t0 ?? a.anchor.t ?? 0) - (b.anchor.t0 ?? b.anchor.t ?? 0))
+  const shown = sorted.filter((a) => filter === 'all' || a.kind === filter)
+  const exportable = sorted.filter((a) => (a.kind === 'comment' || a.kind === 'memo') && !a.exported_at)
+  const count = (k: Filter) => (k === 'all' ? anns.length : anns.filter((a) => a.kind === k).length)
+
+  const exportAll = async () => {
+    const n = await sendToNotes(meetingId, exportable, view, { heading: exportable.length > 1 ? '회의 중 댓글' : undefined })
+    if (n) toast(`댓글·메모 ${n}개를 노트에 넣었어요`, 'success')
+  }
+
   return (
     <Floating rect={rect} onClose={onClose} className="ann-list">
-      <div className="ann-list-head">첨삭 {anns.length}개</div>
-      {sorted.length === 0 && <p className="muted pad">아직 없어요. 기록에서 글자를 드래그하면 댓글·수정·강조를 남길 수 있어요.</p>}
-      {sorted.map((a) => {
+      <div className="ann-list-tabs">
+        {(['comment', 'memo', 'all'] as Filter[]).map((k) => (
+          <button key={k} className={filter === k ? 'on' : ''} onClick={() => setFilter(k)}>
+            {k === 'comment' ? '댓글' : k === 'memo' ? '메모' : '전체'} <span>{count(k)}</span>
+          </button>
+        ))}
+      </div>
+      <div className="ann-list-export">
+        <button className="btn btn-sm btn-primary" disabled={!exportable.length} onClick={exportAll}>
+          <NotebookPen size={14} />
+          {exportable.length ? `아직 안 보낸 ${exportable.length}개 노트로` : '모두 노트에 있어요'}
+        </button>
+        <label className="to-notes" title="댓글·메모를 달 때 노트에도 바로 추가해요">
+          <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} />
+          새 댓글 바로 노트에
+        </label>
+      </div>
+      {shown.length === 0 && <p className="muted pad">아직 없어요. 기록에서 글자를 드래그하고 C를 누르면 댓글을 달 수 있어요.</p>}
+      {shown.map((a) => {
         const target = a.pos ? ('start' in a.pos ? a.pos.start.unit : a.pos.after) : null
         return (
           <button
@@ -37,11 +68,12 @@ function AnnList({ anns, onClose, rect }: { anns: Annotation[]; onClose: () => v
             }}
           >
             <span className={`kind-dot kind-${a.kind}`} />
-            <span className="ann-list-kind">{KIND_LABEL[a.kind]}</span>
             <span className="ann-list-time">{fmtTime(a.anchor.t0 ?? a.anchor.t ?? 0)}</span>
             <span className="ann-list-text">
               {a.kind === 'edit' ? `${a.anchor.quote} → ${a.replacement}` : a.body || a.anchor.quote}
+              {a.kind === 'comment' && a.anchor.quote && <em>{a.anchor.quote}</em>}
             </span>
+            {a.exported_at ? <NotebookPen size={12} className="ann-list-exported" /> : <span />}
           </button>
         )
       })}
@@ -67,6 +99,8 @@ export function TranscriptPane() {
   const scrollRef = useRef<HTMLDivElement>(null)
   const [listRect, setListRect] = useState<DOMRect | null>(null)
   const [memo, setMemo] = useState('')
+  const [barMode, setBarMode] = useState<'comment' | 'memo'>('comment')
+  const [toNotes] = usePref(COMMENT_TO_NOTES, false)
   const recordingHere = rec.status !== 'idle' && rec.meetingId === meeting.id
   const jobRunning = !!job && (job.status === 'queued' || job.status === 'running')
 
@@ -82,14 +116,25 @@ export function TranscriptPane() {
     if (nearBottom || recordingHere) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
   }, [liveCount, partial?.text, tab, follow, recordingHere])
 
-  const addMemoNow = async () => {
+  const addFromBar = async () => {
     const text = memo.trim()
     if (!text) return
-    setMemo('')
     const units = live?.units || []
+    const last = units[units.length - 1]
+    if (barMode === 'comment' && !last) {
+      toast('아직 확정된 문장이 없어요. 메모로 남기거나 잠시 후 다시 시도해 주세요.', 'error')
+      return
+    }
+    setMemo('')
     try {
-      await api.addAnnotation(meeting.id, { kind: 'memo', view: 'live', t: currentClock(), after: units.length ? units[units.length - 1].id : null, body: text })
-      await refreshViews()
+      const ann = await api.addAnnotation(
+        meeting.id,
+        barMode === 'comment'
+          ? { kind: 'comment', view: 'live', start: { unit: last.id, offset: 0 }, end: { unit: last.id, offset: last.text.length }, body: text }
+          : { kind: 'memo', view: 'live', t: currentClock(), after: last ? last.id : null, body: text },
+      )
+      if (toNotes) await sendToNotes(meeting.id, [ann], 'live')
+      else await refreshViews()
     } catch (e) {
       toast((e as Error).message, 'error')
     }
@@ -116,9 +161,9 @@ export function TranscriptPane() {
         <span className="spacer" />
         {tab !== 'summary' && (
           <>
-            <button className="tool-btn" onClick={(e) => setListRect(e.currentTarget.getBoundingClientRect())} title="첨삭 목록">
-              <ListChecks size={15} />
-              <span>첨삭 {anns.length}</span>
+            <button className="tool-btn" onClick={(e) => setListRect(e.currentTarget.getBoundingClientRect())} title="댓글·메모 목록, 노트로 내보내기">
+              <MessageSquare size={15} />
+              <span>댓글 {anns.filter((a) => a.kind === 'comment').length}</span>
             </button>
             <button className={`tool-btn ${showMarks ? '' : 'off'}`} onClick={() => set({ showMarks: !showMarks })} title={showMarks ? '첨삭 숨기기' : '첨삭 보기'}>
               {showMarks ? <Eye size={15} /> : <EyeOff size={15} />}
@@ -139,7 +184,7 @@ export function TranscriptPane() {
                   <>
                     <div className="listening"><span /><span /><span /></div>
                     <h3>듣고 있어요</h3>
-                    <p className="muted">말하면 1~2초 안에 여기에 적혀요. 적힌 글자를 드래그하면 댓글·수정·강조를 남길 수 있어요.</p>
+                    <p className="muted">말하면 1~2초 안에 여기에 적혀요. 글자를 드래그하고 C를 누르면 댓글, 아래 입력창은 방금 문장에 댓글을 달아요.</p>
                   </>
                 ) : (
                   <>
@@ -180,7 +225,7 @@ export function TranscriptPane() {
                 {movedCount > 0 && showMarks && (
                   <div className="moved-note">
                     <Info size={14} />
-                    회의 중 남긴 메모·댓글·수정 {movedCount}개를 원본의 같은 자리에 옮겼어요. 빨간 글씨는 내가 고친 부분이에요.
+                    회의 중 남긴 댓글·메모 {movedCount}개를 원본의 같은 자리에 옮겼어요.
                   </div>
                 )}
                 <TranscriptView view="final" meetingId={meeting.id} units={final.units} annotations={final.annotations} />
@@ -195,19 +240,31 @@ export function TranscriptPane() {
       </div>
 
       {tab === 'live' && recordingHere && (
-        <div className="memo-bar">
-          <StickyNote size={15} />
+        <div className={`memo-bar mode-${barMode}`}>
+          <div className="bar-mode">
+            <button className={barMode === 'comment' ? 'on' : ''} onClick={() => setBarMode('comment')} title="마지막 문장에 댓글">
+              <MessageSquarePlus size={14} />댓글
+            </button>
+            <button className={barMode === 'memo' ? 'on' : ''} onClick={() => setBarMode('memo')} title="지금 시각에 메모">
+              <StickyNote size={14} />메모
+            </button>
+          </div>
           <input
             value={memo}
-            placeholder={`${fmtTime(rec.elapsed)} 지금 이 순간에 메모… (Enter)`}
+            placeholder={barMode === 'comment' ? '방금 문장에 댓글… (Enter)' : `${fmtTime(rec.elapsed)} 지금 이 순간에 메모… (Enter)`}
             onChange={(e) => setMemo(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.nativeEvent.isComposing) addMemoNow()
+              if (e.key === 'Enter' && !e.nativeEvent.isComposing) addFromBar()
+              if (e.key === 'Tab') {
+                e.preventDefault()
+                setBarMode((m) => (m === 'comment' ? 'memo' : 'comment'))
+              }
             }}
           />
+          {toNotes && <span className="bar-notes" title="노트에도 함께 추가돼요"><NotebookPen size={13} /></span>}
         </div>
       )}
-      {listRect && <AnnList anns={anns} rect={listRect} onClose={() => setListRect(null)} />}
+      {listRect && <AnnList anns={anns} rect={listRect} view={tab === 'final' ? 'final' : 'live'} meetingId={meeting.id} onClose={() => setListRect(null)} />}
     </section>
   )
 }
