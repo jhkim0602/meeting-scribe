@@ -10,6 +10,8 @@ const LIST: { keys: string[]; label: string }[] = [
   { keys: [MOD, '⇧', 'P'], label: '녹음 일시정지 / 이어하기' },
   { keys: ['C'], label: '고른 글자에 댓글 (녹음 중 선택이 없으면 방금 문장에)' },
   { keys: ['M'], label: '지금 시각에 메모' },
+  { keys: ['1', '…', '9'], label: '문장의 화자를 참여자로 (마우스를 올린 문장, 녹음 중이면 방금 문장 · 같은 목소리도 함께)' },
+  { keys: ['⇧', '1…9'], label: '그 문장만 화자 정하기' },
   { keys: [MOD, 'F'], label: '기록에서 찾기 (한 번 더 누르면 브라우저 찾기)' },
   { keys: ['Esc'], label: '창 닫기' },
   { keys: ['?'], label: '단축키 보기' },

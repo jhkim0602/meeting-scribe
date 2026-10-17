@@ -154,7 +154,18 @@ def meeting_markdown(
         units, anns, kind = final["units"], final["annotations"], f"원본 (후처리 v{final['version']}, 화자 구분)"
     else:
         lv = views.live_view(meeting_id)
-        units, anns, kind = lv["units"], lv["annotations"], "실시간 기록 (화자 구분 없음)"
+        units, anns = lv["units"], lv["annotations"]
+        # 회의 중 고른(또는 목소리로 추정한) 화자. 이름이 없는 목소리 묶음은 "화자 A(추정)"
+        speakers = {p["id"]: p["name"] for p in meeting.get("participants") or []}
+        tagged = []
+        for u in units:
+            who = u.get("speaker") if u.get("speaker") in speakers else (f"?{u['speaker_auto']}" if u.get("speaker_auto") else None)
+            if who and who.startswith("?"):
+                speakers[who] = f"화자 {who[1:]}(추정)"
+            tagged.append(dict(u, speaker=who))
+        units = tagged
+        has_spk = any(u["speaker"] for u in units)
+        kind = "실시간 기록 (회의 중 표시한 화자)" if has_spk else "실시간 기록 (화자 구분 없음)"
 
     created = _dt.datetime.fromtimestamp(meeting["created_at"]).strftime("%Y-%m-%d %H:%M")
     lines = [f"# {meeting['title'] or '제목 없는 회의'}", ""]

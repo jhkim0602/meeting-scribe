@@ -32,6 +32,7 @@ from .storage import audio_file, media_type
 from .system import KeepAwake, disk_free_bytes, disk_free_seconds, power_source
 from .views import Views
 from .voices import learn_from_meeting
+from .live_speakers import forget_tracker, normalize_participants, tracker_for
 
 settings.ensure_dirs()
 store = Store(settings.db_path)
@@ -220,12 +221,72 @@ def patch_meeting(meeting_id: str, body: MeetingPatch) -> dict:
     return _meeting_detail(m)  # type: ignore[arg-type]
 
 
+class ParticipantsIn(BaseModel):
+    participants: list[dict]
+
+
+@app.put("/api/meetings/{meeting_id}/participants")
+def put_participants(meeting_id: str, body: ParticipantsIn) -> dict:
+    """회의 참여자 [{id?, name}]. 녹음 전에 미리, 또는 녹음 중에 언제든."""
+    m = _meeting_or_404(meeting_id)
+    parts = normalize_participants(body.participants, m.get("participants") or [])
+    store.update_meeting(meeting_id, participants=parts)
+    tracker_for(store, meeting_id).reload()  # 같은 이름의 기억된 목소리로 시작
+    return {"participants": parts}
+
+
+@app.get("/api/participants/suggest")
+def suggest_participants() -> list[dict]:
+    """참여자 이름 자동 완성: 최근 회의 참여자 + 목소리를 기억하는 사람"""
+    voices = {s["name"] for s in store.list_voice_samples()}
+    seen: dict[str, dict] = {}
+    for m in store.list_meetings():
+        for p in m.get("participants") or []:
+            seen.setdefault(p["name"], {"name": p["name"], "voice": p["name"] in voices})
+    for name in sorted(voices):
+        seen.setdefault(name, {"name": name, "voice": True})
+    return list(seen.values())[:50]
+
+
+class SpeakerAssignIn(BaseModel):
+    segment_ids: list[str]
+    participant_id: Optional[str] = None
+    scope: str = "voice"  # voice: 같은 목소리 문장도 | one: 이 문장만
+
+
+@app.post("/api/meetings/{meeting_id}/live/speaker")
+def assign_speaker(meeting_id: str, body: SpeakerAssignIn) -> dict:
+    """실시간 기록 문장의 화자를 고른다. 같은 목소리의 다른 문장에도 바로 반영한다."""
+    _meeting_or_404(meeting_id)
+    tracker = tracker_for(store, meeting_id)
+    before_map = tracker.snapshot_map()
+    try:
+        changes = tracker.assign(body.segment_ids, body.participant_id, "one" if body.scope == "one" else "voice")
+    except KeyError:
+        raise HTTPException(400, "참여자를 찾을 수 없습니다")
+    # 화면이 "이 문장만"으로 되돌릴 수 있게 바꾸기 전 대응표도 돌려준다
+    return {"changes": changes, "previous_map": before_map}
+
+
+class SpeakerRestoreIn(BaseModel):
+    rows: list[dict]
+    speaker_map: Optional[dict] = None
+
+
+@app.post("/api/meetings/{meeting_id}/live/speaker/restore")
+def restore_speakers(meeting_id: str, body: SpeakerRestoreIn) -> dict:
+    """되돌리기: 예전 화자와 목소리 대응표로"""
+    _meeting_or_404(meeting_id)
+    return {"changes": tracker_for(store, meeting_id).restore(body.rows, body.speaker_map)}
+
+
 @app.delete("/api/meetings/{meeting_id}")
 def delete_meeting(meeting_id: str) -> dict:
     _meeting_or_404(meeting_id)
     if meeting_id in sessions:
         raise HTTPException(409, "녹음 중인 회의는 삭제할 수 없습니다")
     jobs.cancel(meeting_id)
+    forget_tracker(meeting_id)
     store.delete_meeting(meeting_id)
     shutil.rmtree(settings.meetings_dir / meeting_id, ignore_errors=True)
     return {"ok": True}

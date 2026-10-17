@@ -1,7 +1,7 @@
 import numpy as np
 
 from scribe.engines.mock import MockAsr
-from scribe.live import LiveSegmenter
+from scribe.live import LiveConfig, LiveSegmenter, unfinished
 
 SR = 16000
 
@@ -18,7 +18,8 @@ def _silence(seconds):
 
 
 def test_segments_cut_at_silence_with_absolute_times():
-    seg = LiveSegmenter(MockAsr(), language="ko", start_s=100.0)
+    # 시연용 엔진의 글자는 말끝과 상관없으니 말끝 판단은 끄고 무음 기준만 본다
+    seg = LiveSegmenter(MockAsr(), language="ko", start_s=100.0, config=LiveConfig(continue_silence_s=0.55))
     audio = np.concatenate([_silence(1.0), _speech(3.0), _silence(1.0), _speech(2.5), _silence(1.2)])
     events = []
     for i in range(0, len(audio), 4000):  # 250 ms씩
@@ -128,4 +129,31 @@ def test_partials_back_off_when_decoding_is_slow(monkeypatch):
     seg.step()
     seg.step()
     assert Slow.calls - before <= 1
+
+
+def test_unfinished_sentence_endings():
+    assert unfinished("지난달 마케팅 비용이 계획보다") is False  # 모르면 평소대로
+    assert unfinished("검토부터 시작하겠는데") and unfinished("예산을") and unfinished("확인하고")
+    assert not unfinished("시작하겠습니다.") and not unfinished("남아 있어요") and not unfinished("그렇죠?")
+
+
+def _fixed(text):
+    class Fixed(MockAsr):
+        def transcribe(self, audio, **kw):
+            return text if len(audio) else ""
+    return Fixed()
+
+
+def test_pause_mid_sentence_is_not_cut():
+    """말끝이 아닌데 잠깐(0.8초) 멈추면 한 문장으로 잇고, 말끝이면 평소처럼 자른다."""
+    audio = np.concatenate([_speech(2.5), _silence(0.8), _speech(2.0), _silence(1.6)])
+    for text, expected in (("검토부터 시작하겠는데", 1), ("검토부터 시작하겠습니다.", 2)):
+        seg = LiveSegmenter(_fixed(text), language="ko")
+        events = []
+        for i in range(0, len(audio), 4000):
+            seg.feed(audio[i:i + 4000])
+            events += seg.step()
+        events += seg.step(force=True)
+        finals = [e for e in events if e.type == "segment"]
+        assert len(finals) == expected, (text, finals)
 

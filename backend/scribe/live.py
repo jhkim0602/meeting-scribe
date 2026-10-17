@@ -25,12 +25,35 @@ FRAME_S = FRAME / SAMPLE_RATE
 class LiveConfig:
     min_segment_s: float = 1.2
     silence_s: float = 0.55
+    # 진행 중 문장이 말끝(…다/…요/마침표)이 아니면 이만큼 쉬어야 자른다 (말을 잠깐 멈췄다 잇는 경우)
+    continue_silence_s: float = 1.1
     max_segment_s: float = 14.0
     partial_every_s: float = 1.0
     min_partial_s: float = 0.8
     min_speech_s: float = 0.3
     margin_db: float = 9.0
     floor_db: float = -52.0
+
+
+# 말이 이어질 말끝: 연결 어미, 조사로 끝나면 문장이 아직 안 끝났다
+_CONTINUE_ENDINGS = (
+    "는데", "은데", "인데", "지만", "니까", "으니까", "면서", "으면", "거나", "도록", "려고", "어서", "아서", "해서",
+    "하고", "그리고", "그래서", "그런데", "근데", "그러니까",
+    "고", "며", "면", "서", "게", "지", "는", "은", "을", "를", "이", "가", "의", "에", "와", "과", "도", "로",
+)
+_FINAL_ENDINGS = ("다", "요", "죠", "까", "네", "군", "래", "지요", "니다", "세요")
+_FINAL_MARKS = tuple(".?!。…？！")
+
+
+def unfinished(text: str) -> bool:
+    """진행 중 문장이 말끝이 아니라 이어질 것 같은지 (한국어 말끝으로 판단)."""
+    t = text.strip().rstrip("\"'”’)")
+    if not t or t.endswith(_FINAL_MARKS):
+        return False
+    word = t.split()[-1]
+    if word.endswith(_FINAL_ENDINGS):
+        return False
+    return word.endswith(_CONTINUE_ENDINGS)
 
 
 @dataclass
@@ -59,6 +82,7 @@ class LiveSegmenter:
         # 진행 중 문장: 다시 받아 적는 데 걸린 시간(평균)과 그때의 말소리 양
         self._partial_cost = 0.0
         self._partial_mark: tuple[int, int] = (-1, -1)
+        self._partial_text = ""
 
     @property
     def pending_s(self) -> float:
@@ -86,12 +110,12 @@ class LiveSegmenter:
         thresh = max(noise + self.cfg.margin_db, self.cfg.floor_db)
         return db > thresh
 
-    def _find_cut(self, speech: np.ndarray) -> Optional[int]:
+    def _find_cut(self, speech: np.ndarray, silence_s: Optional[float] = None) -> Optional[int]:
         """확정할 지점(프레임 번호). 말이 있은 뒤 처음 나오는 충분히 긴 무음의 가운데에서 자른다.
         밀린 오디오가 길어도 max_segment_s 안에서 자르므로 문장이 지나치게 길어지지 않는다."""
         n = len(speech)
         min_f = int(self.cfg.min_segment_s / FRAME_S)
-        need = int(self.cfg.silence_s / FRAME_S)
+        need = int((silence_s or self.cfg.silence_s) / FRAME_S)
         max_f = int(self.cfg.max_segment_s / FRAME_S)
         limit = min(n, max_f)
         run = 0
@@ -135,8 +159,10 @@ class LiveSegmenter:
             self.buf_start += drop
             return events
 
+        # 말을 잠깐 멈춘 것인지: 지금까지 받아 적은 진행 중 문장이 말끝이 아니면 더 오래 기다렸다 자른다
+        wait_s = self.cfg.continue_silence_s if unfinished(self._partial_text) else self.cfg.silence_s
         # 밀린 오디오는 force여도 말 끊김마다 나누고, 남은 꼬리만 한 문장으로 확정한다
-        cut_f = self._find_cut(speech) if len(speech) else None
+        cut_f = self._find_cut(speech, wait_s) if len(speech) else None
         while True:
             last = False
             if not cut_f:
@@ -163,6 +189,7 @@ class LiveSegmenter:
             if self._partial_shown:
                 events.append(LiveEvent("partial", self._t(0), self._t(0), ""))
                 self._partial_shown = False
+            self._partial_text = ""
             if last:
                 break
             cut_f = self._find_cut(speech) if len(speech) else None
@@ -187,6 +214,7 @@ class LiveSegmenter:
             text = self._asr(self.buf, self._t(0))
             cost = time.monotonic() - now
             self._partial_cost = cost if self._partial_cost == 0 else 0.7 * self._partial_cost + 0.3 * cost
+            self._partial_text = text
             if text:
                 events.append(LiveEvent("partial", self._t(0), self._t(len(self.buf)), text))
                 self._partial_shown = True

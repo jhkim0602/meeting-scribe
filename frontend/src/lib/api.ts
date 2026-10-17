@@ -40,6 +40,20 @@ export interface Meeting extends MeetingSummary {
   has_summary: boolean
   /** 녹음 시간 → 실제 시각 기준점: [녹음 시간(초), 실제 시각(epoch 초)] */
   clock: [number, number][]
+  participants: Participant[]
+}
+
+export interface Participant {
+  id: string
+  name: string
+}
+
+export interface SpeakerChange {
+  id: string
+  speaker: string | null
+  speaker_auto: string | null
+  speaker_src: 'manual' | 'auto' | null
+  speaker_conf: number | null
 }
 
 export interface StorageInfo {
@@ -56,7 +70,13 @@ export interface Unit {
   t0: number
   t1: number
   text: string
+  /** 원본: S1, S2 … / 실시간: 참여자 id */
   speaker?: string | null
+  /** 실시간: 목소리 묶음 (A, B …) */
+  speaker_auto?: string | null
+  /** 실시간: manual(직접 고름) | auto(목소리로 추정) */
+  speaker_src?: 'manual' | 'auto' | null
+  speaker_conf?: number | null
   words?: [number, number, number, number][]
   idx?: number
 }
@@ -111,7 +131,7 @@ export interface FinalView {
   duration: number | null
   annotations: Annotation[]
   /** 지난 회의에서 이름 붙인 목소리와 비슷한 화자: {라벨: {name, score}} */
-  speaker_suggestions?: Record<string, { name: string; score: number }>
+  speaker_suggestions?: Record<string, { name: string; score: number; from?: 'live' }>
 }
 
 export interface Health {
@@ -193,6 +213,17 @@ export const api = {
     req<{ updated: number; exported_at: Record<string, number | null> }>('POST', `/api/meetings/${id}/annotations/exported`, { ids, exported }),
   deleteAnnotation: (annId: string) => req<{ ok: boolean }>('DELETE', `/api/annotations/${annId}`),
   storage: () => req<StorageInfo>('GET', '/api/storage'),
+  setParticipants: (id: string, participants: { id?: string; name: string }[]) =>
+    req<{ participants: Participant[] }>('PUT', `/api/meetings/${id}/participants`, { participants }),
+  suggestParticipants: () => req<{ name: string; voice: boolean }[]>('GET', '/api/participants/suggest'),
+  assignSpeaker: (id: string, segmentIds: string[], participantId: string | null, scope: 'voice' | 'one') =>
+    req<{ changes: SpeakerChange[]; previous_map: Record<string, string> }>('POST', `/api/meetings/${id}/live/speaker`, {
+      segment_ids: segmentIds,
+      participant_id: participantId,
+      scope,
+    }),
+  restoreSpeakers: (id: string, rows: SpeakerChange[], speakerMap: Record<string, string>) =>
+    req<{ changes: SpeakerChange[] }>('POST', `/api/meetings/${id}/live/speaker/restore`, { rows, speaker_map: speakerMap }),
   warmup: () => req<Health['live']>('POST', '/api/warmup'),
   search: (q: string) => req<SearchHit[]>('GET', `/api/search?q=${encodeURIComponent(q)}`),
   exportMd: async (id: string) => (await fetch(`/api/meetings/${id}/export.md`)).text(),

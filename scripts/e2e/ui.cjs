@@ -122,14 +122,14 @@ function check(cond, msg) {
   await page.waitForSelector('.dock-player', { timeout: 30000 })
   await sleep(500)
   await page.click('.dock-player .btn-round.play')
-  await page.waitForFunction(() => document.querySelector('.unit.active'), null, { timeout: 10000 })
+  await page.waitForFunction(() => document.querySelector('.utext.active'), null, { timeout: 10000 })
   await page.mouse.move(600, 300)
   await page.mouse.wheel(0, 3000)
   await page.waitForSelector('.jump-pill:has-text("재생 위치로")', { timeout: 5000 })
   await page.click('.jump-pill')
   await sleep(600)
   const activeVisible = await page.evaluate(() => {
-    const a = document.querySelector('.unit.active')?.getBoundingClientRect()
+    const a = document.querySelector('.utext.active')?.getBoundingClientRect()
     const p = document.querySelector('.pane-scroll').getBoundingClientRect()
     return !!a && a.top >= p.top - 4 && a.bottom <= p.bottom + 4
   })

@@ -62,7 +62,8 @@ def test_full_flow(client):
 
     m = client.post("/api/meetings", json={"title": "주간 회의"}).json()
     mid = m["id"]
-    pcm = _speech_pcm([("n", 0.5), ("s", 3.0), ("n", 1.0), ("s", 4.0), ("n", 1.0), ("s", 3.5), ("n", 1.2)])
+    # 쉼은 1.5초: 시연용 글자는 말끝과 상관없어 짧은 쉼(1.1초 미만)은 이어질 수 있다
+    pcm = _speech_pcm([("n", 0.5), ("s", 3.0), ("n", 1.5), ("s", 4.0), ("n", 1.5), ("s", 3.5), ("n", 1.5)])
     events = []
     with client.websocket_connect(f"/api/meetings/{mid}/record") as ws:
         ready = json.loads(ws.receive_text())
@@ -545,4 +546,75 @@ def test_backup_zip_contains_everything(client, tmp_path):
     with sqlite3.connect(db) as c:
         assert c.execute("SELECT title FROM meetings WHERE id=?", (mid,)).fetchone()[0] == "백업/시험: 회의"
     client.post(f"/api/meetings/{mid}/cancel")
+
+
+
+def test_live_temporary_speakers_follow_one_click(client):
+    """실시간 임시 화자: 목소리로 묶고(A, B…), 한 문장에 참여자를 고르면 같은 목소리 문장 전체와
+    앞으로 올 문장에 반영된다. 원본 화자 이름과 다음 회의의 목소리 기억으로도 이어진다."""
+    mid = client.post("/api/meetings", json={}).json()["id"]
+    parts = client.put(f"/api/meetings/{mid}/participants", json={"participants": [{"name": "김민지"}, {"name": " 박준호 "}, {"name": "김민지"}]}).json()["participants"]
+    assert [p["name"] for p in parts] == ["김민지", "박준호"]
+    minji, junho = parts[0]["id"], parts[1]["id"]
+    # 시연용 목소리 시간표: A 0~9.5초, B 9.5~14.5, A 14.5~21.5, C 21.5~27.5, B 27.5~35.5
+    _record(client, mid, _speech_pcm([("s", 3.0), ("n", 1.5)] * 8), messages=[{"type": "pause"}])
+    units = client.get(f"/api/meetings/{mid}/live").json()["units"]
+    autos = [u["speaker_auto"] for u in units]
+    assert len(units) == 8 and autos[0] == "A" and autos[2] != "A" and autos[3] == "A" and len(set(autos)) == 3, autos
+    assert all(u["speaker"] is None for u in units)
+
+    # 한 번 고르면 같은 목소리 문장 전체에
+    ch = client.post(f"/api/meetings/{mid}/live/speaker", json={"segment_ids": [units[0]["id"]], "participant_id": minji}).json()["changes"]
+    assert {c["id"] for c in ch} == {u["id"] for u in units if u["speaker_auto"] == "A"}
+    units = client.get(f"/api/meetings/{mid}/live").json()["units"]
+    assert units[0]["speaker_src"] == "manual" and units[1]["speaker"] == minji and units[1]["speaker_src"] == "auto"
+    # 되돌리기: 한 문장만 김민지로 두고 나머지는 예전대로
+    r = client.post(f"/api/meetings/{mid}/live/speaker", json={"segment_ids": [units[4]["id"]], "participant_id": junho})
+    assert r.status_code == 200 and r.json()["previous_map"] == {"A": minji}
+    prev = [dict(u) for u in units if u["speaker_auto"] == "A" and u["id"] != units[4]["id"]]
+    client.post(f"/api/meetings/{mid}/live/speaker/restore", json={"rows": prev, "speaker_map": r.json()["previous_map"]})
+    after = {u["id"]: u for u in client.get(f"/api/meetings/{mid}/live").json()["units"]}
+    assert after[units[4]["id"]]["speaker"] == junho and after[units[1]["id"]]["speaker"] == minji and after[units[0]["id"]]["speaker_src"] == "manual"
+    client.post(f"/api/meetings/{mid}/live/speaker", json={"segment_ids": [units[4]["id"]], "participant_id": minji, "scope": "one"})
+    # "이 문장만"
+    ch = client.post(f"/api/meetings/{mid}/live/speaker", json={"segment_ids": [units[2]["id"]], "participant_id": junho, "scope": "one"}).json()["changes"]
+    assert [c["id"] for c in ch] == [units[2]["id"]]
+    client.post(f"/api/meetings/{mid}/live/speaker", json={"segment_ids": [units[3]["id"]], "participant_id": minji, "scope": "one"})
+    assert client.post(f"/api/meetings/{mid}/live/speaker", json={"segment_ids": [units[0]["id"]], "participant_id": "nobody"}).status_code == 400
+
+    # 앞으로 오는 같은 목소리 문장은 처음부터 김민지
+    got = _record(client, mid, _speech_pcm([("s", 3.0), ("n", 1.5)] * 2), messages=[{"type": "pause"}])
+    labels = [m["segment"] for m in got if m["type"] == "speaker"]
+    assert labels and all(l["speaker"] == minji and l["speaker_src"] == "auto" for l in labels), labels
+    md = client.get(f"/api/meetings/{mid}/export.md", params={"version": "live"}).text
+    assert "김민지:" in md and "박준호:" in md and "화자 C(추정):" in md
+
+    # 원본: 회의 중 고른 화자가 원본 화자 이름으로
+    client.post(f"/api/meetings/{mid}/process")
+    assert _wait_job(client, mid)["status"] == "done"
+    m = client.get(f"/api/meetings/{mid}").json()
+    assert m["speakers"]["S1"] == "김민지"
+    fin = client.get(f"/api/meetings/{mid}/final").json()["final"]
+    assert fin["units"] and "S1" not in fin["speaker_suggestions"]
+
+    # 다음 회의: 같은 이름의 참여자를 넣으면 기억한 목소리로 처음부터 알아본다
+    m2 = client.post("/api/meetings", json={}).json()["id"]
+    p2 = client.put(f"/api/meetings/{m2}/participants", json={"participants": [{"name": "김민지"}]}).json()["participants"]
+    got = _record(client, m2, _speech_pcm([("s", 3.0), ("n", 1.5)]), messages=[{"type": "pause"}])
+    first = [m["segment"] for m in got if m["type"] == "speaker"][0]
+    assert first["speaker"] == p2[0]["id"] and first["speaker_src"] == "auto"
+    sug = {s["name"]: s for s in client.get("/api/participants/suggest").json()}
+    assert sug["김민지"]["voice"] is True and "박준호" in sug
+    for x in (mid, m2):
+        client.post(f"/api/meetings/{x}/cancel")
+
+
+def test_live_to_final_names_auto_or_suggest():
+    from scribe.live_speakers import live_to_final_names
+
+    utt = [{"speaker": "S1", "t0": 0, "t1": 10}, {"speaker": "S2", "t0": 10, "t1": 20}]
+    live = [{"t0": 0, "t1": 5.5, "speaker": "a"}, {"t0": 5.5, "t1": 10, "speaker": "b"}, {"t0": 10, "t1": 19, "speaker": "b"}]
+    out = live_to_final_names(utt, live, {"a": "김민지", "b": "박준호"})
+    assert out["S2"]["name"] == "박준호" and out["S2"]["auto"] is True
+    assert out["S1"]["name"] == "김민지" and out["S1"]["auto"] is False  # 55%: 제안만
 

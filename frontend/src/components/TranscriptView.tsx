@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as RMouseEvent, type RefObject } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { Highlighter, MessageSquarePlus, NotebookPen, PenLine, SeparatorHorizontal, StickyNote } from 'lucide-react'
-import { type Annotation, type Unit } from '../lib/api'
+import { Highlighter, MessageSquarePlus, NotebookPen, PenLine, SeparatorHorizontal, StickyNote, UserRound } from 'lucide-react'
+import { api, type Annotation, type Participant, type Unit } from '../lib/api'
 import { annActions } from '../lib/annActions'
 import { buildModel, piecesFor, timeAtOffset, unitAtTime, type Piece, type RangeAnn, type View } from '../lib/model'
 import { readSelection, type TextSelection } from '../lib/selection'
@@ -17,6 +17,9 @@ import { Composer } from './Composer'
 import { Floating } from './Floating'
 import { MemoCard } from './MemoCard'
 import { SpeakerLabel } from './SpeakerLabel'
+import { SpeakerPicker } from './SpeakerPicker'
+import { addParticipant, assignSpeaker, participantIndex } from '../lib/speakers'
+import { buildTurns, endsSentence, type Turn } from '../lib/turns'
 import { clearHighlights, paintHighlights, TranscriptFind, useFindShortcut, type Hit } from './TranscriptFind'
 
 interface Props {
@@ -88,76 +91,172 @@ function PieceView({ p, onOpen, hover }: { p: Piece; onOpen: (ids: string[], el:
   }
 }
 
-interface RowProps {
+function UnitText({ u, ranges, view, showMarks, active, flash, hover, onOpen, title }: {
   u: Unit
   ranges: RangeAnn[] | undefined
-  showSpeaker: boolean
+  view: View
+  showMarks: boolean
   active: boolean
   flash: boolean
-  comments: Annotation[] | undefined
-  memos: Annotation[] | undefined
-  dividers: Annotation[] | undefined
+  hover: string | null
+  onOpen: (ids: string[], el: HTMLElement) => void
+  title: string
+}) {
+  const pieces = useMemo(() => piecesFor(u.text, ranges, view, showMarks), [u.text, ranges, view, showMarks])
+  return (
+    <span id={`unit-${u.id}`} className={`utext${active ? ' active' : ''}${flash ? ' flash' : ''}`} data-unit={u.id} data-len={u.text.length} data-t={title}>
+      {pieces.map((p, k) => (
+        <PieceView key={k} p={p} onOpen={onOpen} hover={hover} />
+      ))}
+    </span>
+  )
+}
+
+/** 실시간 단락의 화자: 직접 고른 것은 진하게, 목소리로 추정한 것은 흐리게 */
+function SpeakerChip({ turn, participants, onPick }: { turn: Turn; participants: Participant[]; onPick: (rect: DOMRect) => void }) {
+  const u = turn.units[0]
+  const pid = turn.key?.startsWith('p:') ? turn.key.slice(2) : null
+  const person = pid ? participants.find((p) => p.id === pid) : undefined
+  const manual = turn.units.some((x) => x.speaker_src === 'manual')
+  const name = person ? person.name : u.speaker_auto ? `화자 ${u.speaker_auto}` : '화자?'
+  const conf = Math.round((u.speaker_conf ?? 0) * 100)
+  const title = manual
+    ? '직접 고른 화자 · 눌러서 바꾸기'
+    : person
+      ? `목소리로 추정했어요${conf ? ` (${conf}%)` : ''} · 눌러서 확정하거나 바꾸기`
+      : '아직 누군지 몰라요 · 눌러서 고르면 같은 목소리 문장에 모두 반영돼요'
+  return (
+    <button
+      className={`spk-chip sp-${person ? participantIndex(participants, pid) : 0} ${manual ? 'manual' : person ? 'guess' : 'unknown'}`}
+      onClick={(e) => onPick(e.currentTarget.getBoundingClientRect())}
+      title={title}
+    >
+      <span className="sp-dot" />
+      {name}
+      {!manual && person && <span className="spk-q">?</span>}
+    </button>
+  )
+}
+
+interface TurnProps {
+  turn: Turn
+  model: ReturnType<typeof buildModel>
   view: View
   meetingId: string
   showMarks: boolean
+  showSpeaker: boolean
+  participants: Participant[]
+  liveSpeakers: boolean
+  activeId: string | null
+  flashUnit: string | null
   hover: string | null
   flashAnn: string | null
+  partial: { t0: number; text: string } | null
   onOpen: (ids: string[], el: HTMLElement) => void
   onMemo: (u: Unit, el: HTMLElement) => void
   onComment: (u: Unit, el: HTMLElement) => void
   onDivider: (u: Unit, el: HTMLElement) => void
   onHover: (id: string | null) => void
+  onHoverUnit: (id: string | null) => void
+  onPickSpeaker: (unitIds: string[], rect: DOMRect, one: boolean) => void
   timeLabel: (t: number) => string
   timeTitle: (t: number) => string
 }
 
-const UnitRow = memo(function UnitRow({ u, ranges, showSpeaker, active, flash, comments, memos, dividers, view, meetingId, showMarks, hover, flashAnn, onOpen, onMemo, onComment, onDivider, onHover, timeLabel, timeTitle }: RowProps) {
-  const pieces = useMemo(() => piecesFor(u.text, ranges, view, showMarks), [u.text, ranges, view, showMarks])
+/** 화자 단락: 같은 사람이 이어서 말한 문장들을 한 문단으로 보여 준다. 문장마다 따로 고르고 댓글을 달 수 있다. */
+const TurnRow = memo(function TurnRow(p: TurnProps) {
+  const { turn, model, view } = p
+  const body = useRef<HTMLDivElement>(null)
+  const [hu, setHu] = useState<{ id: string; top: number } | null>(null)
+  const first = turn.units[0]
+  const onOver = (e: RMouseEvent) => {
+    const el = (e.target as HTMLElement).closest<HTMLElement>('.utext')
+    if (!el || !body.current || el.dataset.unit === hu?.id) return
+    setHu({ id: el.dataset.unit!, top: Math.max(0, el.getBoundingClientRect().top - body.current.getBoundingClientRect().top - 2) })
+    p.onHoverUnit(el.dataset.unit!)
+  }
+  const target = (hu && turn.units.find((u) => u.id === hu.id)) || null
+  const comments = turn.units.flatMap((u) => model.commentEnds.get(u.id) || [])
+  const memos = turn.units.flatMap((u) => model.memosAfter.get(u.id) || [])
+  const dividers = turn.units.flatMap((u) => model.dividersAfter.get(u.id) || [])
   return (
-    <>
-      {showSpeaker && (
-        <div className="speaker-row">
-          <SpeakerLabel label={u.speaker ?? null} />
+    <div className="turn" id={`turn-${turn.id}`}>
+      {p.showSpeaker && (
+        <div className="turn-speaker">
+          {view === 'final' ? (
+            <SpeakerLabel label={first.speaker ?? null} />
+          ) : (
+            <SpeakerChip turn={turn} participants={p.participants} onPick={(rect) => p.onPickSpeaker(turn.units.map((u) => u.id), rect, false)} />
+          )}
         </div>
       )}
-      <div id={`unit-${u.id}`} className={`unit ${active ? 'active' : ''} ${flash ? 'flash' : ''}`}>
-        <button className="u-time" onClick={() => seekTo(u.t0)} title={timeTitle(u.t0)}>
-          {timeLabel(u.t0)}
+      <div className="turn-body" ref={body} onMouseOver={onOver} onMouseLeave={() => { setHu(null); p.onHoverUnit(null) }}>
+        <button className="u-time" onClick={() => seekTo(first.t0)} title={p.timeTitle(first.t0)}>
+          {p.timeLabel(first.t0)}
         </button>
-        <p className="utext" data-unit={u.id} data-len={u.text.length}>
-          {pieces.map((p, k) => (
-            <PieceView key={k} p={p} onOpen={onOpen} hover={hover} />
+        <p className="turn-text">
+          {turn.units.map((u, k) => (
+            <span key={u.id}>
+              {k > 0 && ' '}
+              <UnitText
+                u={u}
+                ranges={model.perUnit.get(u.id)}
+                view={view}
+                showMarks={p.showMarks}
+                active={u.id === p.activeId}
+                flash={u.id === p.flashUnit}
+                hover={p.hover}
+                onOpen={p.onOpen}
+                title={p.timeTitle(u.t0)}
+              />
+            </span>
           ))}
+          {p.partial && (
+            <span className="utext-partial">
+              {' '}{p.partial.text}
+              <span className="typing" />
+            </span>
+          )}
         </p>
-        <div className="u-actions">
-          <button className="u-act" title="이 문장에 댓글" onClick={(e) => onComment(u, e.currentTarget)}>
-            <MessageSquarePlus size={14} />
-          </button>
-          <button className="u-act" title="이 문장 뒤에 메모" onClick={(e) => onMemo(u, e.currentTarget)}>
-            <StickyNote size={14} />
-          </button>
-          <button className="u-act" title="이 문장 뒤에 구분선 (쉬는 시간, 단락)" onClick={(e) => onDivider(u, e.currentTarget)}>
-            <SeparatorHorizontal size={14} />
-          </button>
-        </div>
+        {target && (
+          <div className="u-actions" style={{ top: hu!.top }}>
+            <button className="u-act" title="이 문장에 댓글" onClick={(e) => p.onComment(target, e.currentTarget)}>
+              <MessageSquarePlus size={14} />
+            </button>
+            <button className="u-act" title="이 문장 뒤에 메모" onClick={(e) => p.onMemo(target, e.currentTarget)}>
+              <StickyNote size={14} />
+            </button>
+            <button className="u-act" title="이 문장 뒤에 구분선 (쉬는 시간, 단락)" onClick={(e) => p.onDivider(target, e.currentTarget)}>
+              <SeparatorHorizontal size={14} />
+            </button>
+            {p.liveSpeakers && (
+              <button className="u-act" title="이 문장만 화자 고르기 (Shift+숫자)" onClick={(e) => p.onPickSpeaker([target.id], e.currentTarget.getBoundingClientRect(), true)}>
+                <UserRound size={14} />
+              </button>
+            )}
+          </div>
+        )}
       </div>
-      {showMarks && comments?.map((c) => <CommentThread key={c.id} ann={c} view={view} meetingId={meetingId} flash={flashAnn === c.id} onHover={onHover} />)}
-      {showMarks && memos?.map((m) => <MemoCard key={m.id} ann={m} view={view} />)}
-      {dividers?.map((d) => <DividerRow key={d.id} ann={d} view={view} />)}
-    </>
+      {p.showMarks && comments.map((c) => <CommentThread key={c.id} ann={c} view={view} meetingId={p.meetingId} flash={p.flashAnn === c.id} onHover={p.onHover} />)}
+      {p.showMarks && memos.map((m) => <MemoCard key={m.id} ann={m} view={view} />)}
+      {dividers.map((d) => <DividerRow key={d.id} ann={d} view={view} />)}
+    </div>
   )
 })
 
-function unitHasAnn(model: ReturnType<typeof buildModel>, unitId: string, annId: string): boolean {
-  return !!model.perUnit.get(unitId)?.some((r) => r.ann.id === annId)
+function turnHasAnn(model: ReturnType<typeof buildModel>, turn: Turn, annId: string): boolean {
+  return turn.units.some((u) => model.perUnit.get(u.id)?.some((r) => r.ann.id === annId))
 }
 
 /** 그리기 전 높이 추정 (그린 뒤에는 실제 높이를 잰다). 한 줄에 한글 약 42자. */
-function estimateRow(u: Unit, speaker: boolean, model: ReturnType<typeof buildModel>, showMarks: boolean): number {
-  let h = 10 + Math.max(1, Math.ceil(u.text.length / 42)) * 27
+function estimateTurn(turn: Turn, speaker: boolean, model: ReturnType<typeof buildModel>, showMarks: boolean): number {
+  const chars = turn.units.reduce((n, u) => n + u.text.length + 1, 0)
+  let h = 10 + Math.max(1, Math.ceil(chars / 42)) * 27
   if (speaker) h += 30
-  if (showMarks) h += (model.commentEnds.get(u.id)?.length || 0) * 80 + (model.memosAfter.get(u.id)?.length || 0) * 64
-  h += (model.dividersAfter.get(u.id)?.length || 0) * 44
+  for (const u of turn.units) {
+    if (showMarks) h += (model.commentEnds.get(u.id)?.length || 0) * 80 + (model.memosAfter.get(u.id)?.length || 0) * 64
+    h += (model.dividersAfter.get(u.id)?.length || 0) * 44
+  }
   return h
 }
 
@@ -192,18 +291,39 @@ export function TranscriptView({ view, meetingId, units, annotations, partial, r
   const byId = useMemo(() => new Map(annotations.map((a) => [a.id, a])), [annotations])
   const unitById = useMemo(() => new Map(units.map((u) => [u.id, u])), [units])
   const activeId = useStore((s) => (recording || (!s.playing && s.playerTime <= 0) ? null : unitAtTime(units, s.playerTime)))
-  const indexById = useMemo(() => new Map(units.map((u, i) => [u.id, i])), [units])
+  const participants = useStore((s) => (s.meeting?.id === meetingId ? s.meeting.participants || [] : []))
+  // 실시간 임시 화자를 쓰는지: 참여자를 넣었거나 목소리로 묶인 문장이 있으면
+  const liveSpeakers = view === 'live' && (participants.length > 0 || units.some((u) => u.speaker_auto || u.speaker))
+  // 같은 사람이 이어서 말한 문장은 한 단락으로 (구분선·메모가 있으면 끊는다)
+  const turns = useMemo(() => {
+    const breaks = new Set<string>([...model.memosAfter.keys(), ...model.dividersAfter.keys()])
+    const last = units[units.length - 1]
+    const pending = recording && liveSpeakers && last && !last.speaker && !last.speaker_auto ? last.id : null
+    return buildTurns(units, view, breaks, pending)
+  }, [units, view, model, recording, liveSpeakers])
+  const turnOf = useMemo(() => {
+    const m = new Map<string, number>()
+    turns.forEach((t, i) => t.units.forEach((u) => m.set(u.id, i)))
+    return m
+  }, [turns])
   const listRef = useRef<HTMLDivElement>(null)
   const [scrollMargin, setScrollMargin] = useState(0)
-  const showSpeakerAt = (i: number) => view === 'final' && (i === 0 || units[i - 1].speaker !== units[i].speaker)
+  const showSpeakerAt = (i: number) => {
+    const t = turns[i]
+    const prev = i > 0 ? turns[i - 1] : null
+    if (view === 'final') return !prev || prev.units[prev.units.length - 1].speaker !== t.units[0].speaker
+    if (!liveSpeakers) return false
+    if (t.key === null && !participants.length) return false
+    return !prev || prev.key !== t.key
+  }
 
-  // 긴 기록: 보이는 문장(+앞뒤 여유)만 그린다
+  // 긴 기록: 보이는 단락(+앞뒤 여유)만 그린다
   const virtualizer = useVirtualizer({
-    count: units.length,
+    count: turns.length,
     getScrollElement: () => scrollRef.current,
-    estimateSize: (i) => estimateRow(units[i], showSpeakerAt(i), model, showMarks),
-    getItemKey: (i) => units[i].id,
-    overscan: 10,
+    estimateSize: (i) => estimateTurn(turns[i], showSpeakerAt(i), model, showMarks),
+    getItemKey: (i) => turns[i].id,
+    overscan: 8,
     scrollMargin,
   })
 
@@ -221,13 +341,13 @@ export function TranscriptView({ view, meetingId, units, annotations, partial, r
   useEffect(() => {
     bridges.transcript = {
       scrollToUnit: (id, opts) => {
-        const i = indexById.get(id)
+        const i = turnOf.get(id)
         if (i !== undefined) scrollToIndex(i, opts?.align ?? 'center')
       },
       // M 단축키: 지금 재생 위치의 문장 뒤에 메모
       memoAt: (t) => {
         const id = unitAtTime(units, t) ?? units[units.length - 1]?.id
-        const i = id ? indexById.get(id) : undefined
+        const i = id ? turnOf.get(id) : undefined
         if (!id || i === undefined) return
         scrollToIndex(i)
         setTimeout(() => {
@@ -239,7 +359,7 @@ export function TranscriptView({ view, meetingId, units, annotations, partial, r
     return () => {
       bridges.transcript = null
     }
-  }, [indexById, scrollToIndex, units])
+  }, [turnOf, scrollToIndex, units])
 
   // 찾기 (⌘F)
   const find = useFindShortcut(true)
@@ -248,7 +368,7 @@ export function TranscriptView({ view, meetingId, units, annotations, partial, r
     hitsRef.current = { hits, current }
     paintHighlights(listRef.current, units, hits, current)
   }, [units])
-  const onJump = useCallback((h: Hit) => scrollToIndex(h.i), [scrollToIndex])
+  const onJump = useCallback((h: Hit) => scrollToIndex(turnOf.get(units[h.i]?.id) ?? 0), [scrollToIndex, turnOf, units])
   const closeFind = useCallback(() => {
     find.setOpen(false)
     hitsRef.current = { hits: [], current: -1 }
@@ -279,15 +399,50 @@ export function TranscriptView({ view, meetingId, units, annotations, partial, r
   // 재생 중인 문장 따라가기
   useEffect(() => {
     if (!activeId || !playing || !follow) return
-    const i = indexById.get(activeId)
+    const i = turnOf.get(activeId)
     if (i !== undefined) scrollToIndex(i)
-  }, [activeId, playing, follow, indexById, scrollToIndex])
+  }, [activeId, playing, follow, turnOf, scrollToIndex])
 
   useEffect(() => {
     if (!flashUnit) return
-    const i = indexById.get(flashUnit)
+    const i = turnOf.get(flashUnit)
     if (i !== undefined) scrollToIndex(i)
-  }, [flashUnit, indexById, scrollToIndex])
+  }, [flashUnit, turnOf, scrollToIndex])
+
+  // 화자 고르기: 단락의 화자 칩, 문장 위 버튼, 숫자키
+  const [picker, setPicker] = useState<{ rect: DOMRect; unitIds: string[]; one: boolean } | null>(null)
+  const hoverUnit = useRef<string | null>(null)
+  const onHoverUnit = useCallback((id: string | null) => {
+    hoverUnit.current = id
+  }, [])
+  const onPickSpeaker = useCallback((unitIds: string[], rect: DOMRect, one: boolean) => setPicker({ rect, unitIds, one }), [])
+  useEffect(() => {
+    if (!participants.length) return
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null
+      if (e.metaKey || e.ctrlKey || e.altKey || e.isComposing || picker || composer) return
+      if (t && (t.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName))) return
+      const n = /^Digit([1-9])$/.exec(e.code)
+      const person = n ? participants[Number(n[1]) - 1] : undefined
+      if (!person) return
+      // 마우스를 올린 문장, 없으면 녹음 중의 마지막 문장
+      const uid = hoverUnit.current ?? (recording ? units[units.length - 1]?.id : null)
+      if (!uid) return
+      e.preventDefault()
+      if (view === 'final') {
+        const label = units.find((u) => u.id === uid)?.speaker
+        const st = useStore.getState()
+        if (!label || !st.meeting) return
+        api.patchMeeting(meetingId, { speakers: { ...st.meeting.speakers, [label]: person.name } }).then(() => Promise.all([st.refreshMeeting(), st.refreshFinal()]))
+        return
+      }
+      const turn = turns[turnOf.get(uid) ?? -1]
+      if (e.shiftKey || !turn) assignSpeaker(meetingId, [uid], person.id, 'one')
+      else assignSpeaker(meetingId, turn.units.map((u) => u.id), person.id)
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [participants, picker, composer, recording, units, turns, turnOf, view, meetingId])
 
   const create = async (body: Record<string, unknown>, toNotes = false) => {
     try {
@@ -367,7 +522,14 @@ export function TranscriptView({ view, meetingId, units, annotations, partial, r
       <div ref={listRef} className="vlist" style={{ height: virtualizer.getTotalSize() }}>
         {virtualizer.getVirtualItems().map((vi) => {
           const i = vi.index
-          const u = units[i]
+          const turn = turns[i]
+          const isLast = i === turns.length - 1
+          const lastUnit = turn.units[turn.units.length - 1]
+          // 말끝이 아닌데 이어서 말하는 중이면 진행 중 글자를 같은 단락에 잇는다
+          const attach = isLast && partial?.text && partial.t0 - lastUnit.t1 <= 1.6 && !endsSentence(lastUnit.text) ? partial : null
+          const activeHere = activeId !== null && turnOf.get(activeId) === i ? activeId : null
+          const flashHere = flashUnit !== null && turnOf.get(flashUnit) === i ? flashUnit : null
+          const commentsHere = turn.units.flatMap((u) => model.commentEnds.get(u.id) || [])
           return (
             <div
               key={vi.key}
@@ -376,25 +538,27 @@ export function TranscriptView({ view, meetingId, units, annotations, partial, r
               className="vrow"
               style={{ transform: `translateY(${vi.start - scrollMargin}px)` }}
             >
-              <UnitRow
-                u={u}
-                ranges={model.perUnit.get(u.id)}
-                showSpeaker={showSpeakerAt(i)}
-                active={u.id === activeId}
-                flash={u.id === flashUnit}
-                comments={model.commentEnds.get(u.id)}
-                memos={model.memosAfter.get(u.id)}
-                dividers={model.dividersAfter.get(u.id)}
+              <TurnRow
+                turn={turn}
+                model={model}
                 view={view}
                 meetingId={meetingId}
                 showMarks={showMarks}
-                hover={hover !== null && unitHasAnn(model, u.id, hover) ? hover : null}
-                flashAnn={flashAnn !== null && model.commentEnds.get(u.id)?.some((c) => c.id === flashAnn) ? flashAnn : null}
+                showSpeaker={showSpeakerAt(i)}
+                participants={participants}
+                liveSpeakers={liveSpeakers && participants.length > 0}
+                activeId={activeHere}
+                flashUnit={flashHere}
+                hover={hover !== null && turnHasAnn(model, turn, hover) ? hover : null}
+                flashAnn={flashAnn !== null && commentsHere.some((c) => c.id === flashAnn) ? flashAnn : null}
+                partial={attach ? { t0: attach.t0, text: attach.text } : null}
                 onOpen={openPop}
                 onMemo={openMemo}
                 onComment={openComment}
                 onDivider={openDivider}
                 onHover={setHover}
+                onHoverUnit={onHoverUnit}
+                onPickSpeaker={onPickSpeaker}
                 timeLabel={timeLabel}
                 timeTitle={timeTitle}
               />
@@ -402,14 +566,32 @@ export function TranscriptView({ view, meetingId, units, annotations, partial, r
           )
         })}
       </div>
-      {partial && partial.text && (
-        <div className="unit partial">
-          <span className="u-time">{timeLabel(partial.t0)}</span>
-          <p className="utext-partial">
-            {partial.text}
-            <span className="typing" />
-          </p>
+      {partial && partial.text && !(turns.length && partial.t0 - turns[turns.length - 1].units[turns[turns.length - 1].units.length - 1].t1 <= 1.6 && !endsSentence(turns[turns.length - 1].units[turns[turns.length - 1].units.length - 1].text)) && (
+        <div className="turn partial">
+          <div className="turn-body">
+            <span className="u-time">{timeLabel(partial.t0)}</span>
+            <p className="turn-text utext-partial">
+              {partial.text}
+              <span className="typing" />
+            </p>
+          </div>
         </div>
+      )}
+      {picker && (
+        <SpeakerPicker
+          rect={picker.rect}
+          mode="live"
+          single={picker.one}
+          participants={participants}
+          current={picker.unitIds.length ? units.find((u) => u.id === picker.unitIds[0])?.speaker ?? null : null}
+          onPick={(pid) => {
+            const pk = picker
+            setPicker(null)
+            assignSpeaker(meetingId, pk.unitIds, pid, pk.one ? 'one' : undefined)
+          }}
+          onAdd={(name) => addParticipant(meetingId, name)}
+          onClose={() => setPicker(null)}
+        />
       )}
 
       {sel && !composer && (

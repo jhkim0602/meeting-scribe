@@ -87,7 +87,7 @@ CREATE TABLE IF NOT EXISTS settings(
 );
 """
 
-JSON_FIELDS_MEETING = ("speakers", "clock")
+JSON_FIELDS_MEETING = ("speakers", "clock", "participants", "speaker_map")
 KEEP_FINAL_VERSIONS = 2
 
 
@@ -125,11 +125,29 @@ class Store:
             c.execute("ALTER TABLE meetings ADD COLUMN paused_wall REAL")
         if "paused_t" not in mcols:
             c.execute("ALTER TABLE meetings ADD COLUMN paused_t REAL")
+        # 실시간 임시 화자: 문장별 화자(참여자 id), 자동 묶음(A, B…), 누가 정했는지, 확신도
+        lcols = {r["name"] for r in c.execute("PRAGMA table_info(live_segments)").fetchall()}
+        for col, typ in (("speaker", "TEXT"), ("speaker_auto", "TEXT"), ("speaker_src", "TEXT"), ("speaker_conf", "REAL")):
+            if col not in lcols:
+                c.execute(f"ALTER TABLE live_segments ADD COLUMN {col} {typ}")
+        c.execute(
+            "CREATE TABLE IF NOT EXISTS live_embeddings (segment_id TEXT PRIMARY KEY, meeting_id TEXT NOT NULL, embedding TEXT NOT NULL)"
+        )
+        c.execute("CREATE INDEX IF NOT EXISTS idx_live_emb_meeting ON live_embeddings(meeting_id)")
+        # 회의 참여자 [{id, name}]와 자동 묶음 → 참여자 대응표 {A: p1}
+        if "participants" not in mcols:
+            c.execute("ALTER TABLE meetings ADD COLUMN participants TEXT NOT NULL DEFAULT '[]'")
+        if "speaker_map" not in mcols:
+            c.execute("ALTER TABLE meetings ADD COLUMN speaker_map TEXT NOT NULL DEFAULT '{}'")
         # 화자 목소리 기억 (이름 붙인 화자의 목소리 특징)
         c.execute(
             "CREATE TABLE IF NOT EXISTS voice_samples (meeting_id TEXT NOT NULL, label TEXT NOT NULL, name TEXT NOT NULL,"
             " embedding TEXT NOT NULL, updated_at REAL NOT NULL, PRIMARY KEY (meeting_id, label))"
         )
+        # 목소리 특징의 종류: 원본 화자 구분(diar)과 실시간(live:…)은 서로 비교하지 않는다
+        vcols = {r["name"] for r in c.execute("PRAGMA table_info(voice_samples)").fetchall()}
+        if "space" not in vcols:
+            c.execute("ALTER TABLE voice_samples ADD COLUMN space TEXT NOT NULL DEFAULT 'diar'")
         # 녹음 시간 → 실제 시각: [[녹음 시간(초), 그때의 실제 시각(epoch)], ...]
         if "clock" not in mcols:
             c.execute("ALTER TABLE meetings ADD COLUMN clock TEXT NOT NULL DEFAULT '[]'")
@@ -262,7 +280,7 @@ class Store:
     def delete_meeting(self, meeting_id: str) -> None:
         with self.conn() as c:
             c.execute("BEGIN")
-            for table in ("live_segments", "final_versions", "annotations", "jobs", "voice_samples"):
+            for table in ("live_segments", "live_embeddings", "final_versions", "annotations", "jobs", "voice_samples"):
                 c.execute(f"DELETE FROM {table} WHERE meeting_id=?", (meeting_id,))
             c.execute("DELETE FROM meetings WHERE id=?", (meeting_id,))
             if self.fts:
@@ -273,6 +291,8 @@ class Store:
         d = dict(row)
         d["speakers"] = json.loads(d.get("speakers") or "{}")
         d["clock"] = json.loads(d.get("clock") or "[]")
+        d["participants"] = json.loads(d.get("participants") or "[]")
+        d["speaker_map"] = json.loads(d.get("speaker_map") or "{}")
         if not with_notes:
             d.pop("notes_json", None)
             d.pop("notes_md", None)
@@ -298,6 +318,36 @@ class Store:
         with self.conn() as c:
             rows = c.execute("SELECT id,idx,t0,t1,text FROM live_segments WHERE meeting_id=? ORDER BY idx", (meeting_id,)).fetchall()
         return [dict(r) for r in rows]
+
+    def list_live_speakers(self, meeting_id: str) -> list[dict]:
+        """문장별 임시 화자 (실시간 기록 순서대로)"""
+        with self.conn() as c:
+            rows = c.execute(
+                "SELECT id,t0,t1,speaker,speaker_auto,speaker_src,speaker_conf FROM live_segments WHERE meeting_id=? ORDER BY idx",
+                (meeting_id,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def update_live_speakers(self, rows: list[dict]) -> None:
+        if not rows:
+            return
+        with self.conn() as c:
+            c.executemany(
+                "UPDATE live_segments SET speaker=:speaker, speaker_auto=:speaker_auto, speaker_src=:speaker_src, speaker_conf=:speaker_conf WHERE id=:id",
+                rows,
+            )
+
+    def set_live_embedding(self, meeting_id: str, segment_id: str, embedding: list) -> None:
+        with self.conn() as c:
+            c.execute(
+                "INSERT OR REPLACE INTO live_embeddings(segment_id,meeting_id,embedding) VALUES(?,?,?)",
+                (segment_id, meeting_id, json.dumps(embedding)),
+            )
+
+    def live_embeddings(self, meeting_id: str) -> dict:
+        with self.conn() as c:
+            rows = c.execute("SELECT segment_id, embedding FROM live_embeddings WHERE meeting_id=?", (meeting_id,)).fetchall()
+        return {r["segment_id"]: json.loads(r["embedding"]) for r in rows}
 
     # ---------- final transcript ----------
     def save_final_version(self, meeting_id: str, data: dict, engine: str, diarizer: str) -> int:
@@ -465,12 +515,12 @@ class Store:
         self.update_meeting(meeting_id, clock=points)
 
     # ---------- 화자 목소리 기억 ----------
-    def set_voice_sample(self, meeting_id: str, label: str, name: str, embedding: list) -> None:
+    def set_voice_sample(self, meeting_id: str, label: str, name: str, embedding: list, space: str = "diar") -> None:
         with self.conn() as c:
             c.execute(
-                "INSERT INTO voice_samples(meeting_id,label,name,embedding,updated_at) VALUES(?,?,?,?,?) "
-                "ON CONFLICT(meeting_id,label) DO UPDATE SET name=excluded.name, embedding=excluded.embedding, updated_at=excluded.updated_at",
-                (meeting_id, label, name, json.dumps(embedding), time.time()),
+                "INSERT INTO voice_samples(meeting_id,label,name,embedding,updated_at,space) VALUES(?,?,?,?,?,?) "
+                "ON CONFLICT(meeting_id,label) DO UPDATE SET name=excluded.name, embedding=excluded.embedding, updated_at=excluded.updated_at, space=excluded.space",
+                (meeting_id, label, name, json.dumps(embedding), time.time(), space),
             )
 
     def delete_voice_sample(self, meeting_id: str, label: str) -> None:
@@ -479,6 +529,6 @@ class Store:
 
     def list_voice_samples(self) -> list[dict]:
         with self.conn() as c:
-            rows = c.execute("SELECT meeting_id, label, name, embedding FROM voice_samples").fetchall()
+            rows = c.execute("SELECT meeting_id, label, name, embedding, space FROM voice_samples").fetchall()
         return [{**dict(r), "embedding": json.loads(r["embedding"])} for r in rows]
 

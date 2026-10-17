@@ -11,15 +11,18 @@ from typing import Callable, Optional
 
 from fastapi import WebSocket, WebSocketDisconnect
 
-from .audio import WavAppender, pcm16_to_float
+from .audio import WavAppender, pcm16_to_float, read_audio
 from .config import settings
 from .db import Store
 from .engines import LiveEngineHolder
 from .live import LiveEvent, LiveSegmenter
+from .live_speakers import MIN_EMBED_S, get_embedder, tracker_for
 from .storage import M4A, WAV, restore_wav
 from .system import disk_free_seconds, keep_awake, power_source
 
 _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="live-asr")
+# 임시 화자(목소리 특징)는 받아쓰기를 늦추지 않게 따로, 문장 순서대로 처리한다
+_spk_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="live-speaker")
 
 # 이보다 짧게 멈춘 것은 구분선을 만들지 않는다 (실수로 누른 일시정지, 짧은 연결 끊김)
 MIN_BREAK_S = float(os.environ.get("SCRIBE_MIN_BREAK_S", "20"))
@@ -114,6 +117,9 @@ class RecordingSession:
         self.closed = False
         self.disk_full = False
         self._next_disk_check = self.start_s + DISK_CHECK_EVERY_S
+        self.tracker = tracker_for(store, meeting_id)
+        self.embedder = get_embedder()
+        self._labels: list[asyncio.Task] = []
 
     async def send(self, payload: dict) -> None:
         if self.closed:
@@ -156,8 +162,25 @@ class RecordingSession:
             if ev.type == "segment":
                 saved = self.store.add_live_segment(self.meeting_id, ev.t0, ev.t1, ev.text)
                 await self.send({"type": "segment", "segment": {k: saved[k] for k in ("id", "idx", "t0", "t1", "text")}})
+                self._labels = [t for t in self._labels if not t.done()]
+                self._labels.append(asyncio.create_task(self._label(saved)))
             else:
                 await self.send({"type": "partial", "t0": ev.t0, "t1": ev.t1, "text": ev.text})
+
+    def _speaker_for(self, seg: dict) -> dict:
+        emb = None
+        if self.embedder is not None and seg["t1"] - seg["t0"] >= MIN_EMBED_S:
+            audio = read_audio(self.writer.path, seg["t0"], seg["t1"])
+            emb = self.embedder.embed(audio, seg["t0"], seg["t1"])
+        return self.tracker.classify(seg, emb)
+
+    async def _label(self, seg: dict) -> None:
+        """문장의 임시 화자를 정해 알려 준다 (문장은 먼저 보내고 화자는 조금 뒤에)."""
+        try:
+            labels = await asyncio.get_running_loop().run_in_executor(_spk_executor, self._speaker_for, seg)
+        except Exception:  # noqa: BLE001 - 화자를 못 정해도 기록은 그대로
+            return
+        await self.send({"type": "speaker", "segment": labels})
 
     async def flush(self) -> None:
         """남은 오디오를 모두 확정한다 (일시정지/종료 시)."""
@@ -169,6 +192,8 @@ class RecordingSession:
         if self._engine_ready():
             self._task = asyncio.create_task(self._step(force=True))
             await self._task
+        if self._labels:
+            await asyncio.gather(*self._labels, return_exceptions=True)
 
     def close(self) -> float:
         self.writer.close()
@@ -280,6 +305,10 @@ async def handle_recording(
             sessions.pop(meeting_id, None)
             keep_awake.release()
             holder.mark_used()
+            try:
+                session.tracker.learn_voices()  # 참여자 목소리를 기억해 다음 회의에서 알아본다
+            except Exception:  # noqa: BLE001
+                pass
             store.update_meeting(meeting_id, duration=duration, status="recorded")
             # 녹음이 끝나거나 끊긴 시각 → 다시 이어서 녹음하면 그 사이를 쉬는 시간으로 표시
             mark_paused(store, meeting_id, duration, time.time())

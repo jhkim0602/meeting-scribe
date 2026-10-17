@@ -242,6 +242,10 @@ function openSocket(s: Session, query: string): Promise<Ready> {
         case 'segment':
           if (here) st.addLiveSegment(msg.segment as Unit)
           break
+        case 'speaker':
+          // 문장의 임시 화자는 문장보다 조금 뒤에 온다
+          if (here) st.applySpeakerChanges([msg.segment])
+          break
         case 'partial':
           if (here) st.setPartial(msg.text ? { t0: msg.t0, t1: msg.t1, text: msg.text } : null)
           break

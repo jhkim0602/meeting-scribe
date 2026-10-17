@@ -34,7 +34,7 @@ def learn_from_meeting(store: Store, meeting_id: str) -> int:
     for label, vec in embs.items():
         name = (names.get(label) or "").strip()
         if name:
-            store.set_voice_sample(meeting_id, label, name, vec)
+            store.set_voice_sample(meeting_id, label, name, vec, space="diar")
             n += 1
         else:
             store.delete_voice_sample(meeting_id, label)
@@ -43,7 +43,7 @@ def learn_from_meeting(store: Store, meeting_id: str) -> int:
 
 def suggest(store: Store, meeting_id: str, embeddings: dict, names: dict) -> dict:
     """이름 없는 화자마다 가장 비슷한 기억된 목소리. {라벨: {name, score}}"""
-    samples = [s for s in store.list_voice_samples() if s["meeting_id"] != meeting_id]
+    samples = [s for s in store.list_voice_samples() if s["meeting_id"] != meeting_id and s.get("space", "diar") == "diar"]
     if not samples or not embeddings:
         return {}
     # 같은 이름의 여러 회의 목소리는 평균을 낸다

@@ -5,6 +5,7 @@ import { deleteLater } from '../lib/annActions'
 import { useStore } from '../lib/store'
 import { fmtDate, fmtDuration } from '../lib/time'
 import { Floating } from './Floating'
+import { ParticipantsProp } from './Participants'
 
 const STATUS: Record<string, { label: string; tone: string }> = {
   empty: { label: '녹음 전', tone: 'gray' },
@@ -118,7 +119,8 @@ export function PageHeader() {
         <div className="props">
           <span className="prop"><CalendarDays size={14} />{fmtDate(meeting.created_at)}</span>
           <span className="prop"><Clock3 size={14} />{duration ? fmtDuration(duration) : '0분'}</span>
-          {final && <span className="prop"><Users size={14} />화자 {final.speakers.length}명</span>}
+          <ParticipantsProp />
+          {final && !(meeting.participants || []).length && <span className="prop"><Users size={14} />화자 {final.speakers.length}명</span>}
           {meeting.original_name && <span className="prop"><FileAudio size={14} />{meeting.original_name}</span>}
         </div>
       </div>

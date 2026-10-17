@@ -83,7 +83,7 @@ function AnnList({ anns, onClose, rect, view, meetingId }: { anns: Annotation[];
 }
 
 /** 지난 회의에서 이름 붙인 목소리와 비슷하면 이름을 제안한다. 누르면 그 이름으로 정한다. */
-function VoiceChip({ meetingId, label, name }: { meetingId: string; label: string; name: string }) {
+function VoiceChip({ meetingId, label, name, fromLive, score }: { meetingId: string; label: string; name: string; fromLive?: boolean; score?: number }) {
   const accept = async () => {
     const st = useStore.getState()
     const names = st.meeting?.speakers || {}
@@ -92,7 +92,13 @@ function VoiceChip({ meetingId, label, name }: { meetingId: string; label: strin
     st.toast(`${name}(으)로 정했어요. 목소리를 더 잘 기억할게요.`, 'success')
   }
   return (
-    <button className="voice-chip" onClick={accept} title={`지난 회의에서 "${name}"(으)로 이름 붙인 목소리와 비슷해요. 누르면 이 이름으로 정해요.`}>
+    <button
+      className="voice-chip"
+      onClick={accept}
+      title={fromLive
+        ? `회의 중 이 화자의 말 가운데 ${Math.round((score || 0) * 100)}%를 "${name}"(으)로 골랐어요. 누르면 이 이름으로 정해요.`
+        : `지난 회의에서 "${name}"(으)로 이름 붙인 목소리와 비슷해요. 누르면 이 이름으로 정해요.`}
+    >
       {name}?
     </button>
   )
@@ -358,7 +364,9 @@ export function TranscriptPane() {
                     {final.speakers.length ? final.speakers.map((sp) => (
                       <span key={sp} className="legend-item">
                         <SpeakerLabel label={sp} compact />
-                        {final.speaker_suggestions?.[sp] && <VoiceChip meetingId={meeting.id} label={sp} name={final.speaker_suggestions[sp].name} />}
+                        {final.speaker_suggestions?.[sp] && (
+                          <VoiceChip meetingId={meeting.id} label={sp} name={final.speaker_suggestions[sp].name} fromLive={final.speaker_suggestions[sp].from === 'live'} score={final.speaker_suggestions[sp].score} />
+                        )}
                       </span>
                     )) : <span className="muted">화자 구분 없음</span>}
                   </div>

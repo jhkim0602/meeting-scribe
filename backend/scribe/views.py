@@ -111,7 +111,13 @@ class Views:
     def live_view(self, meeting_id: str) -> dict:
         idx = self.live_index(meeting_id)
         anns = self.resolve(self.store.list_annotations(meeting_id), idx, "live", 0)
-        return {"units": idx.units, "annotations": anns}
+        # 임시 화자는 자주 바뀌므로 색인과 따로 붙인다
+        spk = {r["id"]: r for r in self.store.list_live_speakers(meeting_id)}
+        units = []
+        for u in idx.units:
+            r = spk.get(u["id"]) or {}
+            units.append(dict(u, speaker=r.get("speaker"), speaker_auto=r.get("speaker_auto"), speaker_src=r.get("speaker_src"), speaker_conf=r.get("speaker_conf")))
+        return {"units": units, "annotations": anns}
 
     def final_view(self, meeting_id: str) -> Optional[dict]:
         idx, version, final = self.final_index(meeting_id)
@@ -120,7 +126,14 @@ class Views:
         anns = self.resolve(self.store.list_annotations(meeting_id), idx, "final", version)
         data = final["data"]
         meeting = self.store.get_meeting(meeting_id) or {}
-        suggestions = suggest(self.store, meeting_id, data.get("speaker_embeddings") or {}, meeting.get("speakers") or {})
+        names = meeting.get("speakers") or {}
+        suggestions = suggest(self.store, meeting_id, data.get("speaker_embeddings") or {}, names)
+        # 회의 중 고른 화자가 애매하게 겹치면(40~60%) 그 이름을 먼저 제안한다
+        taken = {v for v in names.values() if v}
+        for label, hit in (data.get("speaker_from_live") or {}).items():
+            if not names.get(label) and hit["name"] not in taken:
+                suggestions = {k: v for k, v in suggestions.items() if v["name"] != hit["name"]}
+                suggestions[label] = {"name": hit["name"], "score": hit["share"], "from": "live"}
         return {
             "speaker_suggestions": suggestions,
             "version": version,

@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { api, type Annotation, type AppSettings, type ResolvedPos, type FinalView, type Health, type Job, type LiveView, type Meeting, type MeetingSummary, type Unit } from './api'
+import { api, type Annotation, type AppSettings, type ResolvedPos, type SpeakerChange, type FinalView, type Health, type Job, type LiveView, type Meeting, type MeetingSummary, type Unit } from './api'
 
 export type Tab = 'live' | 'final' | 'summary'
 export type RecStatus = 'idle' | 'connecting' | 'recording' | 'paused' | 'stopping'
@@ -81,6 +81,8 @@ interface State {
   refreshFinal: () => Promise<void>
   refreshViews: () => Promise<void>
   addLiveSegment: (u: Unit) => void
+  /** 실시간 문장의 임시 화자 바꾸기 (서버가 정한 것, 사용자가 고른 것) */
+  applySpeakerChanges: (changes: SpeakerChange[]) => void
   /** 서버가 돌려준 항목 하나를 두 화면에 바꿔 끼운다 (전체를 다시 받지 않는다) */
   upsertAnnotation: (a: Annotation) => void
   removeAnnotation: (id: string) => void
@@ -193,6 +195,19 @@ export const useStore = create<State>((set, get) => ({
     if (!live) return
     if (live.units.some((x) => x.id === u.id)) return
     set({ live: { ...live, units: [...live.units, u] } })
+  },
+  applySpeakerChanges: (changes) => {
+    const live = get().live
+    if (!live || !changes.length) return
+    const by = new Map(changes.map((c) => [c.id, c]))
+    let hit = false
+    const units = live.units.map((u) => {
+      const c = by.get(u.id)
+      if (!c) return u
+      hit = true
+      return { ...u, speaker: c.speaker, speaker_auto: c.speaker_auto, speaker_src: c.speaker_src, speaker_conf: c.speaker_conf }
+    })
+    if (hit) set({ live: { ...live, units } })
   },
   upsertAnnotation: (a) => {
     const { live, final, selectedId } = get()

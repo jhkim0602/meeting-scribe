@@ -42,7 +42,17 @@ def main() -> int:
         except Exception as exc:  # noqa: BLE001
             ok = False
             print(f"  실패: {exc}\n  https://huggingface.co/{PYANNOTE} 에서 약관에 동의했는지 확인해 주세요.")
-    elif not token:
+    try:
+        import importlib.util
+
+        if importlib.util.find_spec("pyannote.audio") is not None:
+            from .live_speakers import PyannoteEmbedder
+
+            print(f"↓ {PyannoteEmbedder.REPO} (실시간 임시 화자)")
+            snapshot_download(PyannoteEmbedder.REPO, token=token or None)
+    except Exception as exc:  # noqa: BLE001
+        print(f"  실시간 임시 화자 모델은 건너뜁니다: {exc}")
+    if not token:
         print("· HF_TOKEN이 없어 화자 분리 모델은 건너뜁니다 (.env에 HF_TOKEN을 넣으면 받을 수 있어요).")
     print("완료" if ok else "일부 실패")
     return 0 if ok else 1

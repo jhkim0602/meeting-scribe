@@ -63,9 +63,9 @@ async function main() {
 
   // 2) 직접 구분선 넣기
   await sleep(3000)
-  const unit = page.locator('.view-live .unit:not(.partial)').last()
+  const unit = page.locator('.view-live .utext').last()
   await unit.hover()
-  await unit.locator('.u-act[title^="이 문장 뒤에 구분선"]').click()
+  await page.locator('.view-live .u-actions .u-act[title^="이 문장 뒤에 구분선"]').click()
   await page.fill('.composer textarea', '2부')
   await page.keyboard.press('Enter')
   await sleep(700)
@@ -143,7 +143,7 @@ async function main() {
   await page.click('.modal.confirm button:has-text("녹음 종료")')
   await page.waitForSelector('.dock-player', { timeout: 30000 })
   await page.click('.tab:has-text("원본")')
-  await page.waitForSelector('.view-final .unit', { timeout: 60000 })
+  await page.waitForSelector('.view-final .utext', { timeout: 60000 })
   await sleep(800)
   const fdiv = await page.locator('.view-final .divider-row').count()
   check(fdiv >= 2, `원본에도 구분선 ${fdiv}개 표시`)

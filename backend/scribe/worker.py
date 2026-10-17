@@ -25,6 +25,7 @@ from .db import Store
 from .engines import make_diarizer, make_engine, repos_for, resolve_diarizer_kind
 from .engines.download import DownloadWatch
 from .engines.base import split_windows
+from .live_speakers import live_to_final_names
 from .merge import build_utterances
 from .storage import M4A
 
@@ -309,11 +310,21 @@ def run(job_id: str) -> int:
         if embeddings:
             # 화자별 목소리 특징: 이름을 붙이면 다음 회의에서 같은 목소리에 이름을 제안한다
             data["speaker_embeddings"] = {mapping[raw]: vec for raw, vec in embeddings.items() if raw in mapping}
+        parts = {p["id"]: p["name"] for p in meeting.get("participants") or []}
+        from_live = live_to_final_names(data["utterances"], store.list_live_speakers(mid), parts) if parts else {}
+        if from_live:
+            data["speaker_from_live"] = from_live
         version = store.save_final_version(mid, data, engine=describe_final(), diarizer=diar_name)
 
         speakers = dict(meeting.get("speakers") or {})
         for label in data["speakers"]:
             speakers.setdefault(label, "")
+        # 회의 중 고른 화자를 원본 화자 이름으로 (사용자가 원본에서 직접 붙인 이름은 그대로)
+        named = {v for v in speakers.values() if v}
+        for label, hit in from_live.items():
+            if hit["auto"] and not speakers.get(label) and hit["name"] not in named:
+                speakers[label] = hit["name"]
+                named.add(hit["name"])
         store.update_meeting(mid, status="ready", speakers=speakers)
         msg = "완료" + (" · " + " ".join(prog.notes) if prog.notes else "")
         store.update_job(job_id, status="done", phase="done", progress=1.0, message=msg, finished_at=time.time(), eta=0)
