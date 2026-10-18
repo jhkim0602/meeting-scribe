@@ -133,6 +133,27 @@ LEGEND = (
 )
 
 
+def record_source(views: Views, meeting: dict, version: str = "auto") -> dict:
+    """기록(원본이 있으면 원본, 없으면 실시간 기록)과 첨삭, 화자 이름표.
+    실시간 기록이면 회의 중 고른(또는 목소리로 추정한) 화자를 쓰고, 이름이 없는 목소리 묶음은 "화자 A(추정)"."""
+    speakers = dict(meeting.get("speakers") or {})
+    final = views.final_view(meeting["id"]) if version in ("auto", "final") else None
+    if final is not None and version != "live":
+        return {"units": final["units"], "annotations": final["annotations"], "speakers": speakers, "final": final,
+                "kind": f"원본 (후처리 v{final['version']}, 화자 구분)"}
+    lv = views.live_view(meeting["id"])
+    speakers = {p["id"]: p["name"] for p in meeting.get("participants") or []}
+    units = []
+    for u in lv["units"]:
+        who = u.get("speaker") if u.get("speaker") in speakers else (f"?{u['speaker_auto']}" if u.get("speaker_auto") else None)
+        if who and who.startswith("?"):
+            speakers[who] = f"화자 {who[1:]}(추정)"
+        units.append(dict(u, speaker=who))
+    has_spk = any(u["speaker"] for u in units)
+    return {"units": units, "annotations": lv["annotations"], "speakers": speakers, "final": None,
+            "kind": "실시간 기록 (회의 중 표시한 화자)" if has_spk else "실시간 기록 (화자 구분 없음)"}
+
+
 def meeting_markdown(
     views: Views,
     meeting_id: str,
@@ -147,25 +168,9 @@ def meeting_markdown(
     meeting = views.store.get_meeting(meeting_id, with_notes=True)
     if meeting is None:
         return None
-    speakers = meeting.get("speakers") or {}
-    final = views.final_view(meeting_id) if version in ("auto", "final") else None
-    use_final = final is not None and version != "live"
-    if use_final:
-        units, anns, kind = final["units"], final["annotations"], f"원본 (후처리 v{final['version']}, 화자 구분)"
-    else:
-        lv = views.live_view(meeting_id)
-        units, anns = lv["units"], lv["annotations"]
-        # 회의 중 고른(또는 목소리로 추정한) 화자. 이름이 없는 목소리 묶음은 "화자 A(추정)"
-        speakers = {p["id"]: p["name"] for p in meeting.get("participants") or []}
-        tagged = []
-        for u in units:
-            who = u.get("speaker") if u.get("speaker") in speakers else (f"?{u['speaker_auto']}" if u.get("speaker_auto") else None)
-            if who and who.startswith("?"):
-                speakers[who] = f"화자 {who[1:]}(추정)"
-            tagged.append(dict(u, speaker=who))
-        units = tagged
-        has_spk = any(u["speaker"] for u in units)
-        kind = "실시간 기록 (회의 중 표시한 화자)" if has_spk else "실시간 기록 (화자 구분 없음)"
+    src = record_source(views, meeting, version)
+    units, anns, speakers, kind, final = src["units"], src["annotations"], src["speakers"], src["kind"], src["final"]
+    use_final = final is not None
 
     created = _dt.datetime.fromtimestamp(meeting["created_at"]).strftime("%Y-%m-%d %H:%M")
     lines = [f"# {meeting['title'] or '제목 없는 회의'}", ""]

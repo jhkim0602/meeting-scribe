@@ -582,23 +582,38 @@ def export_md(meeting_id: str, version: str = "auto", download: int = 0) -> Resp
     return PlainTextResponse(md, media_type="text/markdown; charset=utf-8", headers=headers)
 
 
-@app.get("/api/meetings/{meeting_id}/minutes.html")
-def minutes(meeting_id: str, download: int = 0) -> Response:
-    """보기 좋은 회의록 (정보·요약·할 일·노트·메모). 받은 파일은 옆에 녹음 파일이 있으면 시각을 눌러 들을 수 있다."""
+def _doc_response(meeting_id: str, kind: str, download: int) -> Response:
+    """회의 문서(전사 기록·회의록) HTML. 앱에서 열면 위쪽에 전환·인쇄·받기 줄이 붙고,
+    받은 파일은 같은 폴더의 녹음 파일로 시각을 눌러 들을 수 있다."""
     import datetime as _dt
 
-    from .minutes import collect, render
+    from . import minutes, transcript_html
 
-    data = collect(store, views, meeting_id)
+    mod = transcript_html if kind == "transcript" else minutes
+    data = mod.collect(store, views, meeting_id)
     if data is None:
         raise HTTPException(404, "회의를 찾을 수 없습니다")
     path = _audio_path(meeting_id)
     if not download:
-        return HTMLResponse(render(data, audio_src=f"/api/meetings/{meeting_id}/audio" if path else None))
+        src = f"/api/meetings/{meeting_id}/audio" if path else None
+        return HTMLResponse(mod.render(data, audio_src=src, tools=minutes.tools_html(meeting_id, kind)))
     day = _dt.datetime.fromtimestamp(data["start"]).strftime("%Y-%m-%d")
-    name = re.sub(r'[\\/:*?"<>|]+', " ", f"{day} {data['title']} 회의록.html").strip()
-    headers = {"Content-Disposition": _attachment(name, f"{day} minutes.html")}
-    return HTMLResponse(render(data, audio_src=f"녹음{path.suffix}" if path else None), headers=headers)
+    label, ascii_label = ("전사 기록", "transcript") if kind == "transcript" else ("회의록", "minutes")
+    name = re.sub(r'[\\/:*?"<>|]+', " ", f"{day} {data['title']} {label}.html").strip()
+    headers = {"Content-Disposition": _attachment(name, f"{day} {ascii_label}.html")}
+    return HTMLResponse(mod.render(data, audio_src=f"녹음{path.suffix}" if path else None), headers=headers)
+
+
+@app.get("/api/meetings/{meeting_id}/transcript.html")
+def transcript_doc(meeting_id: str, download: int = 0) -> Response:
+    """전사 기록: 화자별 발언 위에 회의 중 메모·댓글·수정·강조가 제자리에"""
+    return _doc_response(meeting_id, "transcript", download)
+
+
+@app.get("/api/meetings/{meeting_id}/minutes.html")
+def minutes_doc(meeting_id: str, download: int = 0) -> Response:
+    """회의록: 정보·요약·할 일·노트·메모를 한 장으로"""
+    return _doc_response(meeting_id, "minutes", download)
 
 
 @app.get("/api/backup.zip")

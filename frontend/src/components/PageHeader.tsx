@@ -1,4 +1,4 @@
-import { CalendarDays, Clock3, Download, FileAudio, FileText, Mic, MoreHorizontal, PanelLeft, RefreshCw, Trash2, Users } from 'lucide-react'
+import { CalendarDays, Clock3, Download, FileAudio, FileText, Mic, MoreHorizontal, PanelLeft, RefreshCw, ScrollText, Trash2, Users } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api'
 import { deleteLater } from '../lib/annActions'
@@ -61,14 +61,14 @@ export function PageHeader() {
     }
   }
 
-  // 방금 쓴 노트까지 담기도록 저장을 마친 뒤 연다 (새 탭은 먼저 열어 두어야 팝업 차단에 안 걸린다)
-  const openMinutes = async (download: boolean) => {
+  // 방금 쓴 노트·메모까지 담기도록 저장을 마친 뒤 연다 (새 탭은 먼저 열어 두어야 팝업 차단에 안 걸린다).
+  // 인쇄와 파일로 받기는 열린 문서 위쪽에 있다.
+  const openDoc = async (kind: 'transcript' | 'minutes') => {
     setMenu(null)
-    const url = `/api/meetings/${meeting.id}/minutes.html${download ? '?download=1' : ''}`
-    const tab = download ? null : window.open('', '_blank')
+    const url = `/api/meetings/${meeting.id}/${kind}.html`
+    const tab = window.open('', '_blank')
     await bridges.notes?.flush().catch(() => undefined)
-    if (download) location.href = url
-    else if (tab) tab.location.href = url
+    if (tab) tab.location.href = url
     else window.open(url, '_blank')
   }
 
@@ -137,11 +137,11 @@ export function PageHeader() {
       </div>
       {menu && (
         <Floating rect={menu} onClose={() => setMenu(null)} className="menu">
-          <button className="menu-item" onClick={() => openMinutes(false)}>
-            <FileText size={15} />회의록 보기
+          <button className="menu-item" onClick={() => openDoc('transcript')}>
+            <ScrollText size={15} />전사 기록 보기
           </button>
-          <button className="menu-item" onClick={() => openMinutes(true)}>
-            <Download size={15} />회의록 파일로 받기 (.html)
+          <button className="menu-item" onClick={() => openDoc('minutes')}>
+            <FileText size={15} />회의록 보기
           </button>
           <a className="menu-item" href={`/api/meetings/${meeting.id}/export.md?download=1`} onClick={() => setMenu(null)}>
             <Download size={15} />Markdown으로 내보내기

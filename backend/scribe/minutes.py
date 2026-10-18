@@ -319,7 +319,7 @@ def collect(store: Store, views: Views, meeting_id: str) -> Optional[dict]:
 
 # ---------------- 그리기 ----------------
 
-def _facts(start: float, duration: float, place: str) -> str:
+def _facts(start: float, duration: float, place: str, extra: Optional[list[tuple[str, str]]] = None) -> str:
     a = _dt.datetime.fromtimestamp(start)
     b = a + _dt.timedelta(seconds=duration)
     mins = round(duration / 60)
@@ -331,6 +331,7 @@ def _facts(start: float, duration: float, place: str) -> str:
         cells.append(("시작", f"{a:%H:%M}"))
     if place:
         cells.append(("장소", _esc(place)))
+    cells += extra or []
     return "".join(f'<div class="fact"><dt>{k}</dt><dd>{v}</dd></div>' for k, v in cells)
 
 
@@ -378,7 +379,7 @@ ICON = {
 }
 
 
-def render(data: dict, audio_src: Optional[str] = None, generated: Optional[float] = None) -> str:
+def render(data: dict, audio_src: Optional[str] = None, generated: Optional[float] = None, tools: str = "") -> str:
     sections = parse_summary(data["summary"])
     people = data["participants"]
     lead_lines = _find(sections, "한 줄 요약", "한줄요약", "요약")
@@ -478,51 +479,68 @@ def render(data: dict, audio_src: Optional[str] = None, generated: Optional[floa
     if not body:
         body.append('<p class="empty">아직 정리된 내용이 없어요. 노트를 쓰거나 AI 요약을 만들면 여기에 담겨요.</p>')
 
-    attendees = ""
-    if people:
-        attendees = (f'<div class="attendees"><span class="lbl">참석자<b>{len(people)}</b></span>'
-                     f'<span class="people">{"".join(_person(p, i) for i, p in enumerate(people))}</span></div>')
     summary = f'<div class="summary"><span class="lbl">핵심 요약</span><p>{_inline_md(lead)}</p></div>' if lead else ""
+    return page(
+        data, brand=("회의록", "Meeting Minutes", "MN"), facts=_facts(data["start"], data["duration"], data["place"]),
+        body=summary + "".join(body), audio_src=audio_src, generated=generated, tools=tools,
+    )
 
+
+def attendees_html(people: list[str], label: str = "참석자") -> str:
+    if not people:
+        return ""
+    return (f'<div class="attendees"><span class="lbl">{label}<b>{len(people)}</b></span>'
+            f'<span class="people">{"".join(_person(p, i) for i, p in enumerate(people))}</span></div>')
+
+
+def tools_html(meeting_id: str, active: str) -> str:
+    """앱에서 열었을 때만 보이는 위쪽 줄: 전사 기록 ↔ 회의록, 인쇄, 파일로 받기 (받은 파일·인쇄에는 없음)"""
+    tabs = [("transcript", "전사 기록"), ("minutes", "회의록")]
+    seg = "".join(f'<a href="/api/meetings/{_esc(meeting_id)}/{k}.html" class="{"on" if k == active else ""}">{v}</a>' for k, v in tabs)
+    return (f'<nav class="apptools"><div class="seg">{seg}</div><span class="sp"></span>'
+            f'<button type="button" onclick="window.print()">인쇄 · PDF</button>'
+            f'<a class="btn" href="/api/meetings/{_esc(meeting_id)}/{active}.html?download=1">파일로 받기</a></nav>')
+
+
+def page(data: dict, *, brand: tuple[str, str, str], facts: str, body: str, audio_src: Optional[str] = None,
+         generated: Optional[float] = None, tools: str = "", people_label: str = "참석자", extra_css: str = "",
+         extra_js: str = "", wide: bool = False) -> str:
+    """회의록·전사 기록이 함께 쓰는 문서 틀: 문서 머리, 제목, 정보 띠, 참석자, 본문, 바닥글, 듣기 막대"""
+    ko, en, prefix = brand
     gen = _dt.datetime.fromtimestamp(generated or _dt.datetime.now().timestamp())
-    doc_no = f"MN-{_dt.datetime.fromtimestamp(data['start']):%Y%m%d}-{data['id'][-4:].upper()}"
+    doc_no = f"{prefix}-{_dt.datetime.fromtimestamp(data['start']):%Y%m%d}-{data['id'][-4:].upper()}"
     player = ""
     if audio_src:
         player = (f'<div class="player" id="player" hidden><button type="button" class="pp" id="pp" aria-label="재생">{ICON["play"]}</button>'
                   f'<span class="pl-label">녹음</span><span class="pl-time" id="pt">00:00</span>'
                   f'<audio id="au" preload="metadata" src="{_esc(audio_src)}"></audio></div>')
-
+    cls = " ".join(c for c in ("paper", "has-audio" if audio_src else "", "wide" if wide else "") if c)
     return f"""<!doctype html>
 <html lang="ko">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{_esc(data["title"])} · 회의록</title>
+<title>{_esc(data["title"])} · {ko}</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
-<style>{CSS}</style>
+<style>{CSS}{extra_css}</style>
 </head>
-<body>
-<main class="paper{" has-audio" if audio_src else ""}">
-  <div class="doc-top"><span class="brand">회의록<span class="en">Meeting Minutes</span></span><span class="doc-no">{doc_no}</span></div>
+<body{' class="in-app"' if tools else ""}>
+{tools}
+<main class="{cls}">
+  <div class="doc-top"><span class="brand">{ko}<span class="en">{en}</span></span><span class="doc-no">{doc_no}</span></div>
   <header class="head">
     <h1>{_esc(data["title"])}</h1>
-    <dl class="facts">{_facts(data["start"], data["duration"], data["place"])}</dl>
-    {attendees}
+    <dl class="facts">{facts}</dl>
+    {attendees_html(data["participants"], people_label)}
   </header>
-  {summary}
-  {"".join(body)}
+  {body}
   <footer class="foot"><span>회의 노트로 작성</span><span>{gen.year}. {gen.month}. {gen.day}. {gen:%H:%M} 생성</span></footer>
   {player}
 </main>
-<script>{JS}</script>
+<script>{JS}{extra_js}</script>
 </body>
 </html>
 """
-
-
-def minutes_html(store: Store, views: Views, meeting_id: str, audio_src: Optional[str] = None) -> Optional[str]:
-    data = collect(store, views, meeting_id)
-    return render(data, audio_src=audio_src) if data else None
 
 
 CSS = r"""
@@ -544,6 +562,17 @@ body {
   border-radius: 4px; box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.04), 0 2px 4px rgba(15, 23, 42, 0.03), 0 12px 32px rgba(15, 23, 42, 0.06);
 }
 .paper.has-audio { padding-bottom: 92px; }
+.paper.wide { max-width: 1100px; }
+
+/* 앱에서 열었을 때 위쪽 줄 */
+.apptools { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; gap: 8px; height: 52px; padding: 0 20px; background: rgba(238, 240, 243, 0.86); backdrop-filter: saturate(1.4) blur(10px); -webkit-backdrop-filter: saturate(1.4) blur(10px); }
+.apptools .sp { flex: 1; }
+.apptools .seg { display: inline-flex; padding: 3px; background: #e2e5ea; border-radius: 8px; }
+.apptools .seg a { padding: 4px 14px; border: 0; border-radius: 6px; font-size: 13px; font-weight: 500; color: var(--muted); }
+.apptools .seg a.on { background: var(--paper); color: var(--ink); box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08); }
+.apptools button, .apptools .btn { display: inline-flex; align-items: center; height: 32px; padding: 0 12px; border: 1px solid var(--line); border-radius: 7px; background: var(--paper); color: var(--ink); font-family: inherit; font-size: 13px; font-weight: 500; line-height: 1; cursor: pointer; }
+.apptools button:hover, .apptools .btn:hover { border-color: #c9ced6; }
+.in-app .paper { margin-top: 8px; }
 
 /* 문서 머리 */
 .doc-top { display: flex; justify-content: space-between; align-items: center; padding-bottom: 12px; border-bottom: 2px solid var(--ink); font-size: 12px; }
@@ -564,8 +593,8 @@ h1 { margin: 0 0 22px; font-size: 27px; line-height: 1.32; font-weight: 700; let
 .people { display: flex; flex-wrap: wrap; gap: 6px 16px; }
 .person { display: inline-flex; align-items: center; gap: 7px; font-weight: 500; color: var(--ink); white-space: nowrap; }
 .av { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; font-size: 9.5px; font-weight: 700; letter-spacing: -0.04em; color: #fff; }
-.p0 .av { background: #2f45b8; } .p1 .av { background: #b4532a; } .p2 .av { background: #1f7a4d; }
-.p3 .av { background: #6d4bc4; } .p4 .av { background: #a8395f; } .p5 .av { background: #1f6f86; }
+.p0 .av, .av.p0 { background: #2f45b8; } .p1 .av, .av.p1 { background: #b4532a; } .p2 .av, .av.p2 { background: #1f7a4d; }
+.p3 .av, .av.p3 { background: #6d4bc4; } .p4 .av, .av.p4 { background: #a8395f; } .p5 .av, .av.p5 { background: #1f6f86; }
 
 /* 핵심 요약 */
 .summary { margin: 26px 0 0; padding: 18px 22px 19px; background: var(--soft); border-radius: 6px; }
@@ -696,7 +725,7 @@ a { color: var(--accent); text-decoration: none; border-bottom: 1px solid rgba(4
   body { background: #fff; font-size: 10pt; }
   .av, .tick, .box.on, .tag { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .paper { max-width: none; margin: 0; padding: 0; box-shadow: none; border-radius: 0; }
-  .player { display: none !important; }
+  .player, .apptools { display: none !important; }
   .sec { margin-top: 26px; }
   .summary { background: none; border: 1px solid var(--line); }
   .t { border: 0; padding: 0 2px; height: auto; color: var(--faint); }

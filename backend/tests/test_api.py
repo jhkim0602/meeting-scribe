@@ -652,10 +652,45 @@ def test_minutes_html_has_summary_notes_and_marks_but_no_transcript(client):
     assert "숫자 &lt;확인&gt;" in h and "여기 중요" in h
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in h and "<script>alert" not in h
     assert units[0]["text"] not in h and h.count(u["text"]) == 1  # 댓글 인용 말고는 받아 적은 문장이 없다
-    assert f"/api/meetings/{mid}/audio" in h
+    assert f"/api/meetings/{mid}/audio" in h and 'class="apptools"' in h  # 앱에서 열면 전환·인쇄·받기 줄
 
     d = client.get(f"/api/meetings/{mid}/minutes.html?download=1")
+    assert 'class="apptools"' not in d.text
     assert "attachment" in d.headers["content-disposition"] and "%ED%9A%8C%EC%9D%98%EB%A1%9D.html" in d.headers["content-disposition"]
     assert 'src="녹음.wav"' in d.text  # 받은 파일은 같은 폴더의 녹음 파일을 쓴다
     assert client.get("/api/meetings/nope/minutes.html").status_code == 404
+    client.post(f"/api/meetings/{mid}/cancel")
+
+
+def test_transcript_html_is_a_call_log_with_marks_in_place(client):
+    """전사 기록: 화자별 발언이 이어지고, 메모는 그 순간에, 댓글은 번호와 옆 칸에, 수정은 줄긋기 + 고친 말로."""
+    mid = client.post("/api/meetings", json={"title": "통화 기록"}).json()["id"]
+    minji = client.put(f"/api/meetings/{mid}/participants", json={"participants": [{"name": "김민지"}]}).json()["participants"][0]["id"]
+    _record(client, mid, _speech_pcm([("s", 2.5), ("n", 1.0), ("s", 2.5), ("n", 1.0)]), messages=[{"type": "pause"}])
+    units = client.get(f"/api/meetings/{mid}/live").json()["units"]
+    u0, u1 = units[0], units[1]
+    client.post(f"/api/meetings/{mid}/live/speaker", json={"segment_ids": [u0["id"]], "participant_id": minji})
+    w0 = u0["text"].split(" ")[0]
+    client.post(f"/api/meetings/{mid}/annotations", json={
+        "kind": "edit", "view": "live", "replacement": "고친<말>",
+        "start": {"unit": u0["id"], "offset": 0}, "end": {"unit": u0["id"], "offset": len(w0)}})
+    client.post(f"/api/meetings/{mid}/annotations", json={
+        "kind": "comment", "view": "live", "body": "확인 <필요>",
+        "start": {"unit": u1["id"], "offset": 0}, "end": {"unit": u1["id"], "offset": len(u1["text"])}})
+    client.post(f"/api/meetings/{mid}/annotations", json={"kind": "memo", "view": "live", "t": u0["t1"] + 0.01, "after": u0["id"], "body": "여기서 결론"})
+
+    r = client.get(f"/api/meetings/{mid}/transcript.html")
+    assert r.status_code == 200
+    h = r.text
+    rest0 = u0["text"][len(w0):].strip()
+    assert rest0[:6] in h and u1["text"][:6] in h  # 받아 적은 문장이 모두 나온다
+    assert '<span class="name">김민지</span>' in h
+    assert f"<del>{w0}</del><ins>고친&lt;말&gt;</ins>" in h
+    body = h[h.index('<div class="transcript'):]
+    assert body.index(f'id="u-{u0["id"]}"') < body.index("여기서 결론") < body.index(f'id="u-{u1["id"]}"')  # 메모는 그 순간에
+    assert '<mark class="cm" data-c="1">' in h and 'id="c-1"' in h and "확인 &lt;필요&gt;" in h
+    assert "메모·댓글 모아 보기" in h and 'class="apptools"' in h
+    d = client.get(f"/api/meetings/{mid}/transcript.html?download=1")
+    assert "%EC%A0%84%EC%82%AC%20%EA%B8%B0%EB%A1%9D.html" in d.headers["content-disposition"]  # "전사 기록.html"
+    assert 'class="apptools"' not in d.text and 'src="녹음.wav"' in d.text
     client.post(f"/api/meetings/{mid}/cancel")
