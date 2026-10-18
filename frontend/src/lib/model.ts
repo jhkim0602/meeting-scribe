@@ -1,7 +1,5 @@
-// 기록(unit) + 첨삭(annotation) → 화면에 그릴 조각 목록
+// 기록(unit) + 메모·댓글·강조(annotation) → 화면에 그릴 조각 목록
 import type { Annotation, Unit } from './api'
-
-export type View = 'live' | 'final'
 
 export interface RangeAnn {
   s: number
@@ -10,11 +8,11 @@ export interface RangeAnn {
   isEnd: boolean
 }
 
-export type EditDisplay = 'proof' | 'applied' | 'plain' | 'same' | 'clean-applied' | 'clean-orig'
-
-export type Piece =
-  | { type: 'text'; o: number; text: string; anns: Annotation[] }
-  | { type: 'edit'; o: number; text: string; ann: Annotation; display: EditDisplay; anns: Annotation[] }
+export interface Piece {
+  o: number
+  text: string
+  anns: Annotation[]
+}
 
 export interface RenderModel {
   perUnit: Map<string, RangeAnn[]>
@@ -26,7 +24,7 @@ export interface RenderModel {
   unplaced: Annotation[]
 }
 
-export function isRange(ann: Annotation): ann is Annotation & { pos: { start: { unit: string; offset: number }; end: { unit: string; offset: number }; approx: boolean; score: number; text: string } } {
+export function isRange(ann: Annotation): ann is Annotation & { pos: { start: { unit: string; offset: number }; end: { unit: string; offset: number }; text: string } } {
   return !!ann.pos && 'start' in ann.pos
 }
 
@@ -80,45 +78,20 @@ export function buildModel(units: Unit[], annotations: Annotation[]): RenderMode
   return { perUnit, memosAfter, memosBefore, dividersAfter, dividersBefore, commentEnds, unplaced }
 }
 
-function editDisplay(ann: Annotation, view: View, showMarks: boolean): EditDisplay {
-  if (view === 'live') return showMarks ? 'applied' : 'clean-applied'
-  if (!showMarks) return ann.status === 'accepted' ? 'clean-applied' : 'clean-orig'
-  if (ann.status === 'accepted') return 'applied'
-  if (ann.status === 'dismissed') return 'plain'
-  if (ann.match === 'same') return 'same'
-  return 'proof'
-}
-
-export function piecesFor(text: string, ranges: RangeAnn[] | undefined, view: View, showMarks: boolean): Piece[] {
-  if (!ranges || ranges.length === 0) return [{ type: 'text', o: 0, text, anns: [] }]
-  // 수정은 겹치지 않게 하나씩만 고른다
-  const edits: RangeAnn[] = []
-  for (const r of [...ranges].filter((r) => r.ann.kind === 'edit').sort((a, b) => a.s - b.s || b.e - a.e)) {
-    if (edits.length && r.s < edits[edits.length - 1].e) continue
-    edits.push(r)
-  }
-  const marks = showMarks ? ranges.filter((r) => r.ann.kind === 'comment' || r.ann.kind === 'highlight') : []
+export function piecesFor(text: string, ranges: RangeAnn[] | undefined, showMarks: boolean): Piece[] {
+  const marks = showMarks && ranges ? ranges.filter((r) => r.ann.kind === 'comment' || r.ann.kind === 'highlight') : []
+  if (!marks.length) return [{ o: 0, text, anns: [] }]
   const bounds = new Set<number>([0, text.length])
-  for (const r of [...edits, ...marks]) {
+  for (const r of marks) {
     bounds.add(Math.max(0, Math.min(text.length, r.s)))
     bounds.add(Math.max(0, Math.min(text.length, r.e)))
   }
   const sorted = [...bounds].sort((a, b) => a - b)
   const pieces: Piece[] = []
-  let i = 0
-  while (i < sorted.length - 1) {
+  for (let i = 0; i < sorted.length - 1; i++) {
     const a = sorted[i]
-    const edit = edits.find((r) => r.s <= a && a < r.e)
-    if (edit) {
-      const covering = marks.filter((m) => m.s < edit.e && m.e > edit.s).map((m) => m.ann)
-      pieces.push({ type: 'edit', o: edit.s, text: text.slice(edit.s, edit.e), ann: edit.ann, display: editDisplay(edit.ann, view, showMarks), anns: covering })
-      while (i < sorted.length - 1 && sorted[i] < edit.e) i++
-      continue
-    }
     const b = sorted[i + 1]
-    const anns = marks.filter((m) => m.s <= a && m.e >= b).map((m) => m.ann)
-    pieces.push({ type: 'text', o: a, text: text.slice(a, b), anns })
-    i++
+    pieces.push({ o: a, text: text.slice(a, b), anns: marks.filter((m) => m.s <= a && m.e >= b).map((m) => m.ann) })
   }
   return pieces
 }

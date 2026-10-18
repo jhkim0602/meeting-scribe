@@ -1,4 +1,4 @@
-import { CalendarDays, Clock3, Download, FileAudio, FileText, Mic, MoreHorizontal, PanelLeft, RefreshCw, ScrollText, Trash2, Users } from 'lucide-react'
+import { CalendarDays, Clock3, Download, FileAudio, FileText, Mic, MoreHorizontal, PanelLeft, RefreshCw, ScrollText, Trash2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api'
 import { deleteLater } from '../lib/annActions'
@@ -11,15 +11,14 @@ const STATUS: Record<string, { label: string; tone: string }> = {
   empty: { label: '녹음 전', tone: 'gray' },
   recording: { label: '녹음 중', tone: 'red' },
   paused: { label: '일시정지', tone: 'amber' },
-  recorded: { label: '원본 전', tone: 'amber' },
-  processing: { label: '원본 만드는 중', tone: 'blue' },
-  ready: { label: '원본 완료', tone: 'green' },
+  recorded: { label: '녹음 완료', tone: 'gray' },
+  processing: { label: '원본 스크립트 만드는 중', tone: 'blue' },
+  ready: { label: '완료', tone: 'green' },
   error: { label: '오류', tone: 'red' },
 }
 
 export function PageHeader() {
   const meeting = useStore((s) => s.meeting)!
-  const final = useStore((s) => s.final)
   const rec = useStore((s) => s.rec)
   const sidebarOpen = useStore((s) => s.sidebarOpen)
   const set = useStore((s) => s.set)
@@ -30,7 +29,9 @@ export function PageHeader() {
   const [menu, setMenu] = useState<DOMRect | null>(null)
   const titleRef = useRef<HTMLTextAreaElement>(null)
   const recordingHere = rec.status !== 'idle' && rec.meetingId === meeting.id
-  const status = recordingHere ? (rec.status === 'paused' ? STATUS.paused : STATUS.recording) : STATUS[meeting.status] || STATUS.empty
+  const status = recordingHere
+    ? (rec.status === 'paused' ? STATUS.paused : STATUS.recording)
+    : meeting.status === 'processing' && meeting.source === 'upload' ? { label: '받아 적는 중', tone: 'blue' } : STATUS[meeting.status] || STATUS.empty
   const duration = recordingHere ? rec.elapsed : meeting.duration
 
   useEffect(() => setTitle(meeting.title), [meeting.id, meeting.title])
@@ -55,7 +56,6 @@ export function PageHeader() {
       await api.process(meeting.id)
       await refreshMeeting()
       await loadMeetings()
-      useStore.getState().setTab('final')
     } catch (e) {
       toast((e as Error).message, 'error')
     }
@@ -131,7 +131,6 @@ export function PageHeader() {
           <span className="prop"><CalendarDays size={14} />{fmtDate(meeting.created_at)}</span>
           <span className="prop"><Clock3 size={14} />{duration ? fmtDuration(duration) : '0분'}</span>
           <ParticipantsProp />
-          {final && !(meeting.participants || []).length && <span className="prop"><Users size={14} />화자 {final.speakers.length}명</span>}
           {meeting.original_name && <span className="prop"><FileAudio size={14} />{meeting.original_name}</span>}
         </div>
         <ParticipantDetails />
@@ -147,8 +146,13 @@ export function PageHeader() {
           <a className="menu-item" href={`/api/meetings/${meeting.id}/export.md?download=1`} onClick={() => setMenu(null)}>
             <Download size={15} />Markdown으로 내보내기
           </a>
+          {meeting.final_version > 0 && (
+            <a className="menu-item" href={`/api/meetings/${meeting.id}/script.md?download=1`} onClick={() => setMenu(null)} title="녹음을 마친 뒤 큰 모델로 다시 받아 적고 화자를 나눈 참고용 기록 (회의 기록과 섞지 않아요)">
+              <FileAudio size={15} />원본 스크립트 받기 (.md)
+            </a>
+          )}
           <button className="menu-item" onClick={reprocess} disabled={!meeting.has_audio || recordingHere || meeting.status === 'processing'}>
-            <RefreshCw size={15} />원본 다시 만들기
+            <RefreshCw size={15} />{meeting.source === 'upload' && !meeting.final_version ? '다시 받아 적기' : '원본 스크립트 다시 만들기'}
           </button>
           <div className="menu-sep" />
           <button className="menu-item danger" onClick={remove} disabled={recordingHere} title={recordingHere ? '녹음을 마친 뒤 지울 수 있어요' : undefined}><Trash2 size={15} />회의 삭제</button>

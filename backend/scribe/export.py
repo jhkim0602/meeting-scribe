@@ -1,4 +1,5 @@
-"""회의 전체(전사 + 첨삭 + 노트 + 요약)를 Markdown으로 만든다. AI(MCP)와 내보내기에서 사용."""
+"""회의 전체(기록 + 메모·댓글 + 노트 + 요약)를 Markdown으로 만든다. AI(MCP)와 내보내기에서 사용.
+원본 스크립트(후처리 결과)는 참고용으로 따로 만든다 (script_markdown)."""
 
 from __future__ import annotations
 
@@ -8,7 +9,7 @@ from typing import Optional
 from .textutil import fmt_time
 from .views import Views, speaker_name
 
-KIND_LABEL = {"comment": "댓글", "memo": "메모", "edit": "수정", "highlight": "강조", "divider": "구분선"}
+KIND_LABEL = {"comment": "댓글", "memo": "메모", "highlight": "강조", "divider": "구분선"}
 
 
 def divider_text(ann: dict) -> str:
@@ -57,15 +58,7 @@ def _render_unit_text(text: str, ranges: list[tuple[int, int, dict, bool]], note
         out.append(text[cur:s])
         piece = text[s:e]
         kind = ann["kind"]
-        if kind == "edit":
-            status = ann.get("status")
-            if status == "dismissed" or ann.get("match") == "same":
-                out.append(piece)
-            elif status == "accepted":
-                out.append(ann.get("replacement") or "")
-            else:
-                out.append(f"~~{piece}~~{{수정: {ann.get('replacement') or ''}}}")
-        elif kind == "highlight":
+        if kind == "highlight":
             out.append(f"=={piece}==")
         elif kind == "comment":
             if last:
@@ -127,20 +120,15 @@ def transcript_markdown(
 
 
 LEGEND = (
-    "표기: ==강조== / ==댓글 단 부분==[c1] 아래에 댓글 / ~~원문~~{수정: 사용자가 고친 문장} / "
-    "> [메모 시각] 사용자가 회의 중 남긴 메모 / ──── 구분선 ──── 쉬는 시간이나 회의 단락. "
-    "사용자의 메모·댓글·수정은 중요한 신호이므로 우선 반영할 것."
+    "표기: ==강조== / ==댓글 단 부분==[c1] 아래에 댓글 / > [메모 시각] 사용자가 회의 중 남긴 메모 / "
+    "──── 구분선 ──── 쉬는 시간이나 회의 단락. 기록의 글자는 사용자가 직접 고친 것이 반영되어 있다. "
+    "사용자의 메모·댓글은 중요한 신호이므로 우선 반영할 것."
 )
 
 
-def record_source(views: Views, meeting: dict, version: str = "auto") -> dict:
-    """기록(원본이 있으면 원본, 없으면 실시간 기록)과 첨삭, 화자 이름표.
-    실시간 기록이면 회의 중 고른(또는 목소리로 추정한) 화자를 쓰고, 이름이 없는 목소리 묶음은 "화자 A(추정)"."""
-    speakers = dict(meeting.get("speakers") or {})
-    final = views.final_view(meeting["id"]) if version in ("auto", "final") else None
-    if final is not None and version != "live":
-        return {"units": final["units"], "annotations": final["annotations"], "speakers": speakers, "final": final,
-                "kind": f"원본 (후처리 v{final['version']}, 화자 구분)"}
+def record_source(views: Views, meeting: dict) -> dict:
+    """회의 기록과 메모·댓글, 화자 이름표. 회의 중 고른(또는 목소리로 추정한) 화자를 쓰고,
+    이름이 없는 목소리 묶음은 "화자 A(추정)"."""
     lv = views.live_view(meeting["id"])
     speakers = {p["id"]: p["name"] for p in meeting.get("participants") or []}
     units = []
@@ -149,16 +137,15 @@ def record_source(views: Views, meeting: dict, version: str = "auto") -> dict:
         if who and who.startswith("?"):
             speakers[who] = f"화자 {who[1:]}(추정)"
         units.append(dict(u, speaker=who))
-    has_spk = any(u["speaker"] for u in units)
-    return {"units": units, "annotations": lv["annotations"], "speakers": speakers, "final": None,
-            "kind": "실시간 기록 (회의 중 표시한 화자)" if has_spk else "실시간 기록 (화자 구분 없음)"}
+    upload = meeting.get("source") == "upload"
+    return {"units": units, "annotations": lv["annotations"], "speakers": speakers,
+            "kind": "파일을 받아 적은 기록" if upload else "회의 중 받아 적은 기록"}
 
 
 def meeting_markdown(
     views: Views,
     meeting_id: str,
     *,
-    version: str = "auto",
     include_notes: bool = True,
     include_annotations: bool = True,
     include_summary: bool = False,
@@ -168,9 +155,8 @@ def meeting_markdown(
     meeting = views.store.get_meeting(meeting_id, with_notes=True)
     if meeting is None:
         return None
-    src = record_source(views, meeting, version)
-    units, anns, speakers, kind, final = src["units"], src["annotations"], src["speakers"], src["kind"], src["final"]
-    use_final = final is not None
+    src = record_source(views, meeting)
+    units, anns, speakers, kind = src["units"], src["annotations"], src["speakers"], src["kind"]
 
     created = _dt.datetime.fromtimestamp(meeting["created_at"]).strftime("%Y-%m-%d %H:%M")
     lines = [f"# {meeting['title'] or '제목 없는 회의'}", ""]
@@ -183,10 +169,8 @@ def meeting_markdown(
         for p in people:
             info = " · ".join(x for x in (p.get("org"), p.get("role")) if x)
             lines.append(f"  - {p['name']}" + (f" ({info})" if info else "") + (f" — {p['note']}" if p.get("note") else ""))
-    if use_final:
-        names = [speaker_name(speakers, s) for s in final["speakers"]]
-        lines.append(f"- 화자: {', '.join(n for n in names if n) or '구분 없음'}")
-    lines.append(f"- 기록 종류: {kind}")
+    edited = sum(1 for u in units if u.get("text_orig") is not None)
+    lines.append(f"- 기록 종류: {kind}" + (f" (사용자가 {edited}문장을 직접 고침)" if edited else ""))
     lines.append("")
     if include_summary and meeting.get("summary_md"):
         lines += ["## 저장된 AI 요약", "", meeting["summary_md"].strip(), ""]
@@ -198,4 +182,41 @@ def meeting_markdown(
         lines += [LEGEND, ""]
     body = transcript_markdown(units, anns, speakers, include_annotations=include_annotations, start=start, end=end)
     lines.append(body or "(기록 없음)")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def script_markdown(store, meeting_id: str) -> Optional[str]:
+    """원본 스크립트: 녹음을 마친 뒤 큰 모델로 다시 받아 적고 화자를 나눈 결과 (참고용, 기록과 섞지 않는다)"""
+    meeting = store.get_meeting(meeting_id)
+    final = store.get_final(meeting_id) if meeting else None
+    if final is None:
+        return None
+    data = final["data"]
+    utt = data.get("utterances") or []
+    made = _dt.datetime.fromtimestamp(final["created_at"]).strftime("%Y-%m-%d %H:%M")
+    lines = [f"# {meeting['title'] or '제목 없는 회의'} — 원본 스크립트", "",
+             "> 녹음을 마친 뒤 더 큰 모델로 처음부터 다시 받아 적고 화자를 나눈 **참고용** 기록입니다.",
+             "> 회의 기록(회의 중 받아 적고 사람이 고친 글, 메모·댓글)과는 따로 두며 서로 섞지 않습니다.", "",
+             f"- 만든 시각: {made}", f"- 길이: {fmt_time(data.get('duration') or meeting.get('duration') or 0, always_hours=True)}",
+             f"- 받아쓰기: {final.get('engine') or '-'}", f"- 화자 구분: {final.get('diarizer') or '-'}", ""]
+    speakers = meeting.get("speakers") or {}
+    prev = object()
+    para: list[str] = []
+
+    def flush() -> None:
+        if para:
+            lines.append(" ".join(para))
+            lines.append("")
+            para.clear()
+
+    for u in utt:
+        who = speaker_name(speakers, u.get("speaker"))
+        if who != prev:
+            flush()
+            lines.append(f"**{who}** · {fmt_time(u['t0'], always_hours=True)}" if who else f"`{fmt_time(u['t0'], always_hours=True)}`")
+            prev = who
+        para.append(u["text"].strip())
+    flush()
+    if not utt:
+        lines.append("(받아 적은 내용 없음)")
     return "\n".join(lines).rstrip() + "\n"

@@ -301,8 +301,7 @@ def collect(store: Store, views: Views, meeting_id: str) -> Optional[dict]:
     if not people:
         people = [{"name": v} for v in (m.get("speakers") or {}).values() if v]
     participants = [p["name"] for p in people]
-    final = views.final_view(meeting_id)
-    view = final if final else views.live_view(meeting_id)
+    view = views.live_view(meeting_id)
     marks = []
     for a in sorted(view["annotations"], key=lambda a: a["anchor"].get("t0", a["anchor"].get("t", 0))):
         if a["kind"] not in ("comment", "memo") or not (a.get("body") or "").strip():

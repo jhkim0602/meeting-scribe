@@ -280,9 +280,9 @@ function Recorder({ choice }: { choice: MicChoice }) {
 
 const SPEEDS = [1, 1.25, 1.5, 2]
 
-/** 재생 막대 위의 옅은 눈금: 댓글(노랑), 구분선(회색). 지금 보고 있는 화면 기준. */
+/** 재생 막대 위의 옅은 눈금: 댓글(노랑), 구분선(회색) */
 function ScrubberMarks({ duration }: { duration: number }) {
-  const anns = useStore((s) => (s.tab === 'final' ? s.final?.annotations : s.live?.annotations))
+  const anns = useStore((s) => s.live?.annotations)
   const marks = useMemo(() => {
     if (!anns || !duration) return []
     return anns

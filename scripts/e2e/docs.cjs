@@ -57,12 +57,12 @@ const SUMMARY = `## 한 줄 요약
   await page.goto(`${BASE}/#/m/${m.id}`)
   await page.click('.btn-record')
   await page.waitForSelector('.dock-rec')
-  await page.waitForFunction(() => document.querySelectorAll('.view-live .utext').length >= 3, null, { timeout: 40000 })
+  await page.waitForFunction(() => document.querySelectorAll('.transcript .utext').length >= 3, null, { timeout: 40000 })
   const units = (await get(`/api/meetings/${m.id}/live`)).units
   const u = units[1]
   await send('POST', `/api/meetings/${m.id}/annotations`, { kind: 'comment', view: 'live', body: '이 숫자 재무팀과 맞추기', start: { unit: u.id, offset: 0 }, end: { unit: u.id, offset: u.text.length } })
   await send('POST', `/api/meetings/${m.id}/annotations`, { kind: 'memo', view: 'live', t: units[2].t1 + 0.01, after: units[2].id, body: '대표님 의견 따로 정리' })
-  // 회의 중에 화자를 고른다 (녹음을 마치면 원본 화자 이름으로 이어진다)
+  // 회의 중에 화자를 고른다
   await send('POST', `/api/meetings/${m.id}/live/speaker`, { segment_ids: [units[0].id], participant_id: (await get(`/api/meetings/${m.id}`)).participants[0].id })
   await page.click('.btn-stop')
   await page.click('.modal.confirm button:has-text("녹음 종료")')
@@ -98,7 +98,7 @@ const SUMMARY = `## 한 줄 요약
   check(names[0] === '김민지' && units.every((x) => tr.includes(x.text.slice(0, 8))), `화자별 발언이 이어짐 (${[...new Set(names)].join(', ')})`)
   check((await doc.locator('.turn .who .role').first().innerText()) === '모바일사업팀 · PM · 회의 진행' && (await doc.locator('.people-table').innerText()).includes('최종 결정권자'),
     '문서에도 참석자 소속·직무·메모 (발언 머리와 참석자 표)')
-  // 녹음을 마치면 원본(다시 받아 적은 기록)으로 보이므로 문장 번호 대신 시각으로 자리를 본다
+  // 메모는 남긴 순간 (시각으로 자리를 본다)
   const memoT = units[2].t1 + 0.01
   const around = await doc.evaluate(() => {
     const memo = document.querySelector('.turn .memo')

@@ -88,7 +88,7 @@ CREATE TABLE IF NOT EXISTS settings(
 """
 
 JSON_FIELDS_MEETING = ("speakers", "clock", "participants", "speaker_map")
-KEEP_FINAL_VERSIONS = 2
+KEEP_FINAL_VERSIONS = 1  # 원본 스크립트는 참고용이라 마지막 것만
 
 
 def _note_rows(md: str) -> list[tuple]:
@@ -127,7 +127,9 @@ class Store:
             c.execute("ALTER TABLE meetings ADD COLUMN paused_t REAL")
         # 실시간 임시 화자: 문장별 화자(참여자 id), 자동 묶음(A, B…), 누가 정했는지, 확신도
         lcols = {r["name"] for r in c.execute("PRAGMA table_info(live_segments)").fetchall()}
-        for col, typ in (("speaker", "TEXT"), ("speaker_auto", "TEXT"), ("speaker_src", "TEXT"), ("speaker_conf", "REAL")):
+        # 직접 고친 문장: 처음 받아 적은 글자(text_orig)와 고친 시각
+        for col, typ in (("speaker", "TEXT"), ("speaker_auto", "TEXT"), ("speaker_src", "TEXT"), ("speaker_conf", "REAL"),
+                         ("text_orig", "TEXT"), ("edited_at", "REAL")):
             if col not in lcols:
                 c.execute(f"ALTER TABLE live_segments ADD COLUMN {col} {typ}")
         c.execute(
@@ -170,7 +172,7 @@ class Store:
 
     # ---------- meetings ----------
     # ---------- 검색 색인 (FTS5 trigram: 글자 3개 이상은 색인, 더 짧으면 LIKE) ----------
-    FTS_VERSION = 1
+    FTS_VERSION = 2  # 2: 원본 스크립트는 찾지 않는다
 
     def _init_fts(self) -> bool:
         try:
@@ -193,9 +195,6 @@ class Store:
             mid = m["id"]
             self._fts_replace(mid, "title", [(None, None, m.get("title") or "")])
             self._fts_replace(mid, "live", [(s["id"], s["t0"], s["text"]) for s in self.list_live_segments(mid)])
-            final = self.get_final(mid)
-            if final:
-                self._fts_replace(mid, "final", [(u["id"], u["t0"], u["text"]) for u in final["data"].get("utterances", [])])
             full = self.get_meeting(mid, with_notes=True) or {}
             self._fts_replace(mid, "notes", _note_rows(full.get("notes_md") or ""))
 
@@ -210,19 +209,17 @@ class Store:
             )
 
     def search_rows(self, q: str, limit: int = 300) -> list[dict]:
-        """색인에서 찾은 줄들. 3글자 이상이면 색인(MATCH), 짧으면 LIKE로 훑는다.
-        원본이 있는 회의는 실시간 기록 대신 원본에서만 찾는다."""
-        skip_live = "NOT (kind='live' AND meeting_id IN (SELECT id FROM meetings WHERE final_version > 0))"
+        """색인에서 찾은 줄들. 3글자 이상이면 색인(MATCH), 짧으면 LIKE로 훑는다."""
         with self.conn() as c:
             if len(q) >= 3:
                 rows = c.execute(
-                    f"SELECT meeting_id, kind, ref, t, text FROM search_fts WHERE search_fts MATCH ? AND {skip_live} LIMIT ?",
+                    "SELECT meeting_id, kind, ref, t, text FROM search_fts WHERE search_fts MATCH ? LIMIT ?",
                     ('"' + q.replace('"', '""') + '"', limit),
                 ).fetchall()
             else:
                 esc = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
                 rows = c.execute(
-                    f"SELECT meeting_id, kind, ref, t, text FROM search_fts WHERE text LIKE ? ESCAPE '\\' AND {skip_live} LIMIT ?",
+                    "SELECT meeting_id, kind, ref, t, text FROM search_fts WHERE text LIKE ? ESCAPE '\\' LIMIT ?",
                     (f"%{esc}%", limit),
                 ).fetchall()
         return [dict(r) for r in rows]
@@ -314,10 +311,48 @@ class Store:
                 c.execute("INSERT INTO search_fts(meeting_id,kind,ref,t,text) VALUES(?,?,?,?,?)", (meeting_id, "live", seg["id"], seg["t0"], text))
         return seg
 
+    def add_live_segments(self, meeting_id: str, rows: list[dict]) -> int:
+        """올린 파일을 받아 적은 문장을 한꺼번에 기록으로 (화자 묶음과 함께)"""
+        now = time.time()
+        with self.conn() as c:
+            row = c.execute("SELECT COALESCE(MAX(idx), -1) AS m FROM live_segments WHERE meeting_id=?", (meeting_id,)).fetchone()
+            start = int(row["m"]) + 1
+            segs = [{"id": new_id(), "meeting_id": meeting_id, "idx": start + i, "t0": float(r["t0"]), "t1": float(r["t1"]), "text": r["text"],
+                     "created_at": now, "speaker_auto": r.get("speaker_auto"), "speaker_conf": r.get("speaker_conf")} for i, r in enumerate(rows)]
+            c.executemany(
+                "INSERT INTO live_segments(id,meeting_id,idx,t0,t1,text,created_at,speaker_auto,speaker_conf)"
+                " VALUES(:id,:meeting_id,:idx,:t0,:t1,:text,:created_at,:speaker_auto,:speaker_conf)",
+                segs,
+            )
+        self._fts_replace(meeting_id, "live", [(s["id"], s["t0"], s["text"]) for s in self.list_live_segments(meeting_id)])
+        return len(segs)
+
     def list_live_segments(self, meeting_id: str) -> list[dict]:
         with self.conn() as c:
-            rows = c.execute("SELECT id,idx,t0,t1,text FROM live_segments WHERE meeting_id=? ORDER BY idx", (meeting_id,)).fetchall()
+            rows = c.execute("SELECT id,idx,t0,t1,text,text_orig,edited_at FROM live_segments WHERE meeting_id=? ORDER BY idx", (meeting_id,)).fetchall()
         return [dict(r) for r in rows]
+
+    def get_live_segment(self, segment_id: str) -> Optional[dict]:
+        with self.conn() as c:
+            row = c.execute("SELECT id,meeting_id,idx,t0,t1,text,text_orig,edited_at FROM live_segments WHERE id=?", (segment_id,)).fetchone()
+        return dict(row) if row else None
+
+    def set_live_text(self, segment_id: str, text: str) -> Optional[dict]:
+        """문장 글자를 직접 고친다. 처음 받아 적은 글자는 text_orig에 남기고, 원래대로 돌리면 고친 표시를 지운다."""
+        seg = self.get_live_segment(segment_id)
+        if seg is None:
+            return None
+        orig = seg["text_orig"] if seg["text_orig"] is not None else seg["text"]
+        edited = text != orig
+        with self.conn() as c:
+            c.execute(
+                "UPDATE live_segments SET text=?, text_orig=?, edited_at=? WHERE id=?",
+                (text, orig if edited else None, time.time() if edited else None, segment_id),
+            )
+            if getattr(self, "fts", False):
+                c.execute("DELETE FROM search_fts WHERE kind='live' AND ref=?", (segment_id,))
+                c.execute("INSERT INTO search_fts(meeting_id,kind,ref,t,text) VALUES(?,?,?,?,?)", (seg["meeting_id"], "live", segment_id, seg["t0"], text))
+        return self.get_live_segment(segment_id)
 
     def list_live_speakers(self, meeting_id: str) -> list[dict]:
         """문장별 임시 화자 (실시간 기록 순서대로)"""
@@ -363,7 +398,6 @@ class Store:
             # 원본은 최근 KEEP_FINAL_VERSIONS개만 남긴다 (첨삭은 시간+인용문으로 묶여 있어 옛 버전이 없어도 된다)
             c.execute("DELETE FROM final_versions WHERE meeting_id=? AND version<=?", (meeting_id, version - KEEP_FINAL_VERSIONS))
             c.execute("COMMIT")
-        self._fts_replace(meeting_id, "final", [(u["id"], u["t0"], u["text"]) for u in data.get("utterances", [])])
         return version
 
     def get_final(self, meeting_id: str, version: Optional[int] = None) -> Optional[dict]:

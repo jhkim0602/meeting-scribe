@@ -65,10 +65,11 @@ export default function App() {
             useStore.setState({ job: j })
             if ((j.status === 'done' || j.status === 'error' || j.status === 'cancelled') && lastStatus !== j.status) {
               await st.refreshMeeting()
-              await st.refreshFinal()
+              await st.refreshLive()
               await st.loadMeetings()
-              if (j.status === 'done') st.toast('원본이 준비됐어요. 회의 중 남긴 댓글·메모를 같은 자리에 옮겨 놓았어요.', 'success')
-              if (j.status === 'error') st.toast(`원본을 만들지 못했어요: ${j.error}`, 'error')
+              const upload = useStore.getState().meeting?.source === 'upload'
+              if (j.status === 'done') st.toast(upload ? '받아 적기를 마쳤어요. 글자를 고치고 화자를 고를 수 있어요.' : '원본 스크립트가 준비됐어요. ⋯ 메뉴에서 받을 수 있어요.', 'success')
+              if (j.status === 'error') st.toast(`${upload ? '받아 적지' : '원본 스크립트를 만들지'} 못했어요: ${j.error}`, 'error')
             }
             lastStatus = j.status
           }

@@ -1,8 +1,8 @@
-"""메모/댓글/수정의 '위치'를 다루는 핵심 모듈.
+"""메모·댓글·강조의 '위치'.
 
-실시간 기록과 후처리 원본은 문장이 서로 다르다. 그래서 위치를 글자 번호가 아니라
-(1) 오디오 시간 구간과 (2) 사용자가 고른 원문 인용으로 저장해 두고,
-다른 버전의 기록에서는 시간 창 안에서 인용문과 가장 비슷한 부분을 찾아 다시 붙인다.
+기록은 하나(실시간 기록, 올린 파일이면 한 번 받아 적은 기록)이고, 위치는 그 기록의
+문장 id + 글자 위치로 저장한다. 사람이 문장을 고치면 글자 차이를 따라 위치를 정확히 옮긴다
+(다른 기록으로 옮겨 붙이는 일은 하지 않는다).
 
 unit 형식: {"id", "t0", "t1", "text", "words"?: [[offset, length, start, end], ...]}
 """
@@ -10,20 +10,10 @@ unit 형식: {"id", "t0", "t1", "text", "words"?: [[offset, length, start, end],
 from __future__ import annotations
 
 import bisect
-from dataclasses import dataclass
+import difflib
 from typing import Any, Optional
 
 import numpy as np
-
-from .textutil import is_kept, normalize
-
-try:  # rapidfuzz가 없으면 difflib로 대체
-    from rapidfuzz import fuzz as _fuzz
-except ImportError:  # pragma: no cover
-    _fuzz = None
-
-MATCH_THRESHOLD = 55.0
-CONTEXT_CHARS = 24
 
 
 def unit_char_times(unit: dict) -> np.ndarray:
@@ -74,14 +64,6 @@ class TextIndex:
             if base + n < len(times):
                 times[base + n] = float(u["t1"])
         self.times = times
-        norm_chars: list[str] = []
-        norm_map: list[int] = []
-        for gi, ch in enumerate(self.text):
-            if is_kept(ch):
-                norm_chars.append(ch.lower())
-                norm_map.append(gi)
-        self.norm = "".join(norm_chars)
-        self.norm_map = np.asarray(norm_map, dtype=np.int64)
         self.unit_t0 = [float(u["t0"]) for u in units]
 
     # --- 좌표 변환 ---
@@ -110,11 +92,6 @@ class TextIndex:
             return 0.0
         return float(self.times[max(0, min(g, len(self.times) - 1))])
 
-    def nearest_char(self, t: float) -> int:
-        if len(self.times) == 0:
-            return 0
-        return int(np.argmin(np.abs(self.times - t)))
-
     def unit_after_time(self, t: float) -> Optional[str]:
         """시간 t를 포함하는(또는 직전의) unit. 메모는 이 unit 뒤에 표시된다."""
         if not self.units:
@@ -127,7 +104,7 @@ class TextIndex:
 
 
 def compute_anchor(index: TextIndex, start: dict, end: dict) -> Optional[dict]:
-    """선택한 범위로부터 버전에 독립적인 앵커를 만든다."""
+    """선택한 범위의 위치: 문장 id + 글자 위치, 그리고 보여 주기·내보내기용 인용과 시각."""
     gs = index.to_global(start["unit"], start["offset"])
     ge = index.to_global(end["unit"], end["offset"])
     if gs is None or ge is None:
@@ -145,8 +122,6 @@ def compute_anchor(index: TextIndex, start: dict, end: dict) -> Optional[dict]:
         "t0": round(t0, 3),
         "t1": round(max(t0, t1), 3),
         "quote": quote,
-        "prefix": index.slice(max(0, gs - CONTEXT_CHARS), gs),
-        "suffix": index.slice(ge, ge + CONTEXT_CHARS),
         "start": {"unit": index.units[su]["id"], "offset": so},
         "end": {"unit": index.units[eu]["id"], "offset": eo},
     }
@@ -158,170 +133,60 @@ def memo_anchor(index: TextIndex, t: float, after_unit: Optional[str] = None) ->
     return {"t": round(float(t), 3), "after": after_unit}
 
 
-@dataclass
-class Resolved:
-    gs: int
-    ge: int
-    approx: bool
-    score: float
+def resolve(anchor: dict, index: TextIndex) -> Optional[dict]:
+    """앵커를 기록 위의 위치로.
 
-
-def _best_short_match(qn: str, wn: str, center: int) -> Optional[int]:
-    best, best_d = None, None
-    pos = wn.find(qn)
-    while pos >= 0:
-        d = abs(pos - center)
-        if best_d is None or d < best_d:
-            best, best_d = pos, d
-        pos = wn.find(qn, pos + 1)
-    return best
-
-
-def _fuzzy(qn: str, wn: str) -> tuple[float, int, int]:
-    """wn 안에서 qn과 가장 비슷한 부분 문자열 (점수 0~100, 시작, 끝)."""
-    if _fuzz is not None:
-        al = _fuzz.partial_ratio_alignment(qn, wn)
-        if al is None:
-            return 0.0, 0, 0
-        # rapidfuzz는 src=qn, dest=wn 좌표로 돌려준다
-        return float(al.score), int(al.dest_start), int(al.dest_end)
-    import difflib  # pragma: no cover
-
-    best = (0.0, 0, 0)
-    n = len(qn)
-    for i in range(0, max(1, len(wn) - n + 1)):
-        for length in {n, max(1, int(n * 0.85)), int(n * 1.15) + 1}:
-            cand = wn[i : i + length]
-            r = difflib.SequenceMatcher(None, qn, cand).ratio() * 100
-            if r > best[0]:
-                best = (r, i, i + len(cand))
-    return best
-
-
-def _snap_to_words(index: TextIndex, gs: int, ge: int, limit: int = 6) -> tuple[int, int]:
-    """다른 버전에 다시 붙일 때 단어 중간에서 시작/끝나지 않게 어절 경계로 넓힌다."""
-    text = index.text
-    k = 0
-    while gs > 0 and k < limit and is_kept(text[gs - 1]):
-        gs -= 1
-        k += 1
-    k = 0
-    while ge < len(text) and k < limit and is_kept(text[ge]):
-        ge += 1
-        k += 1
-    return gs, ge
-
-
-def _resolve_range(anchor: dict, index: TextIndex) -> Optional[Resolved]:
-    if not index.units or len(index.text) == 0:
-        return None
-    t0 = float(anchor.get("t0", 0.0))
-    t1 = float(anchor.get("t1", t0))
-    quote = anchor.get("quote") or ""
-    qn = normalize(quote)
-
-    pad = max(4.0, 0.5 * (t1 - t0))
-    mask = (index.times >= t0 - pad) & (index.times <= t1 + pad)
-    hits = np.nonzero(mask)[0]
-    if len(hits):
-        w0, w1 = int(hits.min()), int(hits.max()) + 1
-    else:
-        c = index.nearest_char((t0 + t1) / 2)
-        w0, w1 = c, c + 1
-    need = int(len(quote) * 1.5) + 8
-    if w1 - w0 < need:
-        grow = (need - (w1 - w0)) // 2 + 1
-        w0, w1 = max(0, w0 - grow), min(len(index.text), w1 + grow)
-
-    if qn:
-        n0 = int(np.searchsorted(index.norm_map, w0))
-        n1 = int(np.searchsorted(index.norm_map, w1))
-        wn = index.norm[n0:n1]
-        center_g = index.nearest_char((t0 + t1) / 2)
-        center_n = int(np.searchsorted(index.norm_map, center_g)) - n0 - len(qn) // 2
-        if wn:
-            if len(qn) <= 3:
-                pos = _best_short_match(qn, wn, center_n)
-                if pos is not None:
-                    gs = int(index.norm_map[n0 + pos])
-                    ge = int(index.norm_map[n0 + pos + len(qn) - 1]) + 1
-                    return Resolved(gs, ge, False, 100.0)
-            elif len(qn) <= len(wn):
-                score, ds, de = _fuzzy(qn, wn)
-                if score >= MATCH_THRESHOLD and de > ds:
-                    gs = int(index.norm_map[n0 + ds])
-                    ge = int(index.norm_map[n0 + de - 1]) + 1
-                    gs, ge = _snap_to_words(index, gs, ge)
-                    return Resolved(gs, ge, False, score)
-
-    # 시간만으로 추정
-    mask2 = (index.times >= t0) & (index.times <= max(t1, t0 + 0.05))
-    hits2 = np.nonzero(mask2)[0]
-    if len(hits2):
-        gs, ge = int(hits2.min()), int(hits2.max()) + 1
-    else:
-        gs = index.nearest_char(t0)
-        ge = gs + 1
-    # 줄바꿈 구분자 위에 걸치지 않게 정리
-    while gs < ge and index.text[gs] == "\n":
-        gs += 1
-    while ge > gs and index.text[ge - 1] == "\n":
-        ge -= 1
-    if ge <= gs:
-        return None
-    return Resolved(gs, ge, True, 0.0)
-
-
-def resolve(anchor: dict, index: TextIndex, *, same_source: bool = False) -> Optional[dict]:
-    """앵커를 주어진 기록(index) 위의 위치로 바꾼다.
-
-    반환: 범위형 {"start":{unit,offset}, "end":{unit,offset}, "approx", "score", "text"}
+    반환: 범위형 {"start":{unit,offset}, "end":{unit,offset}, "text"}
           메모형 {"after": unit_id | None}
     """
-    if "t" in anchor and "quote" not in anchor:
-        after = anchor.get("after") if same_source else None
+    if "t" in anchor and "start" not in anchor:
+        after = anchor.get("after")
         if after is not None and after in index.id_to_idx:
             return {"after": after}
         return {"after": index.unit_after_time(float(anchor["t"]))}
-
-    if same_source and anchor.get("start") and anchor.get("end"):
-        gs = index.to_global(anchor["start"]["unit"], anchor["start"]["offset"])
-        ge = index.to_global(anchor["end"]["unit"], anchor["end"]["offset"])
-        if gs is not None and ge is not None and ge > gs:
-            if normalize(index.slice(gs, ge)) == normalize(anchor.get("quote") or ""):
-                return _pack(index, Resolved(gs, ge, False, 100.0))
-
-    r = _resolve_range(anchor, index)
-    return _pack(index, r) if r else None
-
-
-def _pack(index: TextIndex, r: Resolved) -> dict:
-    su, so = index.from_global(r.gs)
-    eu, eo = index.end_from_global(r.ge)
-    return {
-        "start": {"unit": index.units[su]["id"], "offset": so},
-        "end": {"unit": index.units[eu]["id"], "offset": eo},
-        "approx": r.approx,
-        "score": round(r.score, 1),
-        "text": index.slice(r.gs, r.ge),
-    }
+    start, end = anchor.get("start"), anchor.get("end")
+    if not start or not end:
+        return None
+    gs = index.to_global(start["unit"], start["offset"])
+    ge = index.to_global(end["unit"], end["offset"])
+    if gs is None or ge is None or ge <= gs:
+        return None
+    su, so = index.from_global(gs)
+    eu, eo = index.end_from_global(ge)
+    return {"start": {"unit": index.units[su]["id"], "offset": so}, "end": {"unit": index.units[eu]["id"], "offset": eo}, "text": index.slice(gs, ge)}
 
 
-def resolve_annotations(annotations: list[dict], index: TextIndex, view: str, version: int) -> list[dict]:
-    """각 주석에 이 화면에서의 위치(pos)를 붙여 돌려준다. 위치를 못 찾으면 pos=None."""
-    out = []
-    for ann in annotations:
-        same = ann.get("origin") == view and (view == "live" or int(ann.get("origin_version") or 0) == version)
-        pos = resolve(ann["anchor"], index, same_source=same)
-        item = dict(ann)
-        item["pos"] = pos
-        if ann["kind"] == "edit" and pos and "text" in pos:
-            item["match"] = "same" if normalize(pos["text"]) == normalize(ann.get("replacement") or "") else "differs"
-        out.append(item)
-    return out
+def resolve_annotations(annotations: list[dict], index: TextIndex) -> list[dict]:
+    """각 주석에 기록 위의 위치(pos)를 붙여 돌려준다."""
+    return [dict(ann, pos=resolve(ann["anchor"], index)) for ann in annotations]
 
 
 def anchor_from_request(index: TextIndex, payload: dict[str, Any]) -> Optional[dict]:
     if payload.get("kind") in ("memo", "divider"):
         return memo_anchor(index, float(payload.get("t") or 0.0), payload.get("after"))
     return compute_anchor(index, payload["start"], payload["end"])
+
+
+def remap_start(opcodes: list[tuple], offset: int) -> int:
+    """문장을 고친 뒤 범위 시작 옮기기: 남은 글자는 그대로 따라가고, 바뀐 글자 안이면 바뀐 부분의 처음으로.
+    시작 바로 앞에 끼워 넣은 글자는 범위에 넣지 않는다."""
+    for tag, i1, i2, j1, j2 in opcodes:
+        if tag != "insert" and i1 <= offset < i2:
+            return j1 + (offset - i1) if tag == "equal" else j1
+    return opcodes[-1][4] if opcodes else 0
+
+
+def remap_end(opcodes: list[tuple], offset: int) -> int:
+    """범위 끝(배타적) 옮기기: 마지막 글자를 따라가고, 바뀐 글자 안이면 바뀐 부분의 끝까지.
+    끝 바로 뒤에 끼워 넣은 글자는 범위에 넣지 않는다."""
+    if offset <= 0:
+        return 0
+    c = offset - 1
+    for tag, i1, i2, j1, j2 in opcodes:
+        if tag != "insert" and i1 <= c < i2:
+            return j1 + (c - i1) + 1 if tag == "equal" else j2
+    return opcodes[-1][4] if opcodes else 0
+
+
+def edit_opcodes(old: str, new: str) -> list[tuple]:
+    return difflib.SequenceMatcher(None, old, new, autojunk=False).get_opcodes()

@@ -141,7 +141,7 @@ export function Sidebar({ onSettings }: { onSettings: () => void }) {
                   if (h.unit) {
                     const st = useStore.getState()
                     setTimeout(() => {
-                      st.setTab(h.kind === 'final' ? 'final' : 'live')
+                      st.setTab('live')
                       st.flash(h.unit!)
                     }, 400)
                   }

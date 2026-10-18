@@ -1,4 +1,4 @@
-import { AlertCircle, Check, Loader2, Sparkles, X } from 'lucide-react'
+import { AlertCircle, Check, Loader2, RefreshCw, X } from 'lucide-react'
 import { api, type Job, type Meeting } from '../lib/api'
 import { useStore } from '../lib/store'
 import { fmtDuration } from '../lib/time'
@@ -20,7 +20,10 @@ function stepState(job: Job, key: string): 'done' | 'active' | 'todo' {
   return idx < cur ? 'done' : idx === cur ? 'active' : 'todo'
 }
 
+/** 녹음을 마친 뒤 만드는 원본 스크립트(참고용)와, 올린 파일 받아 적기의 진행 표시.
+ *  녹음한 회의는 기록 위에 작은 띠로(기록은 그대로), 올린 파일은 기록이 생기기 전까지 카드로 보여 준다. */
 export function ProcessingCard({ meeting, job, compact }: { meeting: Meeting; job: Job | null; compact?: boolean }) {
+  const upload = meeting.source === 'upload'
   const toast = useStore((s) => s.toast)
   const refreshMeeting = useStore((s) => s.refreshMeeting)
   const loadMeetings = useStore((s) => s.loadMeetings)
@@ -48,7 +51,8 @@ export function ProcessingCard({ meeting, job, compact }: { meeting: Meeting; jo
       return (
         <div className="proc-banner">
           <Loader2 size={14} className="spin" />
-          <span>원본을 다시 만드는 중 · {pct}%</span>
+          <span>{upload ? '다시 받아 적는 중' : '원본 스크립트 만드는 중'} · {pct}%</span>
+          <span className="muted">기록은 그대로예요</span>
           <div className="bar"><div style={{ width: `${pct}%` }} /></div>
           <button className="btn btn-sm btn-ghost" onClick={cancel}>취소</button>
         </div>
@@ -59,9 +63,9 @@ export function ProcessingCard({ meeting, job, compact }: { meeting: Meeting; jo
         <div className="proc-head">
           <Loader2 size={18} className="spin" />
           <div>
-            <h3>원본을 만들고 있어요</h3>
+            <h3>{upload ? '파일을 받아 적고 있어요' : '원본 스크립트를 만들고 있어요'}</h3>
             <p className="muted">
-              {job.status === 'queued' ? '앞선 작업이 끝나면 시작해요' : job.message || '더 큰 모델로 다시 받아 적고 화자를 나눠요'}
+              {job.status === 'queued' ? '앞선 작업이 끝나면 시작해요' : job.message || '받아 적고 누가 말했는지 나눠요'}
             </p>
           </div>
           <span className="spacer" />
@@ -83,18 +87,28 @@ export function ProcessingCard({ meeting, job, compact }: { meeting: Meeting; jo
             )
           })}
         </ol>
-        <p className="proc-tip">처리하는 동안 실시간 기록에 메모·댓글을 계속 달아도 돼요. 끝나면 원본의 같은 자리에 옮겨 보여드려요.</p>
+        <p className="proc-tip">{upload ? '끝나면 여기에 기록이 나와요. 틀린 글자는 바로 고치고, 화자는 칩이나 숫자키로 고르면 돼요.' : '참고용 원본 스크립트예요. 회의 기록과 메모·댓글은 그대로 두고 따로 받을 수 있어요.'}</p>
       </div>
     )
   }
 
   if (job && job.status === 'error') {
+    const what = upload ? '받아 적지' : '원본 스크립트를 만들지'
+    if (compact) {
+      return (
+        <div className="proc-banner error">
+          <AlertCircle size={14} />
+          <span>{what} 못했어요</span>
+          <button className="btn btn-sm" onClick={start}><RefreshCw size={13} />다시 시도</button>
+        </div>
+      )
+    }
     return (
       <div className="proc-card error">
         <div className="proc-head">
           <AlertCircle size={18} />
           <div>
-            <h3>원본을 만들지 못했어요</h3>
+            <h3>{what} 못했어요</h3>
             <p className="muted">{job.error}</p>
           </div>
         </div>
@@ -103,17 +117,14 @@ export function ProcessingCard({ meeting, job, compact }: { meeting: Meeting; jo
     )
   }
 
-  if (compact) return null
+  if (compact || !upload) return null
 
   return (
     <div className="proc-card empty">
-      <Sparkles size={22} />
-      <h3>원본은 녹음을 마친 뒤 만들어져요</h3>
-      <p className="muted">
-        실시간 기록보다 큰 모델로 처음부터 다시 받아 적고, 누가 말했는지 나눕니다. 실시간 기록에 남긴 메모·댓글·수정은 원본의 같은 자리에 첨삭처럼 표시돼요.
-      </p>
+      <RefreshCw size={22} />
+      <h3>아직 받아 적지 않았어요</h3>
       {meeting.has_audio && !recording && (
-        <button className="btn btn-primary" onClick={start}><Sparkles size={15} />지금 원본 만들기</button>
+        <button className="btn btn-primary" onClick={start}>받아 적기 시작</button>
       )}
     </div>
   )

@@ -1,28 +1,19 @@
-import { ArrowDown, Check, Info, Keyboard, ListTree, MessageSquare, MessageSquarePlus, Mic, MoreHorizontal, NotebookPen, RefreshCw, Sparkles, StickyNote } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { api, type Annotation, type Unit } from '../lib/api'
+import { ArrowDown, Check, Keyboard, ListTree, MessageSquare, MessageSquarePlus, Mic, MoreHorizontal, NotebookPen, StickyNote } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { type Annotation, type Unit } from '../lib/api'
 import { annActions } from '../lib/annActions'
-import type { View } from '../lib/model'
 import { sendToNotes } from '../lib/notesExport'
 import { COMMENT_TO_NOTES, usePref, usePrefStr, VIEW_CLOCK, VIEW_COMMENTS_COLLAPSED, VIEW_FONT, type FontSize } from '../lib/prefs'
 import { bridges, currentClock, useStore, type Tab } from '../lib/store'
-import { fmtRelative, fmtTime } from '../lib/time'
+import { fmtTime } from '../lib/time'
 import { Floating } from './Floating'
 import { ProcessingCard } from './ProcessingCard'
-import { SpeakerLabel } from './SpeakerLabel'
 import { SummaryView } from './SummaryView'
 import { TranscriptView } from './TranscriptView'
 
-function engineLabel(engine: string | null): string {
-  if (!engine) return ''
-  const [kind, model] = engine.split(':')
-  const name = model?.split('/').pop() || ''
-  return kind === 'mock' ? '시연용 엔진' : name || kind
-}
-
 type Filter = 'comment' | 'memo' | 'all'
 
-function AnnList({ anns, onClose, rect, view, meetingId }: { anns: Annotation[]; onClose: () => void; rect: DOMRect; view: View; meetingId: string }) {
+function AnnList({ anns, onClose, rect, meetingId }: { anns: Annotation[]; onClose: () => void; rect: DOMRect; meetingId: string }) {
   const flash = useStore((s) => s.flash)
   const toast = useStore((s) => s.toast)
   const [filter, setFilter] = useState<Filter>('comment')
@@ -33,7 +24,7 @@ function AnnList({ anns, onClose, rect, view, meetingId }: { anns: Annotation[];
   const count = (k: Filter) => (k === 'all' ? anns.length : anns.filter((a) => a.kind === k).length)
 
   const exportAll = async () => {
-    const n = await sendToNotes(meetingId, exportable, view, { heading: exportable.length > 1 ? '회의 중 댓글' : undefined })
+    const n = await sendToNotes(meetingId, exportable, { heading: exportable.length > 1 ? '회의 중 댓글' : undefined })
     if (n) toast(`댓글·메모 ${n}개를 노트에 넣었어요`, 'success')
   }
 
@@ -71,7 +62,7 @@ function AnnList({ anns, onClose, rect, view, meetingId }: { anns: Annotation[];
             <span className={`kind-dot kind-${a.kind}`} />
             <span className="ann-list-time">{fmtTime(a.anchor.t0 ?? a.anchor.t ?? 0)}</span>
             <span className="ann-list-text">
-              {a.kind === 'edit' ? `${a.anchor.quote} → ${a.replacement}` : a.kind === 'divider' ? `구분선 ${a.body}` : a.body || a.anchor.quote}
+              {a.kind === 'divider' ? `구분선 ${a.body}` : a.body || a.anchor.quote}
               {a.kind === 'comment' && a.anchor.quote && <em>{a.anchor.quote}</em>}
             </span>
             {a.exported_at ? <NotebookPen size={12} className="ann-list-exported" /> : <span />}
@@ -79,28 +70,6 @@ function AnnList({ anns, onClose, rect, view, meetingId }: { anns: Annotation[];
         )
       })}
     </Floating>
-  )
-}
-
-/** 지난 회의에서 이름 붙인 목소리와 비슷하면 이름을 제안한다. 누르면 그 이름으로 정한다. */
-function VoiceChip({ meetingId, label, name, fromLive, score }: { meetingId: string; label: string; name: string; fromLive?: boolean; score?: number }) {
-  const accept = async () => {
-    const st = useStore.getState()
-    const names = st.meeting?.speakers || {}
-    await api.patchMeeting(meetingId, { speakers: { ...names, [label]: name } })
-    await Promise.all([st.refreshMeeting(), st.refreshFinal()])
-    st.toast(`${name}(으)로 정했어요. 목소리를 더 잘 기억할게요.`, 'success')
-  }
-  return (
-    <button
-      className="voice-chip"
-      onClick={accept}
-      title={fromLive
-        ? `회의 중 이 화자의 말 가운데 ${Math.round((score || 0) * 100)}%를 "${name}"(으)로 골랐어요. 누르면 이 이름으로 정해요.`
-        : `지난 회의에서 "${name}"(으)로 이름 붙인 목소리와 비슷해요. 누르면 이 이름으로 정해요.`}
-    >
-      {name}?
-    </button>
   )
 }
 
@@ -172,8 +141,6 @@ function ViewMenu({ rect, onClose, hasClock }: { rect: DOMRect; onClose: () => v
 export function TranscriptPane() {
   const meeting = useStore((s) => s.meeting)!
   const live = useStore((s) => s.live)
-  const final = useStore((s) => s.final)
-  const finalLoaded = useStore((s) => s.finalLoaded)
   const job = useStore((s) => s.job)
   const tab = useStore((s) => s.tab)
   const setTab = useStore((s) => s.setTab)
@@ -195,12 +162,11 @@ export function TranscriptPane() {
   const [barMode, setBarMode] = useState<'comment' | 'memo'>('comment')
   const [toNotes] = usePref(COMMENT_TO_NOTES, false)
   const recordingHere = rec.status !== 'idle' && rec.meetingId === meeting.id
-  const jobRunning = !!job && (job.status === 'queued' || job.status === 'running')
+  const jobActive = !!job && (job.status === 'queued' || job.status === 'running' || job.status === 'error')
 
-  const anns = tab === 'final' ? final?.annotations || [] : live?.annotations || []
-  const viewUnits = tab === 'final' ? final?.units || [] : live?.units || []
+  const anns = live?.annotations || []
+  const viewUnits = live?.units || []
   const hasDividers = anns.some((a) => a.kind === 'divider' && a.pos)
-  const movedCount = useMemo(() => (final?.annotations || []).filter((a) => a.origin === 'live' && a.pos).length, [final])
 
   // 따라가기: 녹음 중에는 맨 아래(새 문장), 재생 중에는 재생 위치를 따라간다.
   // 사용자가 직접 스크롤해 다른 곳을 보면 멈추고 "새 문장 n개" / "재생 위치로" 버튼을 띄운다.
@@ -279,15 +245,14 @@ export function TranscriptPane() {
           ? { kind: 'comment', view: 'live', start: { unit: last.id, offset: 0 }, end: { unit: last.id, offset: last.text.length }, body: text }
           : { kind: 'memo', view: 'live', t: currentClock(), after: last ? last.id : null, body: text },
       )
-      if (toNotes) await sendToNotes(meeting.id, [ann], 'live')
+      if (toNotes) await sendToNotes(meeting.id, [ann])
     } catch (e) {
       toast((e as Error).message, 'error')
     }
   }
 
   const tabs: { key: Tab; label: string; badge?: string }[] = [
-    { key: 'live', label: '실시간 기록', badge: liveCount ? String(liveCount) : undefined },
-    { key: 'final', label: '원본', badge: jobRunning ? `${Math.round((job?.progress || 0) * 100)}%` : final ? `v${final.version}` : undefined },
+    { key: 'live', label: '기록', badge: liveCount ? String(liveCount) : undefined },
     { key: 'summary', label: 'AI 요약', badge: meeting.has_summary ? '●' : undefined },
   ]
 
@@ -325,67 +290,31 @@ export function TranscriptPane() {
       <div className="pane-scroll" ref={scrollRef}>
         {tab === 'live' && (
           <>
-            {live && live.units.length === 0 && !partial ? (
-              <div className="empty-state">
-                {recordingHere ? (
-                  <>
-                    <div className="listening"><span /><span /><span /></div>
-                    <h3>듣고 있어요</h3>
-                    <p className="muted">말하면 1~2초 안에 여기에 적혀요. 글자를 드래그하고 C를 누르면 댓글, 아래 입력창은 방금 문장에 댓글을 달아요.</p>
-                  </>
-                ) : (
-                  <>
-                    <Mic size={24} />
-                    <h3>녹음을 시작하면 실시간으로 받아 적어요</h3>
-                    <p className="muted">아래 빨간 버튼을 누르거나, 이미 녹음한 파일은 왼쪽에서 올릴 수 있어요.</p>
-                  </>
-                )}
-              </div>
-            ) : live ? (
-              <TranscriptView view="live" meetingId={meeting.id} units={live.units} annotations={live.annotations} partial={partial} recording={recordingHere} scrollRef={scrollRef} />
-            ) : null}
-          </>
-        )}
-
-        {tab === 'final' && finalLoaded && (
-          <>
-            {final ? (
-              <>
-                {jobRunning && <ProcessingCard meeting={meeting} job={job} compact />}
-                {!jobRunning && meeting.status === 'recorded' && (
-                  <div className="proc-banner info">
-                    <RefreshCw size={14} />
-                    <span>원본을 만든 뒤에 녹음이 더 추가되었어요.</span>
-                    <button className="btn btn-sm" onClick={async () => { await api.process(meeting.id); useStore.getState().refreshMeeting() }}>원본 다시 만들기</button>
-                  </div>
-                )}
-                <div className="final-meta">
-                  <div className="speakers-legend">
-                    {final.speakers.length ? final.speakers.map((sp) => (
-                      <span key={sp} className="legend-item">
-                        <SpeakerLabel label={sp} compact />
-                        {final.speaker_suggestions?.[sp] && (
-                          <VoiceChip meetingId={meeting.id} label={sp} name={final.speaker_suggestions[sp].name} fromLive={final.speaker_suggestions[sp].from === 'live'} score={final.speaker_suggestions[sp].score} />
-                        )}
-                      </span>
-                    )) : <span className="muted">화자 구분 없음</span>}
-                  </div>
-                  <span className="spacer" />
-                  <span className="meta-text" title={`${final.engine} · ${final.diarizer}`}>
-                    <Sparkles size={12} />
-                    {engineLabel(final.engine)} · v{final.version} · {fmtRelative(final.created_at)}
-                  </span>
-                </div>
-                {movedCount > 0 && showMarks && (
-                  <div className="moved-note">
-                    <Info size={14} />
-                    회의 중 남긴 댓글·메모 {movedCount}개를 원본의 같은 자리에 옮겼어요.
-                  </div>
-                )}
-                <TranscriptView view="final" meetingId={meeting.id} units={final.units} annotations={final.annotations} scrollRef={scrollRef} />
-              </>
-            ) : (
+            {meeting.source === 'upload' && live && live.units.length === 0 ? (
               <ProcessingCard meeting={meeting} job={job} />
+            ) : (
+              <>
+                {jobActive && <ProcessingCard meeting={meeting} job={job} compact />}
+                {live && live.units.length === 0 && !partial ? (
+                  <div className="empty-state">
+                    {recordingHere ? (
+                      <>
+                        <div className="listening"><span /><span /><span /></div>
+                        <h3>듣고 있어요</h3>
+                        <p className="muted">말하면 1~2초 안에 여기에 적혀요. 틀린 글자는 문장에 마우스를 올려 연필을 누르거나 E로 바로 고쳐요.</p>
+                      </>
+                    ) : (
+                      <>
+                        <Mic size={24} />
+                        <h3>녹음을 시작하면 실시간으로 받아 적어요</h3>
+                        <p className="muted">아래 빨간 버튼을 누르거나, 이미 녹음한 파일은 왼쪽에서 올릴 수 있어요.</p>
+                      </>
+                    )}
+                  </div>
+                ) : live ? (
+                  <TranscriptView meetingId={meeting.id} units={live.units} annotations={live.annotations} partial={partial} recording={recordingHere} scrollRef={scrollRef} />
+                ) : null}
+              </>
             )}
           </>
         )}
@@ -434,7 +363,7 @@ export function TranscriptPane() {
       )}
       {viewRect && <ViewMenu rect={viewRect} onClose={() => setViewRect(null)} hasClock={(meeting.clock?.length || 0) > 0} />}
       {tocRect && <Toc anns={anns} units={viewUnits} rect={tocRect} onClose={() => setTocRect(null)} />}
-      {listRect && <AnnList anns={anns} rect={listRect} view={tab === 'final' ? 'final' : 'live'} meetingId={meeting.id} onClose={() => setListRect(null)} />}
+      {listRect && <AnnList anns={anns} rect={listRect} meetingId={meeting.id} onClose={() => setListRect(null)} />}
     </section>
   )
 }

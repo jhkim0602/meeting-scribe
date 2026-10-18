@@ -2,9 +2,9 @@
 
 - 메모는 그 순간의 흐름 안에 쪽지로
 - 댓글은 글자에 번호를 달고 그 문장 바로 아래에 (메모·댓글을 거의 문장마다 달아도 어느 말에 단 것인지 헷갈리지 않게)
-- 수정은 변경 내용 추적처럼 (반영 전: 원문 줄긋기 + 고친 말, 반영 후: 고친 말)
+- 기록의 글자는 사람이 직접 고친 것이 그대로 반영된다
 - 쉬는 시간·구분선은 가로줄
-원본(화자 구분)이 있으면 원본, 없으면 실시간 기록과 회의 중 고른 화자를 쓴다.
+기록은 하나다: 회의 중 받아 적고 사람이 고친 글(올린 파일이면 한 번 받아 적은 글)과 회의 중 고른 화자.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from typing import Any, Optional
 from .db import Store
 from .export import _local_ranges, divider_text, record_source
 from .minutes import _chip, _esc, _facts, _initials, page, people_of
-from .textutil import fmt_time, normalize
+from .textutil import fmt_time
 from .views import Views, speaker_name
 
 HL_COLORS = ("yellow", "green", "blue", "pink", "purple")
@@ -35,14 +35,12 @@ def collect(store: Store, views: Views, meeting_id: str) -> Optional[dict]:
     clock = m.get("clock") or []
     start = float(m.get("held_at") or (clock[0][1] if clock else m["created_at"]))
     people = people_of(m)
-    if not people and src["final"] is not None:
-        people = [{"name": n} for n in (speaker_name(src["speakers"], s) for s in src["final"]["speakers"]) if n]
     participants = [p["name"] for p in people]
     return {
         "id": m["id"], "title": m.get("title") or "제목 없는 회의", "start": start, "duration": float(m.get("duration") or 0),
         "place": m.get("place") or "", "participants": participants, "people": people, "clock": clock,
         "units": src["units"], "annotations": src["annotations"], "speakers": src["speakers"],
-        "is_final": src["final"] is not None,
+        "kind": src["kind"],
     }
 
 
@@ -72,37 +70,22 @@ class _Marks:
         return self.numbers[ann["id"]]
 
     def unit(self, text: str, ranges: list[tuple[int, int, dict, bool]], comments: list[dict]) -> str:
-        """겹친 표시도 함께 보이도록 경계마다 잘라서 감싼다: 댓글(바깥) > 강조 > 수정(원문 줄긋기 + 고친 말)"""
-        edits: list[tuple[int, int, dict, bool]] = []
-        others: list[tuple[int, int, dict, bool]] = []
-        for r in sorted(ranges, key=lambda r: (r[0], -r[1])):
-            s, e, ann, _ = r
-            if ann["kind"] != "edit":
-                others.append(r)
-            elif ann.get("status") != "dismissed" and ann.get("match") != "same" and not any(s < e2 and s2 < e for s2, e2, _, _ in edits):
-                edits.append(r)
-        cuts = sorted({0, len(text)} | {x for r in edits + others for x in r[:2]})
+        """겹친 표시도 함께 보이도록 경계마다 잘라서 감싼다: 댓글(바깥) > 강조"""
+        marks = sorted((r for r in ranges if r[2]["kind"] in ("comment", "highlight")), key=lambda r: (r[0], -r[1]))
+        cuts = sorted({0, len(text)} | {x for r in marks for x in r[:2]})
         out: list[str] = []
         for a, b in zip(cuts, cuts[1:]):
             inside = lambda r: r[0] <= a and b <= r[1]  # noqa: E731
-            ed = next((r for r in edits if inside(r)), None)
-            hl = next((r for r in others if r[2]["kind"] == "highlight" and inside(r)), None)
-            cm = next((r for r in others if r[2]["kind"] == "comment" and inside(r)), None)
-            if ed is None:
-                piece = _esc(text[a:b])
-            else:
-                repl = _esc(ed[2].get("replacement") or "")
-                if ed[2].get("status") == "accepted":
-                    piece = f'<span class="ed" title="고치기 전: {_esc(text[ed[0]:ed[1]])}">{repl}</span>' if a == ed[0] else ""
-                else:
-                    piece = f"<del>{_esc(text[a:b])}</del>" + (f"<ins>{repl}</ins>" if b == ed[1] else "")
+            hl = next((r for r in marks if r[2]["kind"] == "highlight" and inside(r)), None)
+            cm = next((r for r in marks if r[2]["kind"] == "comment" and inside(r)), None)
+            piece = _esc(text[a:b])
             if piece and hl:
                 color = hl[2].get("color") if hl[2].get("color") in HL_COLORS else "yellow"
                 piece = f'<mark class="hl hl-{color}">{piece}</mark>'
             if piece and cm:
                 piece = f'<mark class="cm" data-c="{self.number(cm[2])}">{piece}</mark>'
             out.append(piece)
-            for s, e, ann, last in others:
+            for s, e, ann, last in marks:
                 if ann["kind"] == "comment" and e == b and last:
                     n = self.number(ann)
                     out.append(self._sup(n))
@@ -126,24 +109,8 @@ def _divider_html(d: dict) -> str:
 def _comment_html(c: dict) -> str:
     replies = "".join(f'<p class="reply">{_esc(r.get("text", ""))}</p>' for r in c.get("replies") or [])
     done = '<span class="tag ok">해결</span>' if c.get("status") == "resolved" else ""
-    # 후처리 원본에서 말이 바뀌었으면 회의 중에 단 글자도 함께 (자리를 시간으로만 찾았으면 "추정")
-    pos, quote = c.get("pos") or {}, (c.get("anchor") or {}).get("quote") or ""
-    was = ""
-    if quote and (pos.get("approx") or normalize(pos.get("text") or "") != normalize(quote)):
-        was = f'<p class="was">{"자리 추정 · " if pos.get("approx") else ""}회의 중 기록: “{_esc(quote)}”</p>'
     return (f'<div class="cmt" id="c-{c["n"]}"><span class="n">{c["n"]}</span>'
-            f'<div class="cb"><p class="body">{_esc(c.get("body") or "")}{done}</p>{was}{replies}</div></div>')
-
-
-def _ann_t(a: dict) -> float:
-    return float(a["anchor"].get("t", a["anchor"].get("t0", 0)) or 0)
-
-
-def _orphan_html(a: dict) -> str:
-    label = {"memo": "메모", "comment": "댓글", "edit": "수정"}[a["kind"]]
-    quote = a["anchor"].get("quote")
-    quote_html = f' <span class="q">“{_esc(quote)}”</span>' if quote else ""
-    return f'<li>{_chip(_ann_t(a))}<span class="k">{label}</span>{_esc(a.get("body") or a.get("replacement") or "")}{quote_html}</li>'
+            f'<div class="cb"><p class="body">{_esc(c.get("body") or "")}{done}</p>{replies}</div></div>')
 
 
 def _person_index(data: dict) -> dict[str, int]:
@@ -160,18 +127,12 @@ def _person_index(data: dict) -> dict[str, int]:
 
 def render(data: dict, audio_src: Optional[str] = None, generated: Optional[float] = None, tools: str = "") -> str:
     units, anns, speakers, clock = data["units"], data["annotations"], data["speakers"], data["clock"]
-    per = _local_ranges(units, [a for a in anns if a["kind"] in ("comment", "edit", "highlight")])
+    per = _local_ranges(units, [a for a in anns if a["kind"] in ("comment", "highlight")])
     after: dict[Optional[str], list[dict]] = {}
-    orphans: list[dict] = []
     for a in anns:
         pos = a.get("pos")
-        if a["kind"] in ("memo", "divider"):
-            if pos is not None and "after" in pos:
-                after.setdefault(pos["after"], []).append(a)
-            elif a["kind"] == "memo" and (a.get("body") or "").strip():
-                orphans.append(a)
-        elif pos is None and a["kind"] in ("comment", "edit") and (a.get("body") or a.get("replacement") or "").strip():
-            orphans.append(a)
+        if a["kind"] in ("memo", "divider") and pos is not None and "after" in pos:
+            after.setdefault(pos["after"], []).append(a)
     for lst in after.values():
         lst.sort(key=lambda a: a["anchor"].get("t", 0))
     colors = _person_index(data)
@@ -254,14 +215,15 @@ def render(data: dict, audio_src: Optional[str] = None, generated: Optional[floa
         elif a["kind"] == "comment" and a["id"] in marks.numbers:
             index_items.append((float(a["anchor"].get("t0", 0) or 0), "comment", f"#c-{marks.numbers[a['id']]}", a.get("body") or ""))
     index_items.sort(key=lambda x: x[0])
-    counts = {k: sum(1 for a in anns if a["kind"] == k and (k != "memo" or (a.get("body") or "").strip())) for k in ("memo", "comment", "edit", "highlight")}
+    counts = {k: sum(1 for a in anns if a["kind"] == k and (k != "memo" or (a.get("body") or "").strip())) for k in ("memo", "comment", "highlight")}
+    counts["edit"] = sum(1 for u in units if u.get("text_orig") is not None)
     turns_n = sum(1 for b in blocks if b.startswith("<article"))
 
     top = []
     stats = (f'<div class="stats"><span>발언 <b>{turns_n:,}</b></span><span>메모 <b>{counts["memo"]:,}</b></span><span>댓글 <b>{counts["comment"]:,}</b></span>'
-             f'<span>수정 <b>{counts["edit"]:,}</b></span><span>강조 <b>{counts["highlight"]:,}</b></span>'
+             f'<span>고친 문장 <b>{counts["edit"]:,}</b></span><span>강조 <b>{counts["highlight"]:,}</b></span>'
              '<span class="legend"><mark class="hl hl-yellow">강조</mark><mark class="cm">댓글</mark><a class="cn">1</a>'
-             '<del>원문</del><ins>고친 말</ins><span class="memo-tag">메모</span></span></div>')
+             '<span class="memo-tag">메모</span></span></div>')
     top.append(stats)
     if index_items:
         lis = "".join(
@@ -274,18 +236,10 @@ def render(data: dict, audio_src: Optional[str] = None, generated: Optional[floa
         detail = f' <span class="mix">메모 {n_memo:,} · 댓글 {len(index_items) - n_memo:,}</span>' if len(index_items) > INDEX_OPEN_MAX else ""
         top.append(f'<details class="index"{" open" if len(index_items) <= INDEX_OPEN_MAX else ""}><summary>메모·댓글 모아 보기 <b>{len(index_items):,}</b>{detail}</summary><ol>{lis}</ol></details>')
 
-    tail = ""
-    if orphans:
-        lis = "".join(_orphan_html(a) for a in sorted(orphans, key=_ann_t))
-        tail = ('<section class="orphans"><h2>자리를 찾지 못한 메모·댓글</h2>'
-                '<p class="hint">원본을 다시 만들면서 말이 바뀌어 원래 자리를 찾지 못했어요.</p>'
-                f"<ul>{lis}</ul></section>")
-
-    kind = "원본 · 화자 구분" if data["is_final"] else "실시간 기록"
     body = (f'<div class="rec-top">{"".join(top)}</div>'
-            f'<div class="transcript">{"".join(blocks)}</div>{tail}')
+            f'<div class="transcript">{"".join(blocks)}</div>')
     return page(
-        data, brand=("전사 기록", "Transcript", "TR"), facts=_facts(data["start"], data["duration"], data["place"], [("기록", kind)]),
+        data, brand=("전사 기록", "Transcript", "TR"), facts=_facts(data["start"], data["duration"], data["place"], [("기록", "파일 받아쓰기" if data.get("kind", "").startswith("파일") else "회의 중 기록")]),
         body=body, audio_src=audio_src, generated=generated, tools=tools, extra_css=CSS, extra_js=JS,
     )
 
@@ -296,7 +250,6 @@ CSS = r"""
 .stats { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; padding: 0 0 12px; font-size: 12.5px; color: var(--muted); border-bottom: 1px solid var(--line); }
 .stats b { margin-left: 3px; color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
 .legend { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text); }
-.legend ins { margin-left: -4px; }
 .index { margin: 0; border-bottom: 1px solid var(--line); }
 .index summary { padding: 11px 0; font-size: 13px; font-weight: 600; color: var(--ink); cursor: pointer; list-style: none; }
 .index summary::-webkit-details-marker { display: none; }
@@ -336,9 +289,6 @@ mark { color: inherit; padding: 1px 0; border-radius: 2px; }
 .hl-pink { background: #f8e1ec; } .hl-purple { background: #ebe3f5; }
 mark.cm { background: rgba(47, 69, 184, 0.045); border-bottom: 1.5px solid rgba(47, 69, 184, 0.28); border-radius: 0; }
 .cn { display: inline-grid; place-items: center; min-width: 15px; height: 15px; margin: 0 1px 0 2px; padding: 0 3px; border: 0; border-radius: 8px; background: #e6e9f8; color: #4152b4 !important; font: 600 9.5px/1 var(--mono); vertical-align: 4px; }
-del { color: #b45454; text-decoration-color: rgba(180, 84, 84, 0.5); background: #fdf1f1; border-radius: 2px; }
-ins { margin-left: 2px; color: #237347; text-decoration: none; background: #ebf6ef; border-radius: 2px; padding: 0 1px; }
-.ed { border-bottom: 1px dotted #4b9b6c; }
 
 .memo { display: flex; align-items: baseline; gap: 10px; margin: 2px 0 10px; padding: 7px 12px 8px; background: #fffcf5; border: 1px solid #f4ecd6; border-radius: 6px; }
 .memo-h { flex: none; display: inline-flex; align-items: center; gap: 6px; transform: translateY(-1px); }
@@ -352,7 +302,6 @@ ins { margin-left: 2px; color: #237347; text-decoration: none; background: #ebf6
 .cmt .n { flex: none; display: grid; place-items: center; min-width: 18px; height: 18px; padding: 0 4px; margin-top: 2px; border-radius: 9px; background: #e6e9f8; color: #4152b4; font: 600 10px/1 var(--mono); }
 .cmt .cb { min-width: 0; }
 .cmt .body { margin: 0; color: #3a3f48; }
-.cmt .was { margin: 2px 0 0; font-size: 12.5px; color: var(--muted); }
 .cmt .reply { margin: 4px 0 0; padding-left: 10px; border-left: 2px solid var(--line); color: #4b5260; }
 .cmt .tag { margin-left: 6px; }
 .cmt:target { animation: flash 1.6s ease-out; }
@@ -361,12 +310,6 @@ ins { margin-left: 2px; color: #237347; text-decoration: none; background: #ebf6
 .divider { display: flex; align-items: center; gap: 14px; margin: 22px 0 10px; color: var(--muted); font-size: 12.5px; font-weight: 500; }
 .divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: var(--line); }
 
-.orphans { margin-top: 36px; padding-top: 14px; border-top: 1px solid var(--line); }
-.orphans h2 { margin: 0 0 2px; font-size: 14px; color: var(--ink); }
-.orphans .hint { margin: 0 0 8px; font-size: 12.5px; color: var(--muted); }
-.orphans ul { list-style: none; margin: 0; padding: 0; }
-.orphans li { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; padding: 6px 0; font-size: 13.5px; border-bottom: 1px solid var(--line-2); }
-.orphans .q { color: var(--muted); }
 
 @media screen { .turn { content-visibility: auto; contain-intrinsic-size: auto 120px; } }
 @media (max-width: 860px) {
@@ -387,7 +330,7 @@ ins { margin-left: 2px; color: #237347; text-decoration: none; background: #ebf6
   .cmt { font-size: 9pt; }
   .memo p { font-size: 9.5pt !important; }
   .index { display: none; }
-  mark, del, ins, .memo, .memo-tag, .cn, .cmt, .cmt .n { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  mark, .memo, .memo-tag, .cn, .cmt, .cmt .n { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
 """
 

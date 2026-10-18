@@ -1,4 +1,4 @@
-"""API 통합 테스트: 녹음 → 실시간 첨삭 → 원본 생성 → 첨삭 재배치 → 내보내기."""
+"""API 통합 테스트: 녹음 → 기록 위 메모·댓글, 문장 직접 고치기 → 원본 스크립트(참고용) → 내보내기."""
 
 import json
 import os
@@ -88,40 +88,40 @@ def test_full_flow(client):
     u0, u1 = units[0], units[1]
     w = u0["text"].split(" ")
     c = client.post(f"/api/meetings/{mid}/annotations", json={
-        "kind": "comment", "view": "live", "body": "이 숫자 확인 필요",
+        "kind": "comment", "body": "이 숫자 확인 필요",
         "start": {"unit": u0["id"], "offset": 0}, "end": {"unit": u0["id"], "offset": len(w[0]) + 1 + len(w[1])},
     }).json()
-    assert c["pos"]["start"]["unit"] == u0["id"] and not c["pos"]["approx"]
-    e_word = u1["text"].split(" ")[0]
-    e = client.post(f"/api/meetings/{mid}/annotations", json={
-        "kind": "edit", "view": "live", "replacement": e_word + "(수정)",
-        "start": {"unit": u1["id"], "offset": 0}, "end": {"unit": u1["id"], "offset": len(e_word)},
-    }).json()
-    assert e["replacement"].endswith("(수정)")
-    memo = client.post(f"/api/meetings/{mid}/annotations", json={"kind": "memo", "view": "live", "t": u0["t1"] + 0.01, "after": u0["id"], "body": "여기 중요"}).json()
+    assert c["pos"]["start"]["unit"] == u0["id"] and c["pos"]["text"] == f"{w[0]} {w[1]}"
+    assert client.post(f"/api/meetings/{mid}/annotations", json={"kind": "edit", "start": c["pos"]["start"], "end": c["pos"]["end"], "body": "x"}).status_code == 400
+    memo = client.post(f"/api/meetings/{mid}/annotations", json={"kind": "memo", "t": u0["t1"] + 0.01, "after": u0["id"], "body": "여기 중요"}).json()
     assert memo["pos"] == {"after": u0["id"]}
     r = client.post(f"/api/annotations/{c['id']}/replies", json={"text": "다음 회의에서 확인"}).json()
     assert r["replies"][0]["text"] == "다음 회의에서 확인"
 
+    # 틀린 글자를 직접 고친다: 앞에 글자를 넣어도 댓글은 같은 자리에, 댓글 단 글자를 고치면 고친 글자에
+    fixed = "확인 " + u0["text"].replace(w[1], "(고침)", 1)
+    ed = client.patch(f"/api/meetings/{mid}/segments/{u0['id']}", json={"text": fixed}).json()
+    assert ed["unit"]["text"] == fixed and ed["unit"]["text_orig"] == u0["text"]
+    moved = {a["id"]: a for a in ed["annotations"]}
+    assert moved[c["id"]]["pos"]["text"] == f"{w[0]} (고침)"
+    assert client.patch(f"/api/meetings/{mid}/segments/{u0['id']}", json={"text": "   "}).status_code == 400
+
     job = _wait_job(client, mid)
     assert job["status"] == "done", job
-    fin = client.get(f"/api/meetings/{mid}/final").json()["final"]
-    assert fin and fin["version"] == 1
-    assert {u["speaker"] for u in fin["units"]} >= {"S1"}
-    anns = {a["id"]: a for a in fin["annotations"]}
-    assert anns[c["id"]]["pos"] is not None
-    assert anns[memo["id"]]["pos"]["after"] is not None
-    assert anns[e["id"]]["match"] == "differs"
-
-    # 원본에서 수정 제안 '적용'
-    p = client.patch(f"/api/annotations/{e['id']}?view=final", json={"status": "accepted"}).json()
-    assert p["status"] == "accepted"
+    # 후처리 뒤에도 기록은 그대로 (고친 글자, 메모·댓글 위치 모두)
+    live = client.get(f"/api/meetings/{mid}/live").json()
+    assert live["units"][0]["text"] == fixed and [u["id"] for u in live["units"]] == [s["id"] for s in segs]
+    anns = {a["id"]: a for a in live["annotations"]}
+    assert anns[c["id"]]["pos"]["text"] == f"{w[0]} (고침)" and anns[memo["id"]]["pos"] == {"after": u0["id"]}
+    # 원본 스크립트는 참고용 Markdown으로 따로
+    script = client.get(f"/api/meetings/{mid}/script.md").text
+    assert "원본 스크립트" in script and "참고용" in script and "**화자 1**" in script
+    assert client.get(f"/api/meetings/{mid}/final").status_code == 404
 
     md = client.get(f"/api/meetings/{mid}/export.md").text
     assert "[댓글 c1] 이 숫자 확인 필요" in md
     assert "[메모" in md and "여기 중요" in md
-    assert "(수정)" in md
-    assert "화자" in md
+    assert "(고침)" in md and "1문장을 직접 고침" in md
 
     notes = [{"type": "paragraph", "props": {}, "content": [{"type": "timestamp", "props": {"t": 3.2}}, {"type": "text", "text": " 예산 결정", "styles": {}}], "children": []}]
     assert client.put(f"/api/meetings/{mid}/notes", json={"blocks": notes}).json()["ok"]
@@ -165,9 +165,20 @@ def test_upload_file(client, tmp_path):
     assert m["title"] == "회의 녹음" and m["source"] == "upload"
     job = _wait_job(client, m["id"])
     assert job["status"] == "done", job
-    fin = client.get(f"/api/meetings/{m['id']}/final").json()["final"]
-    assert fin["units"]
+    # 올린 파일은 받아 적은 결과가 곧 회의 기록 (목소리 묶음 A, B…로 화자를 고를 수 있고, 직접 고칠 수 있다)
+    units = client.get(f"/api/meetings/{m['id']}/live").json()["units"]
+    assert units and all(u["speaker_auto"] for u in units) and units[0]["speaker_auto"] == "A"
     assert abs(client.get(f"/api/meetings/{m['id']}").json()["duration"] - 20.0) < 0.2
+    pid = client.put(f"/api/meetings/{m['id']}/participants", json={"participants": [{"name": "오세린"}]}).json()["participants"][0]["id"]
+    ch = client.post(f"/api/meetings/{m['id']}/live/speaker", json={"segment_ids": [units[0]["id"]], "participant_id": pid}).json()["changes"]
+    assert {c["id"] for c in ch} == {u["id"] for u in units if u["speaker_auto"] == "A"}
+    ed = client.patch(f"/api/meetings/{m['id']}/segments/{units[0]['id']}", json={"text": "고친 첫 문장"}).json()
+    assert ed["unit"]["text"] == "고친 첫 문장"
+    # 다시 처리해도 사람이 고친 기록은 그대로
+    client.post(f"/api/meetings/{m['id']}/process")
+    assert _wait_job(client, m["id"])["status"] == "done"
+    again = client.get(f"/api/meetings/{m['id']}/live").json()["units"]
+    assert again[0]["text"] == "고친 첫 문장" and len(again) == len(units)
 
 
 def test_comment_export_flag_and_whole_sentence_comment(client):
@@ -373,25 +384,23 @@ def test_wav_appender_survives_disk_full(tmp_path):
 
 
 
-def test_mutations_return_positions_for_both_views(client):
-    """화면이 전체 기록을 다시 받지 않도록, 바뀐 항목의 두 화면 위치를 함께 돌려준다."""
+def test_mutations_return_the_changed_item_with_its_position(client):
+    """화면이 전체 기록을 다시 받지 않도록, 바뀐 항목을 위치와 함께 돌려준다."""
     mid = client.post("/api/meetings", json={}).json()["id"]
     pcm = _speech_pcm([("s", 2.5), ("n", 1.0), ("s", 3.0), ("n", 1.0)])
     _record(client, mid, pcm, messages=[{"type": "stop"}], until="stopped")
     assert _wait_job(client, mid)["status"] == "done"
     u = client.get(f"/api/meetings/{mid}/live").json()["units"][0]
     c = client.post(f"/api/meetings/{mid}/annotations", json={
-        "kind": "comment", "view": "live", "body": "확인", "start": {"unit": u["id"], "offset": 0}, "end": {"unit": u["id"], "offset": 4},
+        "kind": "comment", "body": "확인", "start": {"unit": u["id"], "offset": 0}, "end": {"unit": u["id"], "offset": 4},
     }).json()
-    assert c["resolved"]["live"]["pos"]["start"]["unit"] == u["id"]
-    assert c["resolved"]["final"]["pos"]["start"]["unit"].startswith("u")
+    assert c["pos"]["start"]["unit"] == u["id"] and "resolved" not in c
     r = client.post(f"/api/annotations/{c['id']}/replies", json={"text": "네"}).json()
-    assert r["replies"][0]["text"] == "네" and r["resolved"]["final"]["pos"] == c["resolved"]["final"]["pos"]
+    assert r["replies"][0]["text"] == "네" and r["pos"] == c["pos"]
     ex = client.post(f"/api/meetings/{mid}/annotations/exported", json={"ids": [c["id"]]}).json()
     assert ex["updated"] == 1 and ex["exported_at"][c["id"]] > 0
-    # 위치 캐시: 답글/내보내기 표시는 바뀌어도 같은 위치, 새 값은 그대로 보인다
-    fin = client.get(f"/api/meetings/{mid}/final").json()["final"]["annotations"][0]
-    assert fin["replies"][0]["text"] == "네" and fin["exported_at"] and fin["pos"] == c["resolved"]["final"]["pos"]
+    got = client.get(f"/api/meetings/{mid}/live").json()["annotations"][0]
+    assert got["replies"][0]["text"] == "네" and got["exported_at"] and got["pos"] == c["pos"]
 
 
 def test_clock_maps_recording_time_to_wall_time(client):
@@ -428,14 +437,14 @@ def test_settled_audio_is_compressed_and_still_usable(client, monkeypatch):
     r = client.get(f"/api/meetings/{mid}/audio", headers={"Range": "bytes=0-99"})
     assert r.status_code == 206 and r.headers["content-type"] == "audio/mp4" and len(r.content) == 100
 
-    # 다시 만들기: m4a를 임시 WAV로 풀어 처리하고, 끝나면 임시 파일은 지운다. 원본은 최근 2개만 남긴다.
+    # 다시 만들기: m4a를 임시 WAV로 풀어 처리하고, 끝나면 임시 파일은 지운다. 원본 스크립트는 마지막 것만 남긴다.
     for _ in range(2):
         client.post(f"/api/meetings/{mid}/process")
         assert _wait_job(client, mid)["status"] == "done"
     assert (mdir / "audio.m4a").exists() and not (mdir / "audio.wav").exists() and not (mdir / "work.wav").exists()
     with appmain.store.conn() as c:
         versions = [r["version"] for r in c.execute("SELECT version FROM final_versions WHERE meeting_id=?", (mid,))]
-    assert sorted(versions) == [2, 3]
+    assert versions == [3]
 
     # 이어서 녹음: 먼저 WAV로 풀고(preparing) 같은 길이에서 이어 붙인다
     with client.websocket_connect(f"/api/meetings/{mid}/record") as ws:
@@ -466,7 +475,7 @@ def test_upload_copy_is_removed_after_processing(client, tmp_path):
 
 
 def test_search_index_follows_writes(client):
-    """검색 색인: 실시간 기록, 원본, 노트, 제목이 바뀌면 바로 찾아지고, 지우면 사라진다."""
+    """검색 색인: 회의 기록(고친 글자 포함), 노트, 제목이 바뀌면 바로 찾아지고, 지우면 사라진다. 원본 스크립트는 찾지 않는다."""
     from scribe import main as appmain
 
     mid = client.post("/api/meetings", json={"title": "색인 시험 회의"}).json()["id"]
@@ -481,14 +490,15 @@ def test_search_index_follows_writes(client):
     client.patch(f"/api/meetings/{mid}", json={"title": "분기 결산 회의"})
     assert any(h["kind"] == "title" for h in client.get("/api/search", params={"q": "결산"}).json() if h["meeting_id"] == mid)
     assert not any(h["kind"] == "title" for h in client.get("/api/search", params={"q": "색인 시험"}).json() if h["meeting_id"] == mid)
-    # 원본을 만들면 실시간 대신 원본에서 찾는다
+    # 원본 스크립트를 만들어도 회의 기록에서 찾는다
     client.post(f"/api/meetings/{mid}/process")
     assert _wait_job(client, mid)["status"] == "done"
     kinds = {h["kind"] for h in client.get("/api/search", params={"q": live_text[:5]}).json() if h["meeting_id"] == mid}
-    assert "final" in kinds and "live" not in kinds
-    # 짧은 검색어(LIKE)도 실시간 기록 줄에 밀려 원본 결과가 빠지지 않는다
-    short = live_text.replace(" ", "")[:2]
-    assert any(h["kind"] == "final" for h in client.get("/api/search", params={"q": short, "limit": 5}).json() if h["meeting_id"] == mid)
+    assert kinds == {"live"}
+    # 고친 글자로 바로 찾아진다
+    u0 = client.get(f"/api/meetings/{mid}/live").json()["units"][0]
+    client.patch(f"/api/meetings/{mid}/segments/{u0['id']}", json={"text": u0["text"] + " 견본고침"})
+    assert any(h["kind"] == "live" and h["unit"] == u0["id"] for h in client.get("/api/search", params={"q": "견본고침"}).json())
     # 색인을 처음부터 다시 만들어도 같은 결과
     before = client.get("/api/search", params={"q": "견적서"}).json()
     appmain.store.rebuild_search_index()
@@ -496,34 +506,6 @@ def test_search_index_follows_writes(client):
     assert word
     client.delete(f"/api/meetings/{mid}")
     assert not any(h["meeting_id"] == mid for h in client.get("/api/search", params={"q": "견적서"}).json())
-
-
-def test_named_voices_are_suggested_in_later_meetings(client):
-    """화자에 이름을 붙이면 목소리를 기억했다가, 다음 회의의 비슷한 목소리에 그 이름을 제안한다."""
-    def processed_meeting():
-        mid = client.post("/api/meetings", json={}).json()["id"]
-        _record(client, mid, _speech_pcm([("s", 3.0), ("n", 1.0)] * 8), messages=[{"type": "stop"}], until="stopped")
-        assert _wait_job(client, mid)["status"] == "done"
-        return mid
-
-    a = processed_meeting()
-    fa = client.get(f"/api/meetings/{a}/final").json()["final"]
-    assert fa["speaker_suggestions"] == {} and len(fa["speakers"]) == 3
-    client.patch(f"/api/meetings/{a}", json={"speakers": {"S1": "김민지", "S2": "박준호"}})
-
-    b = processed_meeting()
-    sug = client.get(f"/api/meetings/{b}/final").json()["final"]["speaker_suggestions"]
-    assert sug["S1"]["name"] == "김민지" and sug["S2"]["name"] == "박준호" and "S3" not in sug
-    # 이름을 정하면 그 화자는 더 제안하지 않고, 같은 이름을 다른 화자에게 주지 않는다
-    client.patch(f"/api/meetings/{b}", json={"speakers": {"S1": "김민지"}})
-    sug = client.get(f"/api/meetings/{b}/final").json()["final"]["speaker_suggestions"]
-    assert "S1" not in sug and sug["S2"]["name"] == "박준호"
-    # 회의를 지우면 그 회의에서 배운 목소리도 잊는다
-    client.delete(f"/api/meetings/{a}")
-    client.delete(f"/api/meetings/{b}")
-    c = processed_meeting()
-    assert client.get(f"/api/meetings/{c}/final").json()["final"]["speaker_suggestions"] == {}
-    client.delete(f"/api/meetings/{c}")
 
 
 def test_backup_zip_contains_everything(client, tmp_path):
@@ -551,7 +533,7 @@ def test_backup_zip_contains_everything(client, tmp_path):
 
 def test_live_temporary_speakers_follow_one_click(client):
     """실시간 임시 화자: 목소리로 묶고(A, B…), 한 문장에 참여자를 고르면 같은 목소리 문장 전체와
-    앞으로 올 문장에 반영된다. 원본 화자 이름과 다음 회의의 목소리 기억으로도 이어진다."""
+    앞으로 올 문장에 반영된다. 다음 회의의 목소리 기억으로도 이어진다."""
     mid = client.post("/api/meetings", json={}).json()["id"]
     parts = client.put(f"/api/meetings/{mid}/participants", json={"participants": [{"name": "김민지"}, {"name": " 박준호 "}, {"name": "김민지"}]}).json()["participants"]
     assert [p["name"] for p in parts] == ["김민지", "박준호"]
@@ -586,16 +568,14 @@ def test_live_temporary_speakers_follow_one_click(client):
     got = _record(client, mid, _speech_pcm([("s", 3.0), ("n", 1.5)] * 2), messages=[{"type": "pause"}])
     labels = [m["segment"] for m in got if m["type"] == "speaker"]
     assert labels and all(l["speaker"] == minji and l["speaker_src"] == "auto" for l in labels), labels
-    md = client.get(f"/api/meetings/{mid}/export.md", params={"version": "live"}).text
+    md = client.get(f"/api/meetings/{mid}/export.md").text
     assert "김민지:" in md and "박준호:" in md and "화자 C(추정):" in md
 
-    # 원본: 회의 중 고른 화자가 원본 화자 이름으로
+    # 후처리(원본 스크립트)를 만들어도 회의 중 고른 화자는 기록에 그대로
+    before = [(u["id"], u["speaker"]) for u in client.get(f"/api/meetings/{mid}/live").json()["units"]]
     client.post(f"/api/meetings/{mid}/process")
     assert _wait_job(client, mid)["status"] == "done"
-    m = client.get(f"/api/meetings/{mid}").json()
-    assert m["speakers"]["S1"] == "김민지"
-    fin = client.get(f"/api/meetings/{mid}/final").json()["final"]
-    assert fin["units"] and "S1" not in fin["speaker_suggestions"]
+    assert [(u["id"], u["speaker"]) for u in client.get(f"/api/meetings/{mid}/live").json()["units"]] == before
 
     # 다음 회의: 같은 이름의 참여자를 넣으면 기억한 목소리로 처음부터 알아본다
     m2 = client.post("/api/meetings", json={}).json()["id"]
@@ -607,17 +587,6 @@ def test_live_temporary_speakers_follow_one_click(client):
     assert sug["김민지"]["voice"] is True and "박준호" in sug
     for x in (mid, m2):
         client.post(f"/api/meetings/{x}/cancel")
-
-
-def test_live_to_final_names_auto_or_suggest():
-    from scribe.live_speakers import live_to_final_names
-
-    utt = [{"speaker": "S1", "t0": 0, "t1": 10}, {"speaker": "S2", "t0": 10, "t1": 20}]
-    live = [{"t0": 0, "t1": 5.5, "speaker": "a"}, {"t0": 5.5, "t1": 10, "speaker": "b"}, {"t0": 10, "t1": 19, "speaker": "b"}]
-    out = live_to_final_names(utt, live, {"a": "김민지", "b": "박준호"})
-    assert out["S2"]["name"] == "박준호" and out["S2"]["auto"] is True
-    assert out["S1"]["name"] == "김민지" and out["S1"]["auto"] is False  # 55%: 제안만
-
 
 
 def test_minutes_html_has_summary_notes_and_marks_but_no_transcript(client):
@@ -663,7 +632,7 @@ def test_minutes_html_has_summary_notes_and_marks_but_no_transcript(client):
 
 
 def test_transcript_html_is_a_call_log_with_marks_in_place(client):
-    """전사 기록: 화자별 발언이 이어지고, 메모는 그 순간에, 댓글은 번호와 옆 칸에, 수정은 줄긋기 + 고친 말로."""
+    """전사 기록: 화자별 발언이 이어지고, 메모는 그 순간에, 댓글은 번호와 그 문장 아래에, 고친 글자는 고친 대로."""
     mid = client.post("/api/meetings", json={"title": "통화 기록"}).json()["id"]
     minji = client.put(f"/api/meetings/{mid}/participants", json={"participants": [{"name": "김민지"}]}).json()["participants"][0]["id"]
     _record(client, mid, _speech_pcm([("s", 2.5), ("n", 1.0), ("s", 2.5), ("n", 1.0)]), messages=[{"type": "pause"}])
@@ -671,13 +640,11 @@ def test_transcript_html_is_a_call_log_with_marks_in_place(client):
     u0, u1 = units[0], units[1]
     client.post(f"/api/meetings/{mid}/live/speaker", json={"segment_ids": [u0["id"]], "participant_id": minji})
     w0 = u0["text"].split(" ")[0]
+    client.patch(f"/api/meetings/{mid}/segments/{u0['id']}", json={"text": "고친<말>" + u0["text"][len(w0):]})
     client.post(f"/api/meetings/{mid}/annotations", json={
-        "kind": "edit", "view": "live", "replacement": "고친<말>",
-        "start": {"unit": u0["id"], "offset": 0}, "end": {"unit": u0["id"], "offset": len(w0)}})
-    client.post(f"/api/meetings/{mid}/annotations", json={
-        "kind": "comment", "view": "live", "body": "확인 <필요>",
+        "kind": "comment", "body": "확인 <필요>",
         "start": {"unit": u1["id"], "offset": 0}, "end": {"unit": u1["id"], "offset": len(u1["text"])}})
-    client.post(f"/api/meetings/{mid}/annotations", json={"kind": "memo", "view": "live", "t": u0["t1"] + 0.01, "after": u0["id"], "body": "여기서 결론"})
+    client.post(f"/api/meetings/{mid}/annotations", json={"kind": "memo", "t": u0["t1"] + 0.01, "after": u0["id"], "body": "여기서 결론"})
 
     r = client.get(f"/api/meetings/{mid}/transcript.html")
     assert r.status_code == 200
@@ -685,7 +652,8 @@ def test_transcript_html_is_a_call_log_with_marks_in_place(client):
     rest0 = u0["text"][len(w0):].strip()
     assert rest0[:6] in h and u1["text"][:6] in h  # 받아 적은 문장이 모두 나온다
     assert '<span class="name">김민지</span>' in h
-    assert f"<del>{w0}</del><ins>고친&lt;말&gt;</ins>" in h
+    assert "고친&lt;말&gt;" in h and f">{w0} " not in h and "<del>" not in h  # 고친 글자만, 줄긋기 없이
+    assert "고친 문장 <b>1</b>" in h
     body = h[h.index('<div class="transcript'):]
     assert body.index(f'id="u-{u0["id"]}"') < body.index("여기서 결론") < body.index(f'id="u-{u1["id"]}"')  # 메모는 그 순간에
     assert '<mark class="cm" data-c="1">' in h and 'id="c-1"' in h and "확인 &lt;필요&gt;" in h
@@ -726,10 +694,9 @@ def test_participant_details_are_kept_carried_over_and_shown(client):
     assert sug["한지우"]["org"] == "전략기획팀" and sug["오세린"]["role"] == "디자이너"
 
 
-def test_marks_from_live_before_and_after_postprocess_land_on_the_final(client):
-    """회의 중 실시간 기록에 단 댓글, 후처리가 끝난 뒤 실시간 탭에 단 댓글, 원본 탭에 단 댓글이
-    모두 전사 기록에서는 후처리 원본 문장 위에 붙는다."""
-    mid = client.post("/api/meetings", json={"title": "옮겨 붙기"}).json()["id"]
+def test_marks_and_edits_stay_on_the_record_after_postprocess(client):
+    """후처리는 원본 스크립트로만 남고, 회의 기록(직접 고친 글자, 회의 중·끝난 뒤 단 댓글)은 그대로다."""
+    mid = client.post("/api/meetings", json={"title": "그대로"}).json()["id"]
     pcm = _speech_pcm([("s", 2.5), ("n", 1.5), ("s", 2.5), ("n", 1.5), ("s", 2.5), ("n", 1.5)])
     with client.websocket_connect(f"/api/meetings/{mid}/record") as ws:
         json.loads(ws.receive_text())
@@ -739,30 +706,25 @@ def test_marks_from_live_before_and_after_postprocess_land_on_the_final(client):
             ev = json.loads(ws.receive_text())
             if ev["type"] == "segment":
                 live.append(ev["segment"])
-        # 1) 회의 중: 실시간 기록에 댓글
+        # 회의 중: 댓글을 달고, 틀린 글자를 고친다
         u = live[0]
-        client.post(f"/api/meetings/{mid}/annotations", json={"kind": "comment", "view": "live", "body": "회의 중 댓글",
-                    "start": {"unit": u["id"], "offset": 0}, "end": {"unit": u["id"], "offset": len(u["text"].split(" ")[0])}})
+        c1 = client.post(f"/api/meetings/{mid}/annotations", json={"kind": "comment", "body": "회의 중 댓글",
+                         "start": {"unit": u["id"], "offset": 0}, "end": {"unit": u["id"], "offset": len(u["text"].split(" ")[0])}}).json()
+        client.patch(f"/api/meetings/{mid}/segments/{live[1]['id']}", json={"text": "회의 중에 고친 문장"})
         ws.send_text(json.dumps({"type": "stop"}))
         while json.loads(ws.receive_text())["type"] != "stopped":
             pass
     assert _wait_job(client, mid)["status"] == "done"
-    final = client.get(f"/api/meetings/{mid}/final").json()["final"]
-    fids = {x["id"] for x in final["units"]}
-    # 2) 후처리가 끝난 뒤 실시간 탭에 댓글, 3) 원본 탭에 댓글
-    u = live[1]
-    client.post(f"/api/meetings/{mid}/annotations", json={"kind": "comment", "view": "live", "body": "끝난 뒤 실시간 탭 댓글",
-                "start": {"unit": u["id"], "offset": 0}, "end": {"unit": u["id"], "offset": len(u["text"].split(" ")[0])}})
-    f = final["units"][-1]
-    client.post(f"/api/meetings/{mid}/annotations", json={"kind": "comment", "view": "final", "body": "원본 탭 댓글",
-                "start": {"unit": f["id"], "offset": 0}, "end": {"unit": f["id"], "offset": len(f["text"].split(" ")[0])}})
-
-    anns = client.get(f"/api/meetings/{mid}/final").json()["final"]["annotations"]
-    assert {a["body"] for a in anns} == {"회의 중 댓글", "끝난 뒤 실시간 탭 댓글", "원본 탭 댓글"}
-    assert all(a["pos"] and a["pos"]["start"]["unit"] in fids for a in anns)  # 모두 원본 문장 위로
+    # 끝난 뒤에도 같은 기록에 댓글
+    u = live[2]
+    c2 = client.post(f"/api/meetings/{mid}/annotations", json={"kind": "comment", "body": "끝난 뒤 댓글",
+                     "start": {"unit": u["id"], "offset": 0}, "end": {"unit": u["id"], "offset": 2}}).json()
+    view = client.get(f"/api/meetings/{mid}/live").json()
+    assert [x["id"] for x in view["units"]] == [x["id"] for x in live] and view["units"][1]["text"] == "회의 중에 고친 문장"
+    pos = {a["id"]: a["pos"] for a in view["annotations"]}
+    assert pos[c1["id"]] == c1["pos"] and pos[c2["id"]] == c2["pos"]
     h = client.get(f"/api/meetings/{mid}/transcript.html").text
-    assert "원본 · 화자 구분" in h
-    for a in anns:  # 전사 기록에서도 그 원본 문장 바로 아래에
-        sent = h.index(f'id="u-{a["pos"]["start"]["unit"]}"')
-        assert sent < h.index(a["body"], sent), a["body"]
-    assert not any(f'id="u-{x["id"]}"' in h for x in live)  # 실시간 기록 문장은 쓰지 않는다
+    assert "회의 중에 고친 문장" in h and "회의 중 댓글" in h and "끝난 뒤 댓글" in h and "회의 중 기록" in h
+    script = client.get(f"/api/meetings/{mid}/script.md?download=1")
+    assert script.status_code == 200 and "%EC%9B%90%EB%B3%B8%20%EC%8A%A4%ED%81%AC%EB%A6%BD%ED%8A%B8.md" in script.headers["content-disposition"]
+    assert "회의 중에 고친 문장" not in script.text  # 원본 스크립트와 기록은 섞지 않는다

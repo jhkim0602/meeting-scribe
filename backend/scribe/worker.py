@@ -25,7 +25,7 @@ from .db import Store
 from .engines import make_diarizer, make_engine, repos_for, resolve_diarizer_kind
 from .engines.download import DownloadWatch
 from .engines.base import split_windows
-from .live_speakers import live_to_final_names
+from .record import record_from_utterances
 from .merge import build_utterances
 from .storage import M4A
 
@@ -306,26 +306,13 @@ def run(job_id: str) -> int:
         data = build_utterances(segments, turns, boundaries)
         data["duration"] = duration
         data["language"] = settings.language
-        mapping = data.pop("speaker_map", {})
-        if embeddings:
-            # 화자별 목소리 특징: 이름을 붙이면 다음 회의에서 같은 목소리에 이름을 제안한다
-            data["speaker_embeddings"] = {mapping[raw]: vec for raw, vec in embeddings.items() if raw in mapping}
-        parts = {p["id"]: p["name"] for p in meeting.get("participants") or []}
-        from_live = live_to_final_names(data["utterances"], store.list_live_speakers(mid), parts) if parts else {}
-        if from_live:
-            data["speaker_from_live"] = from_live
+        data.pop("speaker_map", None)
+        # 원본 스크립트: 참고용으로만 남긴다 (회의 기록과 섞지 않는다)
         version = store.save_final_version(mid, data, engine=describe_final(), diarizer=diar_name)
-
-        speakers = dict(meeting.get("speakers") or {})
-        for label in data["speakers"]:
-            speakers.setdefault(label, "")
-        # 회의 중 고른 화자를 원본 화자 이름으로 (사용자가 원본에서 직접 붙인 이름은 그대로)
-        named = {v for v in speakers.values() if v}
-        for label, hit in from_live.items():
-            if hit["auto"] and not speakers.get(label) and hit["name"] not in named:
-                speakers[label] = hit["name"]
-                named.add(hit["name"])
-        store.update_meeting(mid, status="ready", speakers=speakers)
+        if meeting.get("source") == "upload":
+            # 올린 파일은 실시간 기록이 없으므로, 받아 적은 결과가 곧 고칠 수 있는 회의 기록이 된다
+            record_from_utterances(store, mid, data["utterances"])
+        store.update_meeting(mid, status="ready")
         msg = "완료" + (" · " + " ".join(prog.notes) if prog.notes else "")
         store.update_job(job_id, status="done", phase="done", progress=1.0, message=msg, finished_at=time.time(), eta=0)
         if meeting.get("source") == "upload":

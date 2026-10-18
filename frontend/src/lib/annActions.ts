@@ -51,19 +51,19 @@ export const annActions = {
     st().upsertAnnotation(a)
     return a
   },
-  patch: async (annId: string, patch: Parameters<typeof api.patchAnnotation>[1], view = 'live'): Promise<Annotation> => {
-    const a = await api.patchAnnotation(annId, patch, view)
+  patch: async (annId: string, patch: Parameters<typeof api.patchAnnotation>[1]): Promise<Annotation> => {
+    const a = await api.patchAnnotation(annId, patch)
     st().upsertAnnotation(a)
     return a
   },
-  reply: async (annId: string, text: string, view = 'live'): Promise<Annotation> => {
-    const a = await api.reply(annId, text, view)
+  reply: async (annId: string, text: string): Promise<Annotation> => {
+    const a = await api.reply(annId, text)
     st().upsertAnnotation(a)
     return a
   },
   remove: async (annId: string): Promise<void> => {
     const snap = st().takeAnnotation(annId)
-    const kind = (snap.live?.item ?? snap.final?.item)?.kind || ''
+    const kind = snap.live?.item.kind || ''
     deleteLater(
       `ann:${annId}`,
       `/api/annotations/${annId}`,

@@ -80,6 +80,8 @@ export interface Unit {
   /** 실시간: manual(직접 고름) | auto(목소리로 추정) */
   speaker_src?: 'manual' | 'auto' | null
   speaker_conf?: number | null
+  /** 직접 고친 문장: 처음 받아 적은 글자 */
+  text_orig?: string
   words?: [number, number, number, number][]
   idx?: number
 }
@@ -89,52 +91,36 @@ export interface Pos {
   offset: number
 }
 
-export type AnnKind = 'comment' | 'edit' | 'memo' | 'highlight' | 'divider'
+export type AnnKind = 'comment' | 'memo' | 'highlight' | 'divider'
 
 export interface Annotation {
   id: string
   meeting_id: string
   kind: AnnKind
-  origin: 'live' | 'final'
-  origin_version: number
   anchor: { t0?: number; t1?: number; t?: number; quote?: string; after?: string | null }
   body: string
-  replacement: string | null
   color: string | null
-  status: 'open' | 'resolved' | 'accepted' | 'dismissed'
+  status: 'open' | 'resolved'
   replies: { text: string; at: number }[]
   created_at: number
   updated_at: number
   exported_at: number | null
   meta: { break_start?: number; break_end?: number; auto?: boolean } | null
   pos: AnnPos
-  match?: 'same' | 'differs'
-  /** 추가/수정 응답에만: 두 화면 각각의 위치 */
-  resolved?: { live: ResolvedPos | null; final: ResolvedPos | null }
 }
 
-export type AnnPos = null | { after: string | null } | { start: Pos; end: Pos; approx: boolean; score: number; text: string }
-export interface ResolvedPos {
-  pos: AnnPos
-  match?: 'same' | 'differs' | null
-}
+export type AnnPos = null | { after: string | null } | { start: Pos; end: Pos; text: string }
 
 export interface LiveView {
   units: Unit[]
   annotations: Annotation[]
 }
 
-export interface FinalView {
-  version: number
-  created_at: number
-  engine: string | null
-  diarizer: string | null
-  units: Unit[]
-  speakers: string[]
-  duration: number | null
+/** 문장을 직접 고친 결과: 바뀐 문장, 위치가 옮겨진 댓글·강조, 지운 강조 */
+export interface SegmentEdit {
+  unit: Pick<Unit, 'id' | 't0' | 't1' | 'text' | 'text_orig'>
   annotations: Annotation[]
-  /** 지난 회의에서 이름 붙인 목소리와 비슷한 화자: {라벨: {name, score}} */
-  speaker_suggestions?: Record<string, { name: string; score: number; from?: 'live' }>
+  deleted: string[]
 }
 
 export interface Health {
@@ -166,7 +152,7 @@ export interface AppSettings {
 export interface SearchHit {
   meeting_id: string
   title: string
-  kind: 'title' | 'final' | 'live' | 'notes'
+  kind: 'title' | 'live' | 'notes'
   t: number | null
   unit?: string
   snippet: string
@@ -198,20 +184,19 @@ export const api = {
   meetings: () => req<MeetingSummary[]>('GET', '/api/meetings'),
   createMeeting: (title = '') => req<Meeting>('POST', '/api/meetings', { title }),
   meeting: (id: string) => req<Meeting>('GET', `/api/meetings/${id}`),
-  patchMeeting: (id: string, patch: Partial<Pick<Meeting, 'title' | 'speakers' | 'num_speakers'>>) =>
+  patchMeeting: (id: string, patch: Partial<Pick<Meeting, 'title' | 'num_speakers'>>) =>
     req<Meeting>('PATCH', `/api/meetings/${id}`, patch),
   deleteMeeting: (id: string) => req<{ ok: boolean }>('DELETE', `/api/meetings/${id}`),
   live: (id: string) => req<LiveView>('GET', `/api/meetings/${id}/live`),
-  final: (id: string) => req<{ final: FinalView | null; job: Job | null }>('GET', `/api/meetings/${id}/final`),
+  editSegment: (id: string, segmentId: string, text: string) => req<SegmentEdit>('PATCH', `/api/meetings/${id}/segments/${segmentId}`, { text }),
   job: (id: string) => req<{ job: Job | null }>('GET', `/api/meetings/${id}/job`),
   process: (id: string) => req<{ job: Job }>('POST', `/api/meetings/${id}/process`),
   cancel: (id: string) => req<{ ok: boolean }>('POST', `/api/meetings/${id}/cancel`),
   notes: (id: string) => req<{ blocks: unknown[] | null; markdown: string; updated_at: number | null }>('GET', `/api/meetings/${id}/notes`),
   saveNotes: (id: string, blocks: unknown[]) => req<{ ok: boolean; updated_at: number }>('PUT', `/api/meetings/${id}/notes`, { blocks }),
   addAnnotation: (id: string, body: Record<string, unknown>) => req<Annotation>('POST', `/api/meetings/${id}/annotations`, body),
-  patchAnnotation: (annId: string, patch: Partial<Pick<Annotation, 'body' | 'replacement' | 'status' | 'color'>>, view = 'live') =>
-    req<Annotation>('PATCH', `/api/annotations/${annId}?view=${view}`, patch),
-  reply: (annId: string, text: string, view = 'live') => req<Annotation>('POST', `/api/annotations/${annId}/replies?view=${view}`, { text }),
+  patchAnnotation: (annId: string, patch: Partial<Pick<Annotation, 'body' | 'status' | 'color'>>) => req<Annotation>('PATCH', `/api/annotations/${annId}`, patch),
+  reply: (annId: string, text: string) => req<Annotation>('POST', `/api/annotations/${annId}/replies`, { text }),
   markExported: (id: string, ids: string[], exported = true) =>
     req<{ updated: number; exported_at: Record<string, number | null> }>('POST', `/api/meetings/${id}/annotations/exported`, { ids, exported }),
   deleteAnnotation: (annId: string) => req<{ ok: boolean }>('DELETE', `/api/annotations/${annId}`),

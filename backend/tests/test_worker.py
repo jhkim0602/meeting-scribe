@@ -85,8 +85,8 @@ def test_worker_resumes_from_window_checkpoints(tmp_path):
     assert len(names) == int(grown["windows"])
 
 
-def test_worker_parallel_diarization_and_voice_features(tmp_path):
-    """긴 녹음처럼 화자 구분을 별도 프로세스에서 동시에 돌려도 결과가 같고, 화자별 목소리 특징이 남는다."""
+def test_worker_parallel_diarization(tmp_path):
+    """긴 녹음처럼 화자 구분을 별도 프로세스에서 동시에 돌려도 원본 스크립트에 화자가 나뉜다."""
     data_dir = tmp_path / "data"
     store = Store(data_dir / "scribe.db")
     m = store.create_meeting("동시 처리")
@@ -100,6 +100,6 @@ def test_worker_parallel_diarization_and_voice_features(tmp_path):
     assert r.returncode == 0, r.stderr
     data = store.get_final(m["id"])["data"]
     assert {u["speaker"] for u in data["utterances"]} == {"S1", "S2", "S3"}
-    assert set(data["speaker_embeddings"]) == {"S1", "S2", "S3"} and "speaker_map" not in data
+    assert "speaker_map" not in data and "speaker_embeddings" not in data
     assert store.get_job(job["id"])["status"] == "done"
 

@@ -321,12 +321,6 @@ code { font-family: var(--font-mono); font-size: 0.88em; background: var(--bg-ho
 /* ---------- 기록 ---------- */
 .transcript { padding: 18px 28px 120px 8px; max-width: 900px; }
 .speaker-row { padding: 14px 0 2px 76px; }
-.speaker { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 650; color: var(--sp-0); }
-.speaker .sp-dot { width: 8px; height: 8px; border-radius: 3px; background: currentColor; }
-.speaker .sp-name { font-weight: 650; color: inherit; border-radius: 4px; padding: 1px 3px; }
-.speaker .sp-name:hover { background: var(--bg-hover); }
-.speaker .sp-input { width: 120px; border: 1px solid var(--accent); border-radius: 4px; padding: 1px 5px; background: var(--bg); outline: none; font-weight: 600; }
-.speaker.compact { font-size: 12.5px; }
 .sp-1 { color: var(--sp-1); } .sp-2 { color: var(--sp-2); } .sp-3 { color: var(--sp-3); } .sp-4 { color: var(--sp-4); }
 .sp-5 { color: var(--sp-5); } .sp-6 { color: var(--sp-6); } .sp-7 { color: var(--sp-7); } .sp-8 { color: var(--sp-8); }
 
@@ -362,18 +356,6 @@ code { font-family: var(--font-mono); font-size: 0.88em; background: var(--bg-ho
 .mk-hl { border-radius: 3px; cursor: pointer; box-decoration-break: clone; -webkit-box-decoration-break: clone; padding: 1px 0; }
 .hl-yellow { background: var(--hl-yellow); } .hl-green { background: var(--hl-green); } .hl-blue { background: var(--hl-blue); }
 .hl-pink { background: var(--hl-pink); } .hl-purple { background: var(--hl-purple); }
-.mk-approx { text-decoration: underline dotted var(--warn); text-underline-offset: 4px; }
-.mk-edit { cursor: pointer; border-radius: 3px; }
-.mk-edit.proof del {
-  color: var(--text-3); text-decoration: line-through; text-decoration-color: var(--pen); text-decoration-thickness: 1.5px;
-}
-.mk-edit.proof ins {
-  text-decoration: none; color: var(--pen); font-weight: 600; background: var(--pen-soft);
-  padding: 1px 3px; margin-left: 2px; border-radius: 3px; user-select: none;
-}
-.mk-edit.applied { text-decoration: underline; text-decoration-style: dotted; text-decoration-color: var(--pen); text-underline-offset: 4px; }
-.mk-edit.same { text-decoration: underline; text-decoration-style: dotted; text-decoration-color: var(--ok); text-underline-offset: 4px; }
-.mk-edit:hover { background: var(--pen-soft); }
 
 /* 메모 카드 */
 .memo-card {
@@ -383,7 +365,6 @@ code { font-family: var(--font-mono); font-size: 0.88em; background: var(--bg-ho
 .memo-head { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--warn); }
 .memo-time { font-variant-numeric: tabular-nums; color: inherit; padding: 0 3px; border-radius: 3px; }
 .memo-time:hover { background: rgba(183, 121, 31, 0.15); }
-.memo-origin { font-weight: 500; color: var(--text-3); }
 .memo-del { opacity: 0; width: 22px; height: 22px; }
 .memo-head .chip { height: 18px; }
 .memo-card:hover .memo-del { opacity: 1; }
@@ -496,8 +477,6 @@ code { font-family: var(--font-mono); font-size: 0.88em; background: var(--bg-ho
 .composer { width: 340px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
 .composer-head { font-size: 12px; font-weight: 650; color: var(--text-2); }
 .composer-quote { margin: 0; padding: 2px 0 2px 9px; border-left: 2px solid var(--comment-line); color: var(--text-2); font-size: 13px; max-height: 60px; overflow: hidden; }
-.composer-orig { font-size: 13px; color: var(--text-3); text-decoration: line-through; text-decoration-color: var(--pen); }
-.composer-orig span { text-decoration: none; display: inline-block; margin-right: 6px; font-size: 11px; font-weight: 600; color: var(--text-3); }
 .composer textarea { border: 1px solid var(--border-strong); border-radius: 6px; padding: 7px 9px; outline: none; resize: none; background: var(--bg); font-size: 14px; }
 .composer textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .composer-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -515,11 +494,6 @@ code { font-family: var(--font-mono); font-size: 0.88em; background: var(--bg-ho
 .kind-dot.kind-highlight { background: var(--sp-4); }
 .ann-quote { margin: 0; padding-left: 9px; border-left: 2px solid var(--comment-line); color: var(--text-2); font-size: 13px; }
 .ann-body { margin: 0; font-size: 14px; white-space: pre-wrap; }
-.ann-edit { display: flex; flex-direction: column; gap: 6px; }
-.ann-edit-row { display: grid; grid-template-columns: 34px 1fr; align-items: baseline; gap: 6px; font-size: 14px; }
-.ann-edit-row .lbl { font-size: 11px; font-weight: 650; color: var(--text-3); }
-.ann-edit-row del { color: var(--text-3); text-decoration-color: var(--pen); }
-.ann-edit-row ins { color: var(--pen); text-decoration: none; font-weight: 600; }
 .ann-note { margin: 0; font-size: 12.5px; color: var(--ok); }
 .ann-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .ann-replyline { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-2); padding-left: 4px; }
@@ -552,19 +526,13 @@ code { font-family: var(--font-mono); font-size: 0.88em; background: var(--bg-ho
 .listening span:nth-child(3) { animation-delay: 0.3s; }
 @keyframes bars { 0%, 100% { transform: scaleY(0.3); } 50% { transform: scaleY(1); } }
 
-.final-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 14px 28px 4px 84px; }
-.speakers-legend { display: flex; gap: 6px 14px; flex-wrap: wrap; }
-.meta-text { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text-3); }
-.moved-note {
-  display: flex; align-items: center; gap: 8px; margin: 8px 28px 4px 84px; padding: 8px 12px; border-radius: 8px;
-  background: var(--pen-soft); color: var(--text-2); font-size: 13px;
-}
-.moved-note svg { color: var(--pen); flex: none; }
 .proc-banner {
   display: flex; align-items: center; gap: 10px; margin: 12px 28px 0 84px; padding: 8px 12px; border-radius: 8px;
   background: var(--accent-soft); color: var(--accent); font-size: 13px; font-weight: 550;
 }
 .proc-banner.info { background: rgba(183, 121, 31, 0.12); color: var(--warn); }
+.proc-banner.error { background: var(--rec-soft); color: var(--rec); }
+.proc-banner .muted { font-size: 12px; }
 .proc-banner .bar { flex: 1; max-width: 200px; }
 .bar { height: 4px; border-radius: 2px; background: var(--bg-active); overflow: hidden; }
 .bar > div { height: 100%; background: var(--accent); border-radius: 2px; transition: width 0.6s ease; }
@@ -829,9 +797,6 @@ kbd { display: inline-grid; place-items: center; min-width: 20px; height: 20px; 
 .advanced[open] summary { margin-bottom: 10px; }
 
 /* ---------- 목소리로 이름 제안 ---------- */
-.legend-item { display: inline-flex; align-items: center; gap: 2px; }
-.voice-chip { height: 20px; padding: 0 7px; border: 1px dashed var(--border-strong); border-radius: 10px; background: none; color: var(--text-2); font-size: 12px; cursor: pointer; }
-.voice-chip:hover { border-style: solid; border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 .storage-help { margin: 6px 0 0; font-size: 12.5px; }
 .storage-backup { margin-left: 8px; color: var(--accent); font-weight: 600; }
 
@@ -847,6 +812,13 @@ kbd { display: inline-grid; place-items: center; min-width: 20px; height: 20px; 
 .turn-text .utext { border-radius: 3px; transition: background 0.2s; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
 .turn-body:hover .utext:hover { background: rgba(55, 53, 47, 0.05); }
 .turn-text .utext.active { background: var(--accent-soft); }
+/* 직접 고친 문장: 옅은 점선, 마우스를 올리면 처음 받아 적은 글 */
+.turn-text .utext.edited { text-decoration: underline dotted var(--border-strong); text-underline-offset: 5px; text-decoration-thickness: 1px; }
+/* 그 자리에서 고치기 */
+.turn-text .utext.editing { outline: none; background: var(--bg); box-shadow: 0 0 0 1.5px var(--accent), 0 0 0 4px var(--accent-soft); border-radius: 4px; padding: 1px 3px; caret-color: var(--accent); }
+.edit-hint { display: inline-flex; align-items: center; gap: 8px; margin-left: 8px; font-size: 11.5px; color: var(--text-3); white-space: nowrap; user-select: none; }
+.edit-orig { display: inline-flex; align-items: center; gap: 3px; height: 20px; padding: 0 6px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); color: var(--text-2); font-size: 11.5px; cursor: pointer; }
+.edit-orig:hover { border-color: var(--accent); color: var(--accent); }
 .turn-text .utext.flash { animation: flash 1.6s ease-out; }
 .turn.partial .turn-text { color: var(--text-3); }
 .sp-0 { color: var(--sp-0); }

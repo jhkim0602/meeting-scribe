@@ -4,8 +4,8 @@
 //  - 마이크 음소거 → 아이콘만 / 마이크 끊김 → 조용히 다시 연결
 //  - 노트북 잠자기(오디오 시계 멈춤) → 쉬는 시간 구분선
 //  - 서버 재시작: 짧으면 아이콘만, 길면 알림 → 소리를 모아 두었다가 이어 보내기 (구분선 없음)
-//  - 종료 확인창 → 계속 녹음 / 종료 → 이어서 녹음(원본 작업 취소)
-//  - 원본에서 쉬는 시간 경계로 문장이 나뉨
+//  - 종료 확인창 → 계속 녹음 / 종료 → 이어서 녹음(원본 스크립트 작업 취소)
+//  - 녹음을 마쳐도 기록에 구분선이 그대로, 구간 목차
 //  - 조용한 마이크: 쉬는 시간인가요? → 15초 뒤 표시줄로 접힘 / 완전 무음: 아이콘 → 경고 / 탭 닫기 확인
 // 서버는 SCRIBE_MIN_BREAK_S=2, 시연용 엔진으로 띄운다. RESTART_CMD는 서버를 다시 띄우는 셸 명령.
 const { execSync } = require('child_process')
@@ -57,19 +57,19 @@ async function main() {
   await page.waitForSelector('.rec-alert:has-text("녹음이 일시정지된 상태예요")')
   await page.click('.rec-alert button:has-text("녹음 이어하기")')
   await sleep(1200)
-  check((await page.locator('.view-live .divider-row').count()) === 1, '이어하기 → 쉬는 시간 구분선 생김')
-  const dvText = await page.locator('.view-live .divider-row').first().innerText()
+  check((await page.locator('.transcript .divider-row').count()) === 1, '이어하기 → 쉬는 시간 구분선 생김')
+  const dvText = await page.locator('.transcript .divider-row').first().innerText()
   check(/쉬는 시간/.test(dvText) && /\d\d:\d\d–\d\d:\d\d/.test(dvText) && !/[\u{1F300}-\u{1FAFF}]/u.test(dvText), `구분선 표시: "${dvText.replace(/\n/g, ' ')}" (이모지 없음)`)
 
   // 2) 직접 구분선 넣기
   await sleep(3000)
-  const unit = page.locator('.view-live .utext').last()
+  const unit = page.locator('.transcript .utext').last()
   await unit.hover()
-  await page.locator('.view-live .u-actions .u-act[title^="이 문장 뒤에 구분선"]').click()
+  await page.locator('.transcript .u-actions .u-act[title^="이 문장 뒤에 구분선"]').click()
   await page.fill('.composer textarea', '2부')
   await page.keyboard.press('Enter')
   await sleep(700)
-  check((await page.locator('.view-live .divider-row:has-text("2부")').count()) === 1, '직접 구분선 "2부" 넣기')
+  check((await page.locator('.transcript .divider-row:has-text("2부")').count()) === 1, '직접 구분선 "2부" 넣기')
   await page.screenshot({ path: `${OUT}/b2-dividers.png` })
 
   // 3) 마이크 음소거 → 아이콘만, 끊김 → 조용히 다시 연결
@@ -89,10 +89,10 @@ async function main() {
   check(t1 !== t2 && !ms.micRetrying && (await page.locator('.rec-alert, .toast').count()) === 0, `마이크 끊김 → 조용히 다시 연결, 녹음 계속 (${t1} → ${t2})`)
 
   // 4) 노트북 잠자기 → 깨어나면 그동안을 쉬는 시간으로
-  const dvBefore = await page.locator('.view-live .divider-row').count()
+  const dvBefore = await page.locator('.transcript .divider-row').count()
   await page.evaluate(() => window.__scribeDebug.sleep(25))
   await sleep(1500)
-  const dvAfter = await page.locator('.view-live .divider-row').count()
+  const dvAfter = await page.locator('.transcript .divider-row').count()
   check(dvAfter === dvBefore + 1, `잠자기 25초 → 쉬는 시간 구분선 (${dvBefore}→${dvAfter})`)
 
   // 5) 서버 재시작 (짧게): 아이콘만, 모아 둔 소리 이어 보내기
@@ -135,19 +135,17 @@ async function main() {
   await page.waitForSelector('.dock-rec', { timeout: 15000 })
   await sleep(1000)
   const job = (await get(`/api/meetings/${mid}/job`)).job
-  check(job.status === 'cancelled' || job.status === 'done', `실수 종료 → 바로 이어서 녹음 (원본 작업: ${job.status})`)
+  check(job.status === 'cancelled' || job.status === 'done', `실수 종료 → 바로 이어서 녹음 (원본 스크립트 작업: ${job.status})`)
   await sleep(4000)
 
-  // 8) 진짜 종료 → 원본에서 구분선 확인
+  // 8) 진짜 종료 → 기록에 구분선이 그대로
   await page.click('.btn-stop')
   await page.click('.modal.confirm button:has-text("녹음 종료")')
   await page.waitForSelector('.dock-player', { timeout: 30000 })
-  await page.click('.tab:has-text("원본")')
-  await page.waitForSelector('.view-final .utext', { timeout: 60000 })
   await sleep(800)
-  const fdiv = await page.locator('.view-final .divider-row').count()
-  check(fdiv >= 2, `원본에도 구분선 ${fdiv}개 표시`)
-  await page.screenshot({ path: `${OUT}/b5-final-dividers.png` })
+  const fdiv = await page.locator('.transcript .divider-row').count()
+  check(fdiv >= 2, `녹음을 마쳐도 기록에 구분선 ${fdiv}개`)
+  await page.screenshot({ path: `${OUT}/b5-dividers.png` })
   check((await page.locator('.dock-player .scrub-mark.mk-divider').count()) === fdiv, `재생 막대에 구분선 눈금 ${fdiv}개`)
   await page.click('.tool-btn[title^="구간 목차"]')
   await page.waitForSelector('.toc')

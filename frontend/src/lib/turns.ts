@@ -1,7 +1,6 @@
 // 문장(unit)들을 화자 단락(turn)으로 묶는다.
 // 같은 사람이 잠깐 멈췄다 이어 말한 문장, 말끝이 아닌데 끊긴 문장은 한 단락으로 이어 보여 준다.
 import type { Unit } from './api'
-import type { View } from './model'
 
 export interface Turn {
   id: string // 첫 문장 id
@@ -19,8 +18,7 @@ export function endsSentence(text: string): boolean {
   return FINAL_MARKS.test(t) || FINAL_ENDINGS.test(t)
 }
 
-export function speakerKey(u: Unit, view: View): string | null {
-  if (view === 'final') return u.speaker ? `s:${u.speaker}` : null
+export function speakerKey(u: Unit): string | null {
   if (u.speaker) return `p:${u.speaker}`
   if (u.speaker_auto) return `a:${u.speaker_auto}`
   return null
@@ -31,11 +29,11 @@ const MAX_SPAN_S = 90
 
 /** breaks: 이 문장 뒤에서는 단락을 끊는다 (구분선, 메모)
  *  pending: 방금 들어와 화자를 기다리는 문장 (잠깐 앞 단락에 이어 둬 깜빡이지 않게) */
-export function buildTurns(units: Unit[], view: View, breaks: Set<string>, pending: string | null = null): Turn[] {
+export function buildTurns(units: Unit[], breaks: Set<string>, pending: string | null = null): Turn[] {
   const turns: Turn[] = []
   let cur: Turn | null = null
   units.forEach((u, i) => {
-    const key = speakerKey(u, view)
+    const key = speakerKey(u)
     const prev = i > 0 ? units[i - 1] : null
     let join = false
     if (cur && prev && !breaks.has(prev.id) && cur.units.length < MAX_UNITS && u.t1 - cur.units[0].t0 <= MAX_SPAN_S) {

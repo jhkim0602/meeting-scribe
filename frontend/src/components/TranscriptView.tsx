@@ -1,9 +1,9 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as RMouseEvent, type RefObject } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { Highlighter, MessageSquarePlus, NotebookPen, PenLine, SeparatorHorizontal, StickyNote, UserRound } from 'lucide-react'
+import { Highlighter, MessageSquarePlus, NotebookPen, PenLine, RotateCcw, SeparatorHorizontal, StickyNote, UserRound } from 'lucide-react'
 import { api, type Annotation, type Participant, type Unit } from '../lib/api'
 import { annActions } from '../lib/annActions'
-import { buildModel, piecesFor, timeAtOffset, unitAtTime, type Piece, type RangeAnn, type View } from '../lib/model'
+import { buildModel, piecesFor, timeAtOffset, unitAtTime, type Piece, type RangeAnn } from '../lib/model'
 import { readSelection, type TextSelection } from '../lib/selection'
 import { bridges, seekTo, useStore } from '../lib/store'
 import { fmtTime } from '../lib/time'
@@ -16,14 +16,12 @@ import { DividerRow } from './DividerRow'
 import { Composer } from './Composer'
 import { Floating } from './Floating'
 import { MemoCard } from './MemoCard'
-import { SpeakerLabel } from './SpeakerLabel'
 import { SpeakerPicker } from './SpeakerPicker'
 import { addParticipant, assignSpeaker, participantIndex } from '../lib/speakers'
 import { buildTurns, endsSentence, type Turn } from '../lib/turns'
 import { clearHighlights, paintHighlights, TranscriptFind, useFindShortcut, type Hit } from './TranscriptFind'
 
 interface Props {
-  view: View
   meetingId: string
   units: Unit[]
   annotations: Annotation[]
@@ -34,7 +32,7 @@ interface Props {
 }
 
 type ComposerState =
-  | { mode: 'comment' | 'edit'; rect: DOMRect; start: { unit: string; offset: number }; end: { unit: string; offset: number }; quote: string }
+  | { mode: 'comment'; rect: DOMRect; start: { unit: string; offset: number }; end: { unit: string; offset: number }; quote: string }
   | { mode: 'memo' | 'divider'; rect: DOMRect; t: number; after: string | null }
 
 function markClasses(anns: Annotation[]): string {
@@ -42,59 +40,101 @@ function markClasses(anns: Annotation[]): string {
   for (const a of anns) {
     if (a.kind === 'comment') cls.push('mk-comment', a.status === 'resolved' ? 'resolved' : '')
     if (a.kind === 'highlight') cls.push('mk-hl', `hl-${a.color || 'yellow'}`)
-    if (a.pos && 'approx' in a.pos && a.pos.approx) cls.push('mk-approx')
   }
   return cls.filter(Boolean).join(' ')
 }
 
 function PieceView({ p, onOpen, hover }: { p: Piece; onOpen: (ids: string[], el: HTMLElement) => void; hover: string | null }) {
-  const ids = p.type === 'edit' ? [p.ann.id, ...p.anns.map((a) => a.id)] : p.anns.map((a) => a.id)
+  const ids = p.anns.map((a) => a.id)
   const hot = hover !== null && ids.includes(hover) ? ' hot' : ''
   const click = ids.length
     ? (e: RMouseEvent<HTMLElement>) => {
         if (window.getSelection()?.isCollapsed !== false) onOpen(ids, e.currentTarget)
       }
     : undefined
-  if (p.type === 'text') {
-    return (
-      <span data-o={p.o} data-k="o" data-len={p.text.length} className={(markClasses(p.anns) + hot) || undefined} onClick={click}>
-        {p.text}
-      </span>
-    )
-  }
-  const extra = markClasses(p.anns)
-  const repl = p.ann.replacement || ''
-  switch (p.display) {
-    case 'proof':
-      return (
-        <span className={`mk-edit proof ${extra}`} onClick={click} title="회의 중 고친 내용이에요. 눌러서 원본에 적용할 수 있어요.">
-          <del data-o={p.o} data-k="o" data-len={p.text.length}>{p.text}</del>
-          <ins data-o={p.o} data-k="r" data-len={p.text.length}>{repl}</ins>
-        </span>
-      )
-    case 'applied':
-      return (
-        <span className={`mk-edit applied ${extra}`} onClick={click} title={`원문: ${p.text}`}>
-          <span data-o={p.o} data-k="r" data-len={p.text.length}>{repl}</span>
-        </span>
-      )
-    case 'same':
-      return (
-        <span className={`mk-edit same ${extra}`} onClick={click} title="회의 중 고친 내용과 원본이 같아요">
-          <span data-o={p.o} data-k="o" data-len={p.text.length}>{p.text}</span>
-        </span>
-      )
-    case 'clean-applied':
-      return <span data-o={p.o} data-k="r" data-len={p.text.length}>{repl}</span>
-    default:
-      return <span data-o={p.o} data-k="o" data-len={p.text.length} className={extra || undefined} onClick={extra ? click : undefined}>{p.text}</span>
-  }
+  return (
+    <span data-o={p.o} data-k="o" data-len={p.text.length} className={(markClasses(p.anns) + hot) || undefined} onClick={click}>
+      {p.text}
+    </span>
+  )
 }
 
-function UnitText({ u, ranges, view, showMarks, active, flash, hover, onOpen, title }: {
+type EditTarget = { id: string; sel?: [number, number] }
+
+/** 문장 바로 고치기: 그 자리에서 글자를 고치고 Enter(또는 다른 곳 누르기)로 저장, Esc로 취소 */
+function UnitEditor({ u, sel, onSave, onCancel }: { u: Unit; sel?: [number, number]; onSave: (text: string) => void; onCancel: () => void }) {
+  const ref = useRef<HTMLSpanElement>(null)
+  const done = useRef(false)
+  // 처음 한 번만 글자를 넣고 커서를 둔다. 그다음부터는 사용자가 쓰는 글자를 그대로 둔다.
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    el.textContent = u.text
+    el.focus()
+    const node = el.firstChild
+    const r = document.createRange()
+    if (node && sel) {
+      r.setStart(node, Math.min(sel[0], u.text.length))
+      r.setEnd(node, Math.min(sel[1], u.text.length))
+    } else {
+      r.selectNodeContents(el)
+      r.collapse(false)
+    }
+    const s = window.getSelection()
+    s?.removeAllRanges()
+    s?.addRange(r)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  const finish = (save: boolean) => {
+    if (done.current) return
+    done.current = true
+    if (save) onSave(ref.current?.textContent ?? u.text)
+    else onCancel()
+  }
+  return (
+    <>
+      <span
+        ref={ref}
+        className="utext editing"
+        contentEditable="plaintext-only"
+        suppressContentEditableWarning
+        spellCheck={false}
+        data-unit={u.id}
+        onBlur={() => finish(true)}
+        onKeyDown={(e) => {
+          e.stopPropagation()
+          if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+            e.preventDefault()
+            finish(true)
+          }
+          if (e.key === 'Escape') {
+            e.preventDefault()
+            finish(false)
+          }
+        }}
+      />
+      <span className="edit-hint">
+        Enter 저장 · Esc 취소
+        {u.text_orig !== undefined && (
+          <button
+            className="edit-orig"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => {
+              done.current = true
+              onSave(u.text_orig!)
+            }}
+            title={`처음 받아 적은 글: ${u.text_orig}`}
+          >
+            <RotateCcw size={11} />처음 받아 적은 대로
+          </button>
+        )}
+      </span>
+    </>
+  )
+}
+
+function UnitText({ u, ranges, showMarks, active, flash, hover, onOpen, title }: {
   u: Unit
   ranges: RangeAnn[] | undefined
-  view: View
   showMarks: boolean
   active: boolean
   flash: boolean
@@ -102,9 +142,17 @@ function UnitText({ u, ranges, view, showMarks, active, flash, hover, onOpen, ti
   onOpen: (ids: string[], el: HTMLElement) => void
   title: string
 }) {
-  const pieces = useMemo(() => piecesFor(u.text, ranges, view, showMarks), [u.text, ranges, view, showMarks])
+  const pieces = useMemo(() => piecesFor(u.text, ranges, showMarks), [u.text, ranges, showMarks])
+  const edited = u.text_orig !== undefined
   return (
-    <span id={`unit-${u.id}`} className={`utext${active ? ' active' : ''}${flash ? ' flash' : ''}`} data-unit={u.id} data-len={u.text.length} data-t={title}>
+    <span
+      id={`unit-${u.id}`}
+      className={`utext${active ? ' active' : ''}${flash ? ' flash' : ''}${edited ? ' edited' : ''}`}
+      data-unit={u.id}
+      data-len={u.text.length}
+      data-t={title}
+      title={edited ? `고친 문장 · 처음 받아 적은 글: ${u.text_orig}` : undefined}
+    >
       {pieces.map((p, k) => (
         <PieceView key={k} p={p} onOpen={onOpen} hover={hover} />
       ))}
@@ -141,7 +189,6 @@ function SpeakerChip({ turn, participants, onPick }: { turn: Turn; participants:
 interface TurnProps {
   turn: Turn
   model: ReturnType<typeof buildModel>
-  view: View
   meetingId: string
   showMarks: boolean
   showSpeaker: boolean
@@ -152,6 +199,9 @@ interface TurnProps {
   hover: string | null
   flashAnn: string | null
   partial: { t0: number; text: string } | null
+  editing: EditTarget | null
+  onEdit: (t: EditTarget | null) => void
+  onSaveEdit: (u: Unit, text: string) => void
   onOpen: (ids: string[], el: HTMLElement) => void
   onMemo: (u: Unit, el: HTMLElement) => void
   onComment: (u: Unit, el: HTMLElement) => void
@@ -165,7 +215,7 @@ interface TurnProps {
 
 /** 화자 단락: 같은 사람이 이어서 말한 문장들을 한 문단으로 보여 준다. 문장마다 따로 고르고 댓글을 달 수 있다. */
 const TurnRow = memo(function TurnRow(p: TurnProps) {
-  const { turn, model, view } = p
+  const { turn, model } = p
   const body = useRef<HTMLDivElement>(null)
   const [hu, setHu] = useState<{ id: string; top: number } | null>(null)
   const first = turn.units[0]
@@ -183,11 +233,7 @@ const TurnRow = memo(function TurnRow(p: TurnProps) {
     <div className="turn" id={`turn-${turn.id}`}>
       {p.showSpeaker && (
         <div className="turn-speaker">
-          {view === 'final' ? (
-            <SpeakerLabel label={first.speaker ?? null} />
-          ) : (
-            <SpeakerChip turn={turn} participants={p.participants} onPick={(rect) => p.onPickSpeaker(turn.units.map((u) => u.id), rect, false)} />
-          )}
+          <SpeakerChip turn={turn} participants={p.participants} onPick={(rect) => p.onPickSpeaker(turn.units.map((u) => u.id), rect, false)} />
         </div>
       )}
       <div className="turn-body" ref={body} onMouseOver={onOver} onMouseLeave={() => { setHu(null); p.onHoverUnit(null) }}>
@@ -198,10 +244,12 @@ const TurnRow = memo(function TurnRow(p: TurnProps) {
           {turn.units.map((u, k) => (
             <span key={u.id}>
               {k > 0 && ' '}
+              {p.editing?.id === u.id ? (
+                <UnitEditor u={u} sel={p.editing.sel} onSave={(text) => p.onSaveEdit(u, text)} onCancel={() => p.onEdit(null)} />
+              ) : (
               <UnitText
                 u={u}
                 ranges={model.perUnit.get(u.id)}
-                view={view}
                 showMarks={p.showMarks}
                 active={u.id === p.activeId}
                 flash={u.id === p.flashUnit}
@@ -209,6 +257,7 @@ const TurnRow = memo(function TurnRow(p: TurnProps) {
                 onOpen={p.onOpen}
                 title={p.timeTitle(u.t0)}
               />
+              )}
             </span>
           ))}
           {p.partial && (
@@ -218,8 +267,11 @@ const TurnRow = memo(function TurnRow(p: TurnProps) {
             </span>
           )}
         </p>
-        {target && (
+        {target && p.editing?.id !== target.id && (
           <div className="u-actions" style={{ top: hu!.top }}>
+            <button className="u-act" title="이 문장 고치기 (E)" onClick={() => p.onEdit({ id: target.id })}>
+              <PenLine size={14} />
+            </button>
             <button className="u-act" title="이 문장에 댓글" onClick={(e) => p.onComment(target, e.currentTarget)}>
               <MessageSquarePlus size={14} />
             </button>
@@ -237,9 +289,9 @@ const TurnRow = memo(function TurnRow(p: TurnProps) {
           </div>
         )}
       </div>
-      {p.showMarks && comments.map((c) => <CommentThread key={c.id} ann={c} view={view} meetingId={p.meetingId} flash={p.flashAnn === c.id} onHover={p.onHover} />)}
-      {p.showMarks && memos.map((m) => <MemoCard key={m.id} ann={m} view={view} />)}
-      {dividers.map((d) => <DividerRow key={d.id} ann={d} view={view} />)}
+      {p.showMarks && comments.map((c) => <CommentThread key={c.id} ann={c} meetingId={p.meetingId} flash={p.flashAnn === c.id} onHover={p.onHover} />)}
+      {p.showMarks && memos.map((m) => <MemoCard key={m.id} ann={m} />)}
+      {dividers.map((d) => <DividerRow key={d.id} ann={d} />)}
     </div>
   )
 })
@@ -260,7 +312,7 @@ function estimateTurn(turn: Turn, speaker: boolean, model: ReturnType<typeof bui
   return h
 }
 
-export function TranscriptView({ view, meetingId, units, annotations, partial, recording, scrollRef }: Props) {
+export function TranscriptView({ meetingId, units, annotations, partial, recording, scrollRef }: Props) {
   const showMarks = useStore((s) => s.showMarks)
   const playing = useStore((s) => s.playing)
   const follow = useStore((s) => s.follow)
@@ -272,6 +324,7 @@ export function TranscriptView({ view, meetingId, units, annotations, partial, r
   const [pop, setPop] = useState<{ ids: string[]; rect: DOMRect } | null>(null)
   const [hover, setHover] = useState<string | null>(null)
   const [flashAnn, setFlashAnn] = useState<string | null>(null)
+  const [editing, setEditing] = useState<EditTarget | null>(null)
 
   const [collapsed] = usePref(VIEW_COMMENTS_COLLAPSED, false)
   const [clockView] = usePref(VIEW_CLOCK, false)
@@ -293,14 +346,14 @@ export function TranscriptView({ view, meetingId, units, annotations, partial, r
   const activeId = useStore((s) => (recording || (!s.playing && s.playerTime <= 0) ? null : unitAtTime(units, s.playerTime)))
   const participants = useStore((s) => (s.meeting?.id === meetingId ? s.meeting.participants || [] : []))
   // 실시간 임시 화자를 쓰는지: 참여자를 넣었거나 목소리로 묶인 문장이 있으면
-  const liveSpeakers = view === 'live' && (participants.length > 0 || units.some((u) => u.speaker_auto || u.speaker))
+  const liveSpeakers = participants.length > 0 || units.some((u) => u.speaker_auto || u.speaker)
   // 같은 사람이 이어서 말한 문장은 한 단락으로 (구분선·메모가 있으면 끊는다)
   const turns = useMemo(() => {
     const breaks = new Set<string>([...model.memosAfter.keys(), ...model.dividersAfter.keys()])
     const last = units[units.length - 1]
     const pending = recording && liveSpeakers && last && !last.speaker && !last.speaker_auto ? last.id : null
-    return buildTurns(units, view, breaks, pending)
-  }, [units, view, model, recording, liveSpeakers])
+    return buildTurns(units, breaks, pending)
+  }, [units, model, recording, liveSpeakers])
   const turnOf = useMemo(() => {
     const m = new Map<string, number>()
     turns.forEach((t, i) => t.units.forEach((u) => m.set(u.id, i)))
@@ -311,7 +364,6 @@ export function TranscriptView({ view, meetingId, units, annotations, partial, r
   const showSpeakerAt = (i: number) => {
     const t = turns[i]
     const prev = i > 0 ? turns[i - 1] : null
-    if (view === 'final') return !prev || prev.units[prev.units.length - 1].speaker !== t.units[0].speaker
     if (!liveSpeakers) return false
     if (t.key === null && !participants.length) return false
     return !prev || prev.key !== t.key
@@ -383,6 +435,8 @@ export function TranscriptView({ view, meetingId, units, annotations, partial, r
   const captureSelection = useCallback(() => {
     setTimeout(() => {
       if (!ref.current) return
+      // 문장을 고치는 중에 고른 글자는 그 안에서만 쓴다 (댓글 버튼을 띄우지 않는다)
+      if ((document.activeElement as HTMLElement | null)?.isContentEditable) return setSel(null)
       setSel(readSelection(ref.current))
     }, 0)
   }, [])
@@ -429,25 +483,51 @@ export function TranscriptView({ view, meetingId, units, annotations, partial, r
       const uid = hoverUnit.current ?? (recording ? units[units.length - 1]?.id : null)
       if (!uid) return
       e.preventDefault()
-      if (view === 'final') {
-        const label = units.find((u) => u.id === uid)?.speaker
-        const st = useStore.getState()
-        if (!label || !st.meeting) return
-        api.patchMeeting(meetingId, { speakers: { ...st.meeting.speakers, [label]: person.name } }).then(() => Promise.all([st.refreshMeeting(), st.refreshFinal()]))
-        return
-      }
       const turn = turns[turnOf.get(uid) ?? -1]
       if (e.shiftKey || !turn) assignSpeaker(meetingId, [uid], person.id, 'one')
       else assignSpeaker(meetingId, turn.units.map((u) => u.id), person.id)
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [participants, picker, composer, recording, units, turns, turnOf, view, meetingId])
+  }, [participants, picker, composer, recording, units, turns, turnOf, meetingId])
+
+  // E: 마우스를 올린 문장(녹음 중이면 방금 문장)을 그 자리에서 고치기
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null
+      if (e.key.toLowerCase() !== 'e' || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey || e.isComposing || picker || composer || editing) return
+      if (t && (t.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName))) return
+      const uid = hoverUnit.current ?? (recording ? units[units.length - 1]?.id : null)
+      if (!uid) return
+      e.preventDefault()
+      setEditing({ id: uid })
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [picker, composer, editing, recording, units])
+
+  const saveEdit = useCallback(
+    async (u: Unit, text: string) => {
+      setEditing(null)
+      const v = text.replace(/\s+/g, ' ').trim()
+      if (v === u.text) return
+      if (!v) {
+        toast('문장을 비울 수는 없어요', 'error')
+        return
+      }
+      try {
+        useStore.getState().applySegmentEdit(await api.editSegment(meetingId, u.id, v))
+      } catch (e) {
+        toast(`고치지 못했어요: ${(e as Error).message}`, 'error')
+      }
+    },
+    [meetingId, toast],
+  )
 
   const create = async (body: Record<string, unknown>, toNotes = false) => {
     try {
-      const ann = await annActions.add(meetingId, { view, ...body })
-      if (toNotes) await sendToNotes(meetingId, [ann], view)
+      const ann = await annActions.add(meetingId, body)
+      if (toNotes) await sendToNotes(meetingId, [ann])
     } catch (e) {
       toast((e as Error).message, 'error')
     }
@@ -467,6 +547,10 @@ export function TranscriptView({ view, meetingId, units, annotations, partial, r
         bridges.notes.insertQuote(s.text, t)
         toast('노트에 인용으로 넣었어요', 'success')
       }
+    } else if (kind === 'edit') {
+      // 고른 글자가 있는 문장을 그 자리에서 고친다 (고른 부분이 바로 선택된 채로)
+      const end = s.end.unit === s.start.unit ? s.end.offset : unitById.get(s.start.unit)?.text.length ?? s.start.offset
+      setEditing({ id: s.start.unit, sel: [s.start.offset, end] })
     } else {
       setComposer({ mode: kind, rect: s.rect, start: s.start, end: s.end, quote: s.text })
     }
@@ -498,6 +582,7 @@ export function TranscriptView({ view, meetingId, units, annotations, partial, r
   useEffect(() => {
     if (!sel || composer) return
     const onKey = (e: KeyboardEvent) => {
+      if ((e.target as HTMLElement | null)?.isContentEditable) return
       const k = e.key.toLowerCase()
       const plainC = k === 'c' && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey
       const docsShortcut = (e.metaKey || e.ctrlKey) && e.altKey && (k === 'm' || e.code === 'KeyM')
@@ -513,12 +598,12 @@ export function TranscriptView({ view, meetingId, units, annotations, partial, r
   const popAnns = pop ? pop.ids.map((id) => byId.get(id)).filter((a): a is Annotation => !!a) : []
 
   return (
-    <div className={`transcript view-${view} font-${font} ${showMarks ? '' : 'marks-off'} ${collapsed ? 'cmts-collapsed' : ''}`} ref={ref} onMouseUp={captureSelection} onKeyUp={(e) => e.shiftKey && captureSelection()}>
+    <div className={`transcript font-${font} ${showMarks ? '' : 'marks-off'} ${collapsed ? 'cmts-collapsed' : ''}`} ref={ref} onMouseUp={captureSelection} onKeyUp={(e) => e.shiftKey && captureSelection()}>
       {find.open && (
         <TranscriptFind units={units} initial={find.initial} inputRef={find.inputRef} onHits={onHits} onJump={onJump} onClose={closeFind} />
       )}
-      {showMarks && model.memosBefore.map((m) => <MemoCard key={m.id} ann={m} view={view} />)}
-      {model.dividersBefore.map((d) => <DividerRow key={d.id} ann={d} view={view} />)}
+      {showMarks && model.memosBefore.map((m) => <MemoCard key={m.id} ann={m} />)}
+      {model.dividersBefore.map((d) => <DividerRow key={d.id} ann={d} />)}
       <div ref={listRef} className="vlist" style={{ height: virtualizer.getTotalSize() }}>
         {virtualizer.getVirtualItems().map((vi) => {
           const i = vi.index
@@ -541,7 +626,6 @@ export function TranscriptView({ view, meetingId, units, annotations, partial, r
               <TurnRow
                 turn={turn}
                 model={model}
-                view={view}
                 meetingId={meetingId}
                 showMarks={showMarks}
                 showSpeaker={showSpeakerAt(i)}
@@ -552,6 +636,9 @@ export function TranscriptView({ view, meetingId, units, annotations, partial, r
                 hover={hover !== null && turnHasAnn(model, turn, hover) ? hover : null}
                 flashAnn={flashAnn !== null && commentsHere.some((c) => c.id === flashAnn) ? flashAnn : null}
                 partial={attach ? { t0: attach.t0, text: attach.text } : null}
+                editing={editing && turn.units.some((u) => u.id === editing.id) ? editing : null}
+                onEdit={setEditing}
+                onSaveEdit={saveEdit}
                 onOpen={openPop}
                 onMemo={openMemo}
                 onComment={openComment}
@@ -580,7 +667,6 @@ export function TranscriptView({ view, meetingId, units, annotations, partial, r
       {picker && (
         <SpeakerPicker
           rect={picker.rect}
-          mode="live"
           single={picker.one}
           participants={participants}
           current={picker.unitIds.length ? units.find((u) => u.id === picker.unitIds[0])?.speaker ?? null : null}
@@ -598,27 +684,19 @@ export function TranscriptView({ view, meetingId, units, annotations, partial, r
         <Floating rect={sel.rect} placement="above" className="sel-toolbar">
           <button className="primary" onMouseDown={(e) => e.preventDefault()} onClick={() => act('comment')} title="댓글 (C)"><MessageSquarePlus size={15} />댓글<kbd>C</kbd></button>
           <button onMouseDown={(e) => e.preventDefault()} onClick={() => act('highlight')}><Highlighter size={15} />강조</button>
-          <button onMouseDown={(e) => e.preventDefault()} onClick={() => act('edit')}><PenLine size={15} />수정</button>
+          <button onMouseDown={(e) => e.preventDefault()} onClick={() => act('edit')} title="이 문장을 그 자리에서 고치기 (E)"><PenLine size={15} />고치기</button>
           <span className="sep" />
           <button onMouseDown={(e) => e.preventDefault()} onClick={() => act('note')}><NotebookPen size={15} />노트로</button>
         </Floating>
       )}
 
-      {composer && (composer.mode === 'comment' || composer.mode === 'edit') && (
+      {composer && composer.mode === 'comment' && (
         <Composer
           rect={composer.rect}
-          mode={composer.mode}
+          mode="comment"
           quote={composer.quote}
-          initial={composer.mode === 'edit' ? composer.quote : ''}
           onClose={() => setComposer(null)}
-          onSubmit={(text, toNotes) =>
-            create(
-              composer.mode === 'comment'
-                ? { kind: 'comment', start: composer.start, end: composer.end, body: text }
-                : { kind: 'edit', start: composer.start, end: composer.end, replacement: text },
-              toNotes,
-            )
-          }
+          onSubmit={(text, toNotes) => create({ kind: 'comment', start: composer.start, end: composer.end, body: text }, toNotes)}
         />
       )}
       {composer && (composer.mode === 'memo' || composer.mode === 'divider') && (
@@ -629,7 +707,7 @@ export function TranscriptView({ view, meetingId, units, annotations, partial, r
           onSubmit={(text, toNotes) => create({ kind: composer.mode, t: composer.t, after: composer.after, body: text }, toNotes)}
         />
       )}
-      {pop && popAnns.length > 0 && <AnnotationPopover anns={popAnns} rect={pop.rect} view={view} onClose={() => setPop(null)} />}
+      {pop && popAnns.length > 0 && <AnnotationPopover anns={popAnns} rect={pop.rect} onClose={() => setPop(null)} />}
     </div>
   )
 }

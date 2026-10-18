@@ -14,7 +14,7 @@ def _snippet(text: str, q: str, width: int = 60) -> str:
     return ("…" if a else "") + text[a:b] + ("…" if b < len(text) else "")
 
 
-KIND_ORDER = {"title": 0, "final": 1, "live": 1, "notes": 2}
+KIND_ORDER = {"title": 0, "live": 1, "notes": 2}
 
 
 def search_all(views: Views, q: str, limit: int = 30) -> list[dict]:
@@ -27,7 +27,7 @@ def search_all(views: Views, q: str, limit: int = 30) -> list[dict]:
 
 
 def _search_index(views: Views, q: str, limit: int) -> list[dict]:
-    """FTS5 색인으로 찾는다. 원본이 있는 회의는 원본에서, 없으면 실시간 기록에서."""
+    """FTS5 색인으로 찾는다 (제목, 회의 기록, 노트)."""
     store = views.store
     meetings = store.list_meetings()
     rank = {m["id"]: i for i, m in enumerate(meetings)}
@@ -53,15 +53,9 @@ def _search_scan(views: Views, q: str, limit: int) -> list[dict]:
         mid, title = m["id"], m["title"] or "제목 없는 회의"
         if ql in (m["title"] or "").lower():
             out.append({"meeting_id": mid, "title": title, "kind": "title", "t": None, "snippet": title})
-        final = store.get_final(mid)
-        if final:
-            for u in final["data"].get("utterances", []):
-                if ql in u["text"].lower():
-                    out.append({"meeting_id": mid, "title": title, "kind": "final", "t": u["t0"], "unit": u["id"], "snippet": _snippet(u["text"], q)})
-        else:
-            for s in store.list_live_segments(mid):
-                if ql in s["text"].lower():
-                    out.append({"meeting_id": mid, "title": title, "kind": "live", "t": s["t0"], "unit": s["id"], "snippet": _snippet(s["text"], q)})
+        for s in store.list_live_segments(mid):
+            if ql in s["text"].lower():
+                out.append({"meeting_id": mid, "title": title, "kind": "live", "t": s["t0"], "unit": s["id"], "snippet": _snippet(s["text"], q)})
         full = store.get_meeting(mid, with_notes=True) or {}
         notes = full.get("notes_md") or ""
         if ql in notes.lower():

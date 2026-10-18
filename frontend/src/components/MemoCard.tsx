@@ -2,12 +2,11 @@ import { NotebookPen, StickyNote, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { type Annotation } from '../lib/api'
 import { annActions } from '../lib/annActions'
-import type { View } from '../lib/model'
 import { sendToNotes } from '../lib/notesExport'
 import { seekTo, useStore } from '../lib/store'
 import { fmtTime } from '../lib/time'
 
-export function MemoCard({ ann, view }: { ann: Annotation; view: View }) {
+export function MemoCard({ ann }: { ann: Annotation }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(ann.body)
   const t = ann.anchor.t ?? 0
@@ -15,7 +14,7 @@ export function MemoCard({ ann, view }: { ann: Annotation; view: View }) {
   const save = async () => {
     setEditing(false)
     if (draft.trim() && draft.trim() !== ann.body) {
-      await annActions.patch(ann.id, { body: draft.trim() }, view)
+      await annActions.patch(ann.id, { body: draft.trim() })
     }
   }
 
@@ -25,14 +24,13 @@ export function MemoCard({ ann, view }: { ann: Annotation; view: View }) {
         <StickyNote size={13} />
         <button className="memo-time" onClick={() => seekTo(t)}>{fmtTime(t)}</button>
         <span>메모</span>
-        {view === 'final' && ann.origin === 'live' && <span className="memo-origin">회의 중 작성</span>}
         {ann.exported_at && <span className="chip chip-ok" title="노트에 들어가 있어요"><NotebookPen size={11} />노트</span>}
         <span className="spacer" />
         <button
           className="icon-btn memo-del"
           title={ann.exported_at ? '노트에 한 번 더 넣기' : '노트로 보내기'}
           onClick={async () => {
-            if (await sendToNotes(ann.meeting_id, [ann], view)) useStore.getState().toast('노트에 넣었어요', 'success')
+            if (await sendToNotes(ann.meeting_id, [ann])) useStore.getState().toast('노트에 넣었어요', 'success')
           }}
         >
           <NotebookPen size={13} />

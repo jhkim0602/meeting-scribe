@@ -91,7 +91,7 @@ def iter_backup(store: Store, views: Views) -> Iterator[bytes]:
             while name in used:
                 name += "_"
             used.add(name)
-            md = meeting_markdown(views, m["id"], version="auto", include_summary=True)
+            md = meeting_markdown(views, m["id"], include_summary=True)
             if md:
                 zf.writestr(zipfile.ZipInfo(f"회의록/{name}.md", date_time=time.localtime()[:6]), md.encode("utf-8"), compress_type=zipfile.ZIP_DEFLATED)
                 yield sink.take()

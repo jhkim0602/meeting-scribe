@@ -22,16 +22,16 @@ from .audio import ffmpeg_path, wav_info
 from .config import settings
 from .db import Store
 from .engines import LiveEngineHolder, engines_info
-from .export import meeting_markdown
+from .export import meeting_markdown, script_markdown
 from .jobs import JobManager
 from .notes_md import blocks_to_markdown
+from .record import EditError, apply_legacy_edits, edit_segment
 from .recording import handle_recording
 from .search import search_all
 from .security import LocalOnlyMiddleware
 from .storage import audio_file, media_type
 from .system import KeepAwake, disk_free_bytes, disk_free_seconds, power_source
 from .views import Views
-from .voices import learn_from_meeting
 from .live_speakers import forget_tracker, normalize_participants, tracker_for
 
 settings.ensure_dirs()
@@ -49,6 +49,7 @@ async def lifespan(app: FastAPI):
     for m in store.list_meetings():
         if m["status"] == "recording":
             store.update_meeting(m["id"], status="recorded")
+    apply_legacy_edits(store, views)  # 예전 "수정 제안"을 직접 고친 글자로 (한 번만)
     jobs.start()
     if os.environ.get("SCRIBE_PRELOAD", "1") == "1":
         holder.start_loading()
@@ -176,7 +177,6 @@ class MeetingIn(BaseModel):
 
 class MeetingPatch(BaseModel):
     title: Optional[str] = None
-    speakers: Optional[dict[str, str]] = None
     num_speakers: Optional[int] = None
 
 
@@ -210,14 +210,9 @@ def patch_meeting(meeting_id: str, body: MeetingPatch) -> dict:
     fields: dict[str, Any] = {}
     if body.title is not None:
         fields["title"] = body.title.strip()
-    if body.speakers is not None:
-        fields["speakers"] = body.speakers
     if body.num_speakers is not None:
         fields["num_speakers"] = body.num_speakers or None
     m = store.update_meeting(meeting_id, **fields)
-    if body.speakers is not None:
-        # 이름 붙인 화자의 목소리를 기억해 다음 회의에서 제안한다
-        learn_from_meeting(store, meeting_id)
     return _meeting_detail(m)  # type: ignore[arg-type]
 
 
@@ -335,10 +330,21 @@ def live_view(meeting_id: str) -> dict:
     return views.live_view(meeting_id)
 
 
-@app.get("/api/meetings/{meeting_id}/final")
-def final_view(meeting_id: str) -> dict:
+class SegmentEdit(BaseModel):
+    text: str
+
+
+@app.patch("/api/meetings/{meeting_id}/segments/{segment_id}")
+def patch_segment(meeting_id: str, segment_id: str, body: SegmentEdit) -> dict:
+    """기록의 문장 글자를 직접 고친다 (녹음 중에도). 처음 받아 적은 글자로 보내면 원래대로 돌아간다.
+    그 문장에 걸린 댓글·강조는 글자 차이대로 위치를 옮겨 함께 돌려준다."""
     _meeting_or_404(meeting_id)
-    return {"final": views.final_view(meeting_id), "job": store.latest_job(meeting_id)}
+    try:
+        return edit_segment(store, views, meeting_id, segment_id, body.text)
+    except KeyError:
+        raise HTTPException(404, "문장을 찾을 수 없습니다")
+    except EditError as exc:
+        raise HTTPException(400, str(exc))
 
 
 @app.post("/api/meetings/{meeting_id}/process")
@@ -451,20 +457,17 @@ def put_summary(meeting_id: str, body: SummaryIn) -> dict:
 # ---------------- 첨삭(메모/댓글/수정/강조) ----------------
 
 class AnnotationIn(BaseModel):
-    kind: str  # comment | edit | memo | highlight
-    view: str = "live"  # live | final
+    kind: str  # comment | memo | highlight | divider
     start: Optional[dict] = None
     end: Optional[dict] = None
     t: Optional[float] = None
     after: Optional[str] = None
     body: str = ""
-    replacement: Optional[str] = None
     color: Optional[str] = None
 
 
 class AnnotationPatch(BaseModel):
     body: Optional[str] = None
-    replacement: Optional[str] = None
     status: Optional[str] = None
     color: Optional[str] = None
 
@@ -478,25 +481,7 @@ class ExportedIn(BaseModel):
     exported: bool = True
 
 
-KINDS = {"comment", "edit", "memo", "highlight", "divider"}
-
-
-def _resolved_one(ann: dict, view: str) -> dict:
-    """요청한 화면 기준 위치(pos)에 더해, 두 화면 모두의 위치(resolved)를 붙인다.
-    화면은 전체 기록을 다시 받지 않고 이 항목만 바꿔 끼운다."""
-    resolved: dict[str, Optional[dict]] = {}
-    for v in ("live", "final"):
-        idx, version = views.index_for(ann["meeting_id"], v)
-        if idx is None:
-            resolved[v] = None
-            continue
-        r = views.resolve([ann], idx, v, version)[0]
-        resolved[v] = {"pos": r["pos"], "match": r.get("match")}
-    mine = resolved.get("final" if view == "final" else "live") or {"pos": None, "match": None}
-    out = dict(ann, pos=mine["pos"], resolved=resolved)
-    if mine.get("match") is not None:
-        out["match"] = mine["match"]
-    return out
+KINDS = {"comment", "memo", "highlight", "divider"}
 
 
 @app.post("/api/meetings/{meeting_id}/annotations")
@@ -504,10 +489,7 @@ def add_annotation(meeting_id: str, body: AnnotationIn) -> dict:
     _meeting_or_404(meeting_id)
     if body.kind not in KINDS:
         raise HTTPException(400, "알 수 없는 종류")
-    view = "final" if body.view == "final" else "live"
-    idx, version = views.index_for(meeting_id, view)
-    if idx is None:
-        raise HTTPException(400, "원본이 아직 없습니다")
+    idx = views.index(meeting_id)
     payload = body.model_dump()
     if body.kind in ("memo", "divider"):
         if body.t is None:
@@ -517,20 +499,17 @@ def add_annotation(meeting_id: str, body: AnnotationIn) -> dict:
     anchor = anchor_from_request(idx, payload)
     if anchor is None:
         raise HTTPException(400, "선택한 범위를 찾을 수 없습니다")
-    if body.kind == "edit" and body.replacement is None:
-        raise HTTPException(400, "수정할 내용이 필요합니다")
     ann = store.add_annotation(
         meeting_id,
         kind=body.kind,
-        origin=view,
-        origin_version=version,
+        origin="live",
+        origin_version=0,
         anchor=anchor,
         body=body.body,
-        replacement=body.replacement,
         color=body.color,
         status="open",
     )
-    return _resolved_one(ann, view)
+    return views.resolve_one(ann)
 
 
 def _ann_or_404(ann_id: str) -> dict:
@@ -541,20 +520,20 @@ def _ann_or_404(ann_id: str) -> dict:
 
 
 @app.patch("/api/annotations/{ann_id}")
-def patch_annotation(ann_id: str, body: AnnotationPatch, view: str = "live") -> dict:
+def patch_annotation(ann_id: str, body: AnnotationPatch) -> dict:
     _ann_or_404(ann_id)
     fields = {k: v for k, v in body.model_dump().items() if v is not None}
     ann = store.update_annotation(ann_id, **fields)
-    return _resolved_one(ann, view)  # type: ignore[arg-type]
+    return views.resolve_one(ann)  # type: ignore[arg-type]
 
 
 @app.post("/api/annotations/{ann_id}/replies")
-def add_reply(ann_id: str, body: ReplyIn, view: str = "live") -> dict:
+def add_reply(ann_id: str, body: ReplyIn) -> dict:
     ann = _ann_or_404(ann_id)
     replies = list(ann.get("replies") or [])
     replies.append({"text": body.text.strip(), "at": time.time()})
     ann = store.update_annotation(ann_id, replies=replies)
-    return _resolved_one(ann, view)  # type: ignore[arg-type]
+    return views.resolve_one(ann)  # type: ignore[arg-type]
 
 
 @app.post("/api/meetings/{meeting_id}/annotations/exported")
@@ -584,14 +563,31 @@ def _attachment(name: str, ascii_name: str) -> str:
 
 
 @app.get("/api/meetings/{meeting_id}/export.md")
-def export_md(meeting_id: str, version: str = "auto", download: int = 0) -> Response:
-    md = meeting_markdown(views, meeting_id, version=version, include_summary=True)
+def export_md(meeting_id: str, download: int = 0) -> Response:
+    md = meeting_markdown(views, meeting_id, include_summary=True)
     if md is None:
         raise HTTPException(404, "회의를 찾을 수 없습니다")
     headers = {}
     if download:
         title = (store.get_meeting(meeting_id) or {}).get("title") or "meeting"
         headers["Content-Disposition"] = _attachment(f"{title}.md", "meeting.md")
+    return PlainTextResponse(md, media_type="text/markdown; charset=utf-8", headers=headers)
+
+
+@app.get("/api/meetings/{meeting_id}/script.md")
+def script_md(meeting_id: str, download: int = 0) -> Response:
+    """원본 스크립트: 녹음을 마친 뒤 큰 모델로 다시 받아 적고 화자를 나눈 참고용 기록"""
+    import datetime as _dt
+
+    m = _meeting_or_404(meeting_id)
+    md = script_markdown(store, meeting_id)
+    if md is None:
+        raise HTTPException(404, "원본 스크립트가 아직 없습니다")
+    headers = {}
+    if download:
+        day = _dt.datetime.fromtimestamp(m["created_at"]).strftime("%Y-%m-%d")
+        name = re.sub(r'[\\/:*?"<>|]+', " ", f"{day} {m['title'] or '회의'} 원본 스크립트.md").strip()
+        headers["Content-Disposition"] = _attachment(name, f"{day} script.md")
     return PlainTextResponse(md, media_type="text/markdown; charset=utf-8", headers=headers)
 
 

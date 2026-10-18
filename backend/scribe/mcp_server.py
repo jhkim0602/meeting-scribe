@@ -16,17 +16,17 @@ except ImportError:  # mcp 1.x
 
 from .config import settings
 from .db import Store
-from .export import LEGEND, meeting_markdown, transcript_markdown
+from .export import LEGEND, meeting_markdown, record_source, script_markdown, transcript_markdown
 from .search import search_all
 from .textutil import fmt_time
-from .views import Views, speaker_name
-from .voices import learn_from_meeting
+from .views import Views
 
 INSTRUCTIONS = """\
 로컬 회의 기록 앱(Meeting Scribe)의 데이터에 접근합니다.
-- 회의를 요약할 때는 get_meeting_bundle로 노트·전사·첨삭을 한 번에 읽으세요.
-- 사용자가 회의 중 남긴 메모, 댓글, 수정, 강조는 사용자가 중요하다고 표시한 부분이므로 요약에 우선 반영하세요.
-- 원본(후처리)이 있으면 화자 구분이 된 원본을, 없으면 실시간 기록을 사용합니다.
+- 회의를 요약할 때는 get_meeting_bundle로 노트·기록·메모·댓글을 한 번에 읽으세요.
+- 회의 기록은 하나입니다: 회의 중 받아 적은 글에 사용자가 직접 고친 내용이 반영되어 있고, 화자는 회의 중 고른 사람입니다.
+- 사용자가 회의 중 남긴 메모, 댓글, 강조는 사용자가 중요하다고 표시한 부분이므로 요약에 우선 반영하세요.
+- get_reference_script는 녹음 뒤 큰 모델이 다시 받아 적은 참고용 원본 스크립트입니다. 기록에서 알아듣기 어려운 부분을 확인할 때만 쓰고, 기록과 다르면 기록(사람이 고친 글)을 따르세요.
 - 결과 요약은 save_summary로 저장하면 앱의 'AI 요약' 탭에 표시됩니다.
 - meeting_id 자리에 'latest'를 넣으면 가장 최근 회의를 뜻합니다.
 """
@@ -36,7 +36,7 @@ _store = Store(settings.db_path)
 _views = Views(_store)
 server = _Server("meeting-scribe", instructions=INSTRUCTIONS)
 
-STATUS_KO = {"empty": "빈 회의", "recording": "녹음 중", "recorded": "녹음됨(원본 전)", "processing": "원본 만드는 중", "ready": "원본 완료", "error": "오류"}
+STATUS_KO = {"empty": "빈 회의", "recording": "녹음 중", "recorded": "녹음됨", "processing": "원본 스크립트 만드는 중", "ready": "완료", "error": "오류"}
 
 
 def _resolve_id(meeting_id: str) -> Optional[str]:
@@ -82,33 +82,37 @@ def list_meetings(query: str = "", limit: int = 20) -> str:
 
 
 @server.tool()
-def get_meeting_bundle(meeting_id: str = "latest", version: str = "auto", start_seconds: Optional[float] = None, end_seconds: Optional[float] = None, max_chars: int = 80000) -> str:
-    """회의 하나의 전체 자료(메타데이터, 내 노트, 첨삭이 표시된 전사)를 Markdown으로 돌려줍니다.
-    요약/회의록 작성에 가장 먼저 쓰세요. version: auto|final|live. 길면 start_seconds로 나눠 읽으세요."""
+def get_meeting_bundle(meeting_id: str = "latest", start_seconds: Optional[float] = None, end_seconds: Optional[float] = None, max_chars: int = 80000) -> str:
+    """회의 하나의 전체 자료(메타데이터, 내 노트, 메모·댓글이 표시된 기록)를 Markdown으로 돌려줍니다.
+    요약/회의록 작성에 가장 먼저 쓰세요. 길면 start_seconds로 나눠 읽으세요."""
     mid = _resolve_id(meeting_id)
     if mid is None:
         return f"회의를 찾을 수 없습니다: {meeting_id}"
-    md = meeting_markdown(_views, mid, version=version, include_notes=start_seconds is None, start=start_seconds, end=end_seconds)
-    units = (_views.final_view(mid) or {}).get("units") or _views.live_units(mid)
-    return _cut(md or "", max_chars, units)
+    md = meeting_markdown(_views, mid, include_notes=start_seconds is None, start=start_seconds, end=end_seconds)
+    return _cut(md or "", max_chars, _views.units(mid))
 
 
 @server.tool()
-def get_transcript(meeting_id: str = "latest", version: str = "auto", include_annotations: bool = True, start_seconds: Optional[float] = None, end_seconds: Optional[float] = None, max_chars: int = 80000) -> str:
-    """전사만 돌려줍니다. 각 줄: [시각] 화자: 내용. include_annotations=True면 사용자 첨삭 표시 포함."""
+def get_transcript(meeting_id: str = "latest", include_annotations: bool = True, start_seconds: Optional[float] = None, end_seconds: Optional[float] = None, max_chars: int = 80000) -> str:
+    """회의 기록만 돌려줍니다. 각 줄: [시각] 화자: 내용. include_annotations=True면 사용자 메모·댓글 표시 포함."""
     mid = _resolve_id(meeting_id)
     if mid is None:
         return f"회의를 찾을 수 없습니다: {meeting_id}"
-    meeting = _store.get_meeting(mid) or {}
-    final = _views.final_view(mid) if version != "live" else None
-    if final:
-        units, anns = final["units"], final["annotations"]
-    else:
-        lv = _views.live_view(mid)
-        units, anns = lv["units"], lv["annotations"]
-    body = transcript_markdown(units, anns, meeting.get("speakers") or {}, include_annotations=include_annotations, start=start_seconds, end=end_seconds)
+    src = record_source(_views, _store.get_meeting(mid) or {"id": mid})
+    body = transcript_markdown(src["units"], src["annotations"], src["speakers"], include_annotations=include_annotations, start=start_seconds, end=end_seconds)
     head = (LEGEND + "\n\n") if include_annotations else ""
-    return _cut(head + (body or "(기록 없음)"), max_chars, units)
+    return _cut(head + (body or "(기록 없음)"), max_chars, src["units"])
+
+
+@server.tool()
+def get_reference_script(meeting_id: str = "latest", max_chars: int = 80000) -> str:
+    """참고용 원본 스크립트: 녹음을 마친 뒤 큰 모델로 다시 받아 적고 화자를 나눈 결과.
+    회의 기록과 다르면 기록(사람이 고친 글)을 따르세요."""
+    mid = _resolve_id(meeting_id)
+    if mid is None:
+        return f"회의를 찾을 수 없습니다: {meeting_id}"
+    md = script_markdown(_store, mid)
+    return _cut(md, max_chars) if md else "(원본 스크립트가 아직 없습니다)"
 
 
 @server.tool()
@@ -123,14 +127,14 @@ def get_notes(meeting_id: str = "latest") -> str:
 
 @server.tool()
 def get_annotations(meeting_id: str = "latest") -> str:
-    """사용자가 기록 위에 남긴 메모/댓글/수정/강조를 시간순 목록으로 돌려줍니다."""
+    """사용자가 기록 위에 남긴 메모/댓글/강조/구분선을 시간순 목록으로 돌려줍니다."""
     mid = _resolve_id(meeting_id)
     if mid is None:
         return f"회의를 찾을 수 없습니다: {meeting_id}"
     anns = sorted(_store.list_annotations(mid), key=lambda a: a["anchor"].get("t0", a["anchor"].get("t", 0)))
     if not anns:
-        return "(첨삭 없음)"
-    label = {"comment": "댓글", "memo": "메모", "edit": "수정", "highlight": "강조", "divider": "구분선"}
+        return "(메모·댓글 없음)"
+    label = {"comment": "댓글", "memo": "메모", "highlight": "강조", "divider": "구분선"}
     lines = []
     for a in anns:
         anc = a["anchor"]
@@ -141,10 +145,7 @@ def get_annotations(meeting_id: str = "latest") -> str:
 
             lines.append(f"- [{fmt_time(t)}] ──── {divider_text(a)} ────")
             continue
-        if a["kind"] == "edit":
-            detail = f' → "{a.get("replacement") or ""}" ({ {"accepted": "적용됨", "dismissed": "무시됨"}.get(a["status"], "제안") })'
-        else:
-            detail = f": {a['body']}" if a.get("body") else ""
+        detail = f": {a['body']}" if a.get("body") else ""
         replies = "".join(f"\n    - 답글: {r.get('text', '')}" for r in a.get("replies") or [])
         lines.append(f"- [{fmt_time(t)}] {label.get(a['kind'], a['kind'])}{quote}{detail}{replies}")
     return "\n".join(lines)
@@ -156,7 +157,7 @@ def search_meetings(query: str, limit: int = 20) -> str:
     hits = search_all(_views, query, limit=limit)
     if not hits:
         return "검색 결과가 없습니다."
-    kind = {"title": "제목", "final": "원본", "live": "실시간", "notes": "노트"}
+    kind = {"title": "제목", "live": "기록", "notes": "노트"}
     return "\n".join(
         f"- {h['title']} ({h['meeting_id']}) · {kind.get(h['kind'], h['kind'])}" + (f" [{fmt_time(h['t'])}]" if h.get("t") is not None else "") + f": {h['snippet']}"
         for h in hits
@@ -172,20 +173,6 @@ def save_summary(meeting_id: str, markdown: str) -> str:
     _store.update_meeting(mid, summary_md=markdown, summary_updated_at=time.time())
     m = _store.get_meeting(mid) or {}
     return f"저장했습니다: {m.get('title') or mid} ({len(markdown):,}자)"
-
-
-@server.tool()
-def rename_speakers(meeting_id: str, names: dict[str, str]) -> str:
-    """화자 라벨(S1, S2 …)에 실제 이름을 붙입니다. 예: {"S1": "김민지", "S2": "박준호"}"""
-    mid = _resolve_id(meeting_id)
-    if mid is None:
-        return f"회의를 찾을 수 없습니다: {meeting_id}"
-    m = _store.get_meeting(mid) or {}
-    speakers = dict(m.get("speakers") or {})
-    speakers.update({k: v for k, v in names.items() if k})
-    _store.update_meeting(mid, speakers=speakers)
-    learn_from_meeting(_store, mid)
-    return "화자 이름: " + ", ".join(f"{k}={speaker_name(speakers, k)}" for k in sorted(speakers))
 
 
 def main() -> None:

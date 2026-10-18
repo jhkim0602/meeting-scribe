@@ -2,21 +2,19 @@ import { Check, CornerDownRight, MessageSquare, NotebookPen, Pencil, RotateCcw, 
 import { memo, useState } from 'react'
 import { type Annotation } from '../lib/api'
 import { annActions } from '../lib/annActions'
-import type { View } from '../lib/model'
 import { annotationTime, quoteOf, sendToNotes } from '../lib/notesExport'
 import { seekTo, useStore } from '../lib/store'
 import { fmtTime } from '../lib/time'
 
 interface Props {
   ann: Annotation
-  view: View
   meetingId: string
   flash: boolean
   onHover: (id: string | null) => void
 }
 
 /** 문장 바로 아래에 붙는 댓글 스레드 */
-export const CommentThread = memo(function CommentThread({ ann, view, meetingId, flash, onHover }: Props) {
+export const CommentThread = memo(function CommentThread({ ann, meetingId, flash, onHover }: Props) {
   const toast = useStore((s) => s.toast)
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(ann.body)
@@ -24,9 +22,8 @@ export const CommentThread = memo(function CommentThread({ ann, view, meetingId,
   const [reply, setReply] = useState('')
   const [expanded, setExpanded] = useState(false)
   const t = annotationTime(ann)
-  const quote = quoteOf(ann, view)
+  const quote = quoteOf(ann)
   const resolved = ann.status === 'resolved'
-  const approx = !!ann.pos && 'approx' in ann.pos && ann.pos.approx
 
   const run = async (fn: () => Promise<unknown>) => {
     try {
@@ -38,17 +35,17 @@ export const CommentThread = memo(function CommentThread({ ann, view, meetingId,
   const save = () => {
     setEditing(false)
     const v = draft.trim()
-    if (v && v !== ann.body) run(() => annActions.patch(ann.id, { body: v }, view))
+    if (v && v !== ann.body) run(() => annActions.patch(ann.id, { body: v }))
   }
   const sendReply = () => {
     const v = reply.trim()
     if (!v) return
     setReply('')
     setReplying(false)
-    run(() => annActions.reply(ann.id, v, view))
+    run(() => annActions.reply(ann.id, v))
   }
   const toNotes = async () => {
-    const n = await sendToNotes(meetingId, [ann], view)
+    const n = await sendToNotes(meetingId, [ann])
     if (n) toast('노트에 넣었어요', 'success')
   }
 
@@ -74,14 +71,12 @@ export const CommentThread = memo(function CommentThread({ ann, view, meetingId,
         <MessageSquare size={13} className="cmt-icon" />
         <button className="cmt-time" onClick={() => seekTo(t)} title="이 시점부터 듣기">{fmtTime(t)}</button>
         {quote && <span className="cmt-quote" title={quote}>{quote}</span>}
-        {view === 'final' && ann.origin === 'live' && <span className="chip chip-soft" title="실시간 기록에서 단 댓글을 원본 위치로 옮겼어요">실시간에서</span>}
-        {approx && <span className="chip chip-warn" title="문장이 많이 달라 시간 기준으로 위치를 추정했어요">위치 추정</span>}
         {ann.exported_at && <span className="chip chip-ok" title="노트에 들어가 있어요"><NotebookPen size={11} />노트</span>}
         <span className="spacer" />
         <div className="cmt-actions">
           <button className="icon-btn" title="답글" onClick={() => setReplying((v) => !v)}><CornerDownRight size={14} /></button>
           <button className="icon-btn" title={ann.exported_at ? '노트에 한 번 더 넣기' : '노트로 보내기'} onClick={toNotes}><NotebookPen size={14} /></button>
-          <button className="icon-btn" title={resolved ? '다시 열기' : '해결'} onClick={() => run(() => annActions.patch(ann.id, { status: resolved ? 'open' : 'resolved' }, view))}>
+          <button className="icon-btn" title={resolved ? '다시 열기' : '해결'} onClick={() => run(() => annActions.patch(ann.id, { status: resolved ? 'open' : 'resolved' }))}>
             {resolved ? <RotateCcw size={14} /> : <Check size={14} />}
           </button>
           <button className="icon-btn" title="편집" onClick={() => { setDraft(ann.body); setEditing(true) }}><Pencil size={14} /></button>

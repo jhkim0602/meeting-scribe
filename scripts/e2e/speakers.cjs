@@ -3,7 +3,7 @@
 //  - 목소리로 묶인 단락(화자 A, B)에 칩을 눌러 참여자 고르기 → 같은 목소리 문장에도 바로 반영 → "이 문장만"으로 되돌리기
 //  - 문장에 마우스를 올리고 숫자키 / Shift+숫자키(그 문장만)
 //  - 앞으로 오는 같은 목소리 문장은 처음부터 그 참여자
-//  - 같은 사람이 이어 말한 문장은 한 단락, 원본에도 이름이 옮겨짐, 원본에서도 같은 고르기 창
+//  - 같은 사람이 이어 말한 문장은 한 단락, 녹음을 마쳐도 고른 화자가 기록에 그대로
 //  - 다음 회의: 같은 이름을 넣으면 기억한 목소리로 처음부터 알아봄
 // 서버는 빈 데이터 폴더와 시연용 엔진(목소리 시간표: A 0~9.5초, B 9.5~14.5초, A 14.5~21.5초, C 21.5~27.5초 …)으로 띄운다.
 const { chromium } = require(process.env.PLAYWRIGHT || 'playwright')
@@ -27,7 +27,7 @@ function check(cond, msg) {
   const errors = []
   page.on('pageerror', (e) => errors.push('PAGEERROR ' + e.message))
   page.on('console', (m) => { if (m.type() === 'error' && !/WebSocket|Failed to load resource/.test(m.text())) errors.push(m.text()) })
-  const chips = () => page.locator('.view-live .spk-chip').allInnerTexts()
+  const chips = () => page.locator('.transcript .spk-chip').allInnerTexts()
 
   // 1) 참여자를 미리 넣기
   const m = await (await fetch(`${BASE}/api/meetings`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"title":"주간 회의"}' })).json()
@@ -42,23 +42,23 @@ function check(cond, msg) {
   // 2) 녹음: 목소리로 단락이 묶인다
   await page.click('.btn-record')
   await page.waitForSelector('.dock-rec')
-  await page.waitForFunction(() => [...document.querySelectorAll('.view-live .spk-chip')].filter((c) => !c.classList.contains('unknown') || c.textContent !== '화자?').length >= 3, null, { timeout: 40000 })
+  await page.waitForFunction(() => [...document.querySelectorAll('.transcript .spk-chip')].filter((c) => !c.classList.contains('unknown') || c.textContent !== '화자?').length >= 3, null, { timeout: 40000 })
   await sleep(300)
   const c1 = await chips()
   check(c1[0] === '화자 A' && c1[1] === '화자 B' && c1[2] === '화자 A', `목소리로 임시 화자 표시 (${c1.join(', ')})`)
-  const turns = await page.locator('.view-live .turn').count()
-  const sentences = await page.locator('.view-live .utext').count()
+  const turns = await page.locator('.transcript .turn').count()
+  const sentences = await page.locator('.transcript .utext').count()
   check(turns < sentences, `같은 사람이 이어 말한 문장은 한 단락 (문장 ${sentences}개 → 단락 ${turns}개)`)
   await page.screenshot({ path: `${OUT}/s1-temporary.png` })
 
   // 3) 칩을 눌러 고르면 같은 목소리 문장에도 바로
-  await page.locator('.view-live .spk-chip').first().click()
+  await page.locator('.transcript .spk-chip').first().click()
   await page.waitForSelector('.speaker-picker')
   await page.screenshot({ path: `${OUT}/s2-picker.png` })
   await page.click('.speaker-picker .picker-item:has-text("김민지")')
   await page.waitForSelector('.toast:has-text("같은 목소리")')
   const c2 = await chips()
-  check(c2[0] === '김민지' && c2.filter((x) => x.startsWith('김민지')).length >= 2 && (await page.locator('.view-live .spk-chip.manual').count()) === 1, `한 번 고르면 같은 목소리 단락도 김민지 (${c2.join(', ')})`)
+  check(c2[0] === '김민지' && c2.filter((x) => x.startsWith('김민지')).length >= 2 && (await page.locator('.transcript .spk-chip.manual').count()) === 1, `한 번 고르면 같은 목소리 단락도 김민지 (${c2.join(', ')})`)
   await page.screenshot({ path: `${OUT}/s3-propagated.png` })
   await page.click('.toast .toast-action:has-text("이 문장만")')
   await sleep(500)
@@ -66,16 +66,16 @@ function check(cond, msg) {
   check(c3[0] === '김민지' && c3.includes('화자 A'), `"이 문장만" → 나머지는 예전대로 (${c3.join(', ')})`)
 
   // 4) 숫자키: 마우스를 올린 문장의 단락 (같은 목소리도 함께)
-  await page.locator('.view-live .turn').filter({ has: page.locator('.spk-chip:has-text("화자 B")') }).first().locator('.utext').first().hover()
+  await page.locator('.transcript .turn').filter({ has: page.locator('.spk-chip:has-text("화자 B")') }).first().locator('.utext').first().hover()
   await page.keyboard.press('2')
   await sleep(500)
   check((await chips()).includes('박준호'), '문장에 마우스를 올리고 2 → 박준호')
-  await page.locator('.view-live .utext').first().hover()
+  await page.locator('.transcript .utext').first().hover()
   await page.keyboard.press('1')
   await sleep(400)
 
   // 5) Shift+숫자: 그 문장만 박준호 → 첫 단락에서 빠진다
-  const firstTurn = page.locator('.view-live .turn').first()
+  const firstTurn = page.locator('.transcript .turn').first()
   const n0 = await firstTurn.locator('.utext').count()
   const lastId = (await firstTurn.locator('.utext').last().getAttribute('data-unit'))
   await firstTurn.locator('.utext').last().hover()
@@ -88,7 +88,7 @@ function check(cond, msg) {
     while (t && !t.querySelector('.spk-chip')) t = t.previousElementSibling
     return t?.querySelector('.spk-chip')?.textContent || ''
   })
-  check(one.speaker === junho && one.speaker_src === 'manual' && (await page.locator('.view-live .turn').first().locator('.utext').count()) === n0 - 1 && owner.startsWith('박준호'),
+  check(one.speaker === junho && one.speaker_src === 'manual' && (await page.locator('.transcript .turn').first().locator('.utext').count()) === n0 - 1 && owner.startsWith('박준호'),
     `Shift+2 → 그 문장만 박준호 (첫 단락 ${n0}→${n0 - 1}문장, 박준호 단락으로)`)
   await page.screenshot({ path: `${OUT}/s4-assigned.png` })
 
@@ -111,27 +111,23 @@ function check(cond, msg) {
   await sleep(500)
   check((await page.locator('.person').count()) === 2, '참여자 빼기 → 되돌리기')
 
-  // 8) 녹음 종료 → 원본에 이름이 옮겨지고, 원본에서도 같은 고르기 창
+  // 8) 녹음 종료 → 원본 스크립트를 만들어도 고른 화자는 기록에 그대로, 끝난 뒤에도 같은 칩으로 고르기
+  const chipsBefore = await chips()
   await page.click('.btn-stop')
   await page.click('.modal.confirm button:has-text("녹음 종료")')
   await page.waitForSelector('.dock-player', { timeout: 30000 })
-  await page.click('.tab:has-text("원본")')
-  await page.waitForSelector('.view-final .utext', { timeout: 60000 })
-  await sleep(800)
-  const names = await page.locator('.view-final .speaker .sp-name').allInnerTexts()
-  const chipsFinal = await page.locator('.final-meta .voice-chip').allInnerTexts()
-  check(names.includes('박준호'), `회의 중 고른 화자가 원본 이름으로 (${[...new Set(names)].join(', ')})`)
-  // 이 시험에서는 A 목소리 일부를 박준호로 바꿨으니 김민지는 애매(60% 미만) → 제안 칩
-  check(names.includes('김민지') || chipsFinal.includes('김민지?'), `애매하면 원본에서 "김민지?" 제안 (${chipsFinal.join(', ')})`)
-  if (chipsFinal.includes('김민지?')) {
-    await page.click('.final-meta .voice-chip:has-text("김민지?")')
-    await page.waitForFunction(() => [...document.querySelectorAll('.view-final .speaker .sp-name')].some((e) => e.textContent === '김민지'), null, { timeout: 5000 })
-    check(true, '제안 칩을 누르면 그 이름으로')
+  for (let i = 0; i < 60; i++) {
+    const job = (await get(`/api/meetings/${m.id}/job`)).job
+    if (job && job.status === 'done') break
+    await sleep(1000)
   }
-  await page.locator('.view-final .speaker .sp-name').first().click()
-  await page.waitForSelector('.speaker-picker:has-text("이 화자는 누구인가요?")')
-  check((await page.locator('.speaker-picker .picker-item').count()) === 2, '원본에서도 참여자 중에서 고르기')
-  await page.screenshot({ path: `${OUT}/s5-final-picker.png` })
+  await sleep(1200)
+  const chipsAfter = await chips()
+  check(JSON.stringify(chipsAfter.slice(0, chipsBefore.length)) === JSON.stringify(chipsBefore) && chipsAfter.includes('박준호'), `녹음을 마쳐도 고른 화자가 기록에 그대로 (${[...new Set(chipsAfter)].join(', ')})`)
+  await page.locator('.transcript .spk-chip').first().click()
+  await page.waitForSelector('.speaker-picker')
+  check((await page.locator('.speaker-picker .picker-item').count()) === 2, '끝난 뒤에도 같은 고르기 창')
+  await page.screenshot({ path: `${OUT}/s5-after-picker.png` })
   await page.keyboard.press('Escape')
 
   // 9) 다음 회의: 같은 이름을 넣으면 기억한 목소리로 처음부터 알아본다
@@ -142,9 +138,9 @@ function check(cond, msg) {
   await page.keyboard.press('Enter')
   await page.keyboard.press('Escape')
   await page.click('.btn-record')
-  await page.waitForFunction(() => document.querySelectorAll('.view-live .spk-chip').length >= 1, null, { timeout: 30000 })
+  await page.waitForFunction(() => document.querySelectorAll('.transcript .spk-chip').length >= 1, null, { timeout: 30000 })
   const first = (await chips())[0]
-  check(first.startsWith('김민지') && (await page.locator('.view-live .spk-chip.guess').count()) >= 1, `다음 회의: 기억한 목소리로 처음부터 "${first.replace(/\s+/g, '')}" (추정 표시)`)
+  check(first.startsWith('김민지') && (await page.locator('.transcript .spk-chip.guess').count()) >= 1, `다음 회의: 기억한 목소리로 처음부터 "${first.replace(/\s+/g, '')}" (추정 표시)`)
   await page.screenshot({ path: `${OUT}/s6-memory.png` })
   await page.click('.btn-stop')
   await page.click('.modal.confirm button:has-text("녹음 종료")')

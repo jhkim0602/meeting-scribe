@@ -1,7 +1,7 @@
 import { create } from 'zustand'
-import { api, type Annotation, type AppSettings, type ResolvedPos, type SpeakerChange, type FinalView, type Health, type Job, type LiveView, type Meeting, type MeetingSummary, type Unit } from './api'
+import { api, type Annotation, type AppSettings, type SegmentEdit, type SpeakerChange, type Health, type Job, type LiveView, type Meeting, type MeetingSummary, type Unit } from './api'
 
-export type Tab = 'live' | 'final' | 'summary'
+export type Tab = 'live' | 'summary'
 export type RecStatus = 'idle' | 'connecting' | 'recording' | 'paused' | 'stopping'
 export type Theme = 'light' | 'dark' | 'system'
 
@@ -57,8 +57,6 @@ interface State {
   meeting: Meeting | null
   live: LiveView | null
   partial: { t0: number; t1: number; text: string } | null
-  final: FinalView | null
-  finalLoaded: boolean
   job: Job | null
   tab: Tab
   showMarks: boolean
@@ -78,12 +76,13 @@ interface State {
   select: (id: string | null) => Promise<void>
   refreshMeeting: () => Promise<void>
   refreshLive: () => Promise<void>
-  refreshFinal: () => Promise<void>
   refreshViews: () => Promise<void>
   addLiveSegment: (u: Unit) => void
+  /** 문장을 직접 고친 결과를 반영 (바뀐 문장, 위치가 옮겨진 댓글·강조) */
+  applySegmentEdit: (r: SegmentEdit) => void
   /** 실시간 문장의 임시 화자 바꾸기 (서버가 정한 것, 사용자가 고른 것) */
   applySpeakerChanges: (changes: SpeakerChange[]) => void
-  /** 서버가 돌려준 항목 하나를 두 화면에 바꿔 끼운다 (전체를 다시 받지 않는다) */
+  /** 서버가 돌려준 항목 하나를 바꿔 끼운다 (전체를 다시 받지 않는다) */
   upsertAnnotation: (a: Annotation) => void
   removeAnnotation: (id: string) => void
   /** 지우기 전 모습을 돌려준다 (되돌리기용) */
@@ -105,7 +104,6 @@ let toastSeq = 1
 
 export interface AnnSnapshot {
   live?: { item: Annotation; index: number }
-  final?: { item: Annotation; index: number }
 }
 
 function readTheme(): Theme {
@@ -124,8 +122,6 @@ export const useStore = create<State>((set, get) => ({
   meeting: null,
   live: null,
   partial: null,
-  final: null,
-  finalLoaded: false,
   job: null,
   tab: 'live',
   showMarks: true,
@@ -156,13 +152,12 @@ export const useStore = create<State>((set, get) => ({
   },
   select: async (id) => {
     if (id === get().selectedId && get().meeting) return
-    set({ selectedId: id, meeting: null, live: null, final: null, finalLoaded: false, job: null, partial: null, playerTime: 0, playing: false })
+    set({ selectedId: id, meeting: null, live: null, job: null, partial: null, playerTime: 0, playing: false })
     if (!id) return
     try {
       const meeting = await api.meeting(id)
       if (get().selectedId !== id) return
-      const hasFinal = meeting.final_version > 0
-      set({ meeting, job: meeting.job, tab: meeting.source === 'upload' || (hasFinal && meeting.status === 'ready') ? 'final' : 'live' })
+      set({ meeting, job: meeting.job, tab: 'live' })
       await get().refreshViews()
     } catch (e) {
       get().toast(`회의를 불러오지 못했어요: ${(e as Error).message}`, 'error')
@@ -181,20 +176,26 @@ export const useStore = create<State>((set, get) => ({
     const live = await api.live(id)
     if (get().selectedId === id) set({ live })
   },
-  refreshFinal: async () => {
-    const id = get().selectedId
-    if (!id) return
-    const { final, job } = await api.final(id)
-    if (get().selectedId === id) set({ final, job, finalLoaded: true })
-  },
   refreshViews: async () => {
-    await Promise.all([get().refreshLive(), get().refreshFinal()])
+    await get().refreshLive()
   },
   addLiveSegment: (u) => {
     const live = get().live
     if (!live) return
     if (live.units.some((x) => x.id === u.id)) return
     set({ live: { ...live, units: [...live.units, u] } })
+  },
+  applySegmentEdit: ({ unit, annotations, deleted }) => {
+    const live = get().live
+    if (!live) return
+    const by = new Map(annotations.map((a) => [a.id, a]))
+    const gone = new Set(deleted)
+    set({
+      live: {
+        units: live.units.map((u) => (u.id === unit.id ? { ...u, text: unit.text, text_orig: unit.text_orig } : u)),
+        annotations: live.annotations.filter((a) => !gone.has(a.id)).map((a) => by.get(a.id) ?? a),
+      },
+    })
   },
   applySpeakerChanges: (changes) => {
     const live = get().live
@@ -210,59 +211,36 @@ export const useStore = create<State>((set, get) => ({
     if (hit) set({ live: { ...live, units } })
   },
   upsertAnnotation: (a) => {
-    const { live, final, selectedId } = get()
-    if (a.meeting_id !== selectedId) return
-    const put = (list: Annotation[], r: ResolvedPos | null | undefined) => {
-      const item: Annotation = { ...a, pos: r?.pos ?? null, match: r?.match ?? undefined }
-      const i = list.findIndex((x) => x.id === a.id)
-      if (i < 0) return [...list, item]
-      const next = list.slice()
-      next[i] = item
-      return next
-    }
-    set({
-      live: live ? { ...live, annotations: put(live.annotations, a.resolved?.live) } : live,
-      final: final ? { ...final, annotations: put(final.annotations, a.resolved?.final) } : final,
-    })
+    const { live, selectedId } = get()
+    if (a.meeting_id !== selectedId || !live) return
+    const i = live.annotations.findIndex((x) => x.id === a.id)
+    const annotations = i < 0 ? [...live.annotations, a] : live.annotations.map((x, k) => (k === i ? a : x))
+    set({ live: { ...live, annotations } })
   },
   removeAnnotation: (id) => {
-    const { live, final } = get()
-    set({
-      live: live ? { ...live, annotations: live.annotations.filter((x) => x.id !== id) } : live,
-      final: final ? { ...final, annotations: final.annotations.filter((x) => x.id !== id) } : final,
-    })
+    const { live } = get()
+    if (live) set({ live: { ...live, annotations: live.annotations.filter((x) => x.id !== id) } })
   },
   takeAnnotation: (id) => {
-    const { live, final } = get()
+    const { live } = get()
     const snap: AnnSnapshot = {}
     const li = live?.annotations.findIndex((x) => x.id === id) ?? -1
-    const fi = final?.annotations.findIndex((x) => x.id === id) ?? -1
     if (live && li >= 0) snap.live = { item: live.annotations[li], index: li }
-    if (final && fi >= 0) snap.final = { item: final.annotations[fi], index: fi }
     get().removeAnnotation(id)
     return snap
   },
   restoreAnnotation: (snap) => {
-    const { live, final } = get()
-    const put = (list: Annotation[], s?: { item: Annotation; index: number }) => {
-      if (!s || list.some((x) => x.id === s.item.id)) return list
-      const next = list.slice()
-      next.splice(Math.min(s.index, next.length), 0, s.item)
-      return next
-    }
-    set({
-      live: live ? { ...live, annotations: put(live.annotations, snap.live) } : live,
-      final: final ? { ...final, annotations: put(final.annotations, snap.final) } : final,
-    })
+    const { live } = get()
+    const s = snap.live
+    if (!live || !s || live.annotations.some((x) => x.id === s.item.id)) return
+    const next = live.annotations.slice()
+    next.splice(Math.min(s.index, next.length), 0, s.item)
+    set({ live: { ...live, annotations: next } })
   },
   hiddenMeetings: [],
   stampExported: (stamps) => {
-    const { live, final } = get()
-    const stamp = (list: Annotation[]) => list.map((x) => (x.id in stamps ? { ...x, exported_at: stamps[x.id] } : x))
-    set({
-      live: live ? { ...live, annotations: stamp(live.annotations) } : live,
-      final: final ? { ...final, annotations: stamp(final.annotations) } : final,
-    })
+    const { live } = get()
+    if (live) set({ live: { ...live, annotations: live.annotations.map((x) => (x.id in stamps ? { ...x, exported_at: stamps[x.id] } : x)) } })
   },
   setPartial: (partial) => set({ partial: partial && partial.text ? partial : null }),
   setTab: (tab) => set({ tab }),
