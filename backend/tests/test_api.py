@@ -724,3 +724,45 @@ def test_participant_details_are_kept_carried_over_and_shown(client):
     assert p2["org"] == "전략기획팀" and p2["role"] == "팀장" and "note" not in p2
     sug = {s["name"]: s for s in client.get("/api/participants/suggest").json()}
     assert sug["한지우"]["org"] == "전략기획팀" and sug["오세린"]["role"] == "디자이너"
+
+
+def test_marks_from_live_before_and_after_postprocess_land_on_the_final(client):
+    """회의 중 실시간 기록에 단 댓글, 후처리가 끝난 뒤 실시간 탭에 단 댓글, 원본 탭에 단 댓글이
+    모두 전사 기록에서는 후처리 원본 문장 위에 붙는다."""
+    mid = client.post("/api/meetings", json={"title": "옮겨 붙기"}).json()["id"]
+    pcm = _speech_pcm([("s", 2.5), ("n", 1.5), ("s", 2.5), ("n", 1.5), ("s", 2.5), ("n", 1.5)])
+    with client.websocket_connect(f"/api/meetings/{mid}/record") as ws:
+        json.loads(ws.receive_text())
+        ws.send_bytes(pcm)
+        live = []
+        while len(live) < 3:
+            ev = json.loads(ws.receive_text())
+            if ev["type"] == "segment":
+                live.append(ev["segment"])
+        # 1) 회의 중: 실시간 기록에 댓글
+        u = live[0]
+        client.post(f"/api/meetings/{mid}/annotations", json={"kind": "comment", "view": "live", "body": "회의 중 댓글",
+                    "start": {"unit": u["id"], "offset": 0}, "end": {"unit": u["id"], "offset": len(u["text"].split(" ")[0])}})
+        ws.send_text(json.dumps({"type": "stop"}))
+        while json.loads(ws.receive_text())["type"] != "stopped":
+            pass
+    assert _wait_job(client, mid)["status"] == "done"
+    final = client.get(f"/api/meetings/{mid}/final").json()["final"]
+    fids = {x["id"] for x in final["units"]}
+    # 2) 후처리가 끝난 뒤 실시간 탭에 댓글, 3) 원본 탭에 댓글
+    u = live[1]
+    client.post(f"/api/meetings/{mid}/annotations", json={"kind": "comment", "view": "live", "body": "끝난 뒤 실시간 탭 댓글",
+                "start": {"unit": u["id"], "offset": 0}, "end": {"unit": u["id"], "offset": len(u["text"].split(" ")[0])}})
+    f = final["units"][-1]
+    client.post(f"/api/meetings/{mid}/annotations", json={"kind": "comment", "view": "final", "body": "원본 탭 댓글",
+                "start": {"unit": f["id"], "offset": 0}, "end": {"unit": f["id"], "offset": len(f["text"].split(" ")[0])}})
+
+    anns = client.get(f"/api/meetings/{mid}/final").json()["final"]["annotations"]
+    assert {a["body"] for a in anns} == {"회의 중 댓글", "끝난 뒤 실시간 탭 댓글", "원본 탭 댓글"}
+    assert all(a["pos"] and a["pos"]["start"]["unit"] in fids for a in anns)  # 모두 원본 문장 위로
+    h = client.get(f"/api/meetings/{mid}/transcript.html").text
+    assert "원본 · 화자 구분" in h
+    for a in anns:  # 전사 기록에서도 그 원본 문장 바로 아래에
+        sent = h.index(f'id="u-{a["pos"]["start"]["unit"]}"')
+        assert sent < h.index(a["body"], sent), a["body"]
+    assert not any(f'id="u-{x["id"]}"' in h for x in live)  # 실시간 기록 문장은 쓰지 않는다
