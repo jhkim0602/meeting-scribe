@@ -177,6 +177,12 @@ def meeting_markdown(
     lines.append(f"- 회의 ID: {meeting['id']}")
     lines.append(f"- 일시: {created}")
     lines.append(f"- 길이: {fmt_time(meeting.get('duration') or 0, always_hours=True)}")
+    people = meeting.get("participants") or []
+    if people:
+        lines.append("- 참석자:")
+        for p in people:
+            info = " · ".join(x for x in (p.get("org"), p.get("role")) if x)
+            lines.append(f"  - {p['name']}" + (f" ({info})" if info else "") + (f" — {p['note']}" if p.get("note") else ""))
     if use_final:
         names = [speaker_name(speakers, s) for s in final["speakers"]]
         lines.append(f"- 화자: {', '.join(n for n in names if n) or '구분 없음'}")

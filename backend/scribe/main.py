@@ -227,22 +227,35 @@ class ParticipantsIn(BaseModel):
 
 @app.put("/api/meetings/{meeting_id}/participants")
 def put_participants(meeting_id: str, body: ParticipantsIn) -> dict:
-    """회의 참여자 [{id?, name}]. 녹음 전에 미리, 또는 녹음 중에 언제든."""
+    """회의 참여자 [{id?, name, org?, role?, note?}] (소속·직무·메모). 녹음 전에 미리, 또는 녹음 중에 언제든."""
     m = _meeting_or_404(meeting_id)
-    parts = normalize_participants(body.participants, m.get("participants") or [])
+    parts = normalize_participants(body.participants, m.get("participants") or [], _known_people(exclude=meeting_id))
     store.update_meeting(meeting_id, participants=parts)
     tracker_for(store, meeting_id).reload()  # 같은 이름의 기억된 목소리로 시작
     return {"participants": parts}
 
 
+def _known_people(exclude: Optional[str] = None) -> dict[str, dict]:
+    """지난 회의들에서 적어 둔 사람별 소속·직무 (가장 최근 것)"""
+    known: dict[str, dict] = {}
+    for m in store.list_meetings():
+        if m["id"] == exclude:
+            continue
+        for p in m.get("participants") or []:
+            cur = known.setdefault(p["name"], {})
+            for key in ("org", "role"):
+                if p.get(key) and key not in cur:
+                    cur[key] = p[key]
+    return known
+
+
 @app.get("/api/participants/suggest")
 def suggest_participants() -> list[dict]:
-    """참여자 이름 자동 완성: 최근 회의 참여자 + 목소리를 기억하는 사람"""
+    """참여자 이름 자동 완성: 최근 회의 참여자(소속·직무와 함께) + 목소리를 기억하는 사람"""
     voices = {s["name"] for s in store.list_voice_samples()}
     seen: dict[str, dict] = {}
-    for m in store.list_meetings():
-        for p in m.get("participants") or []:
-            seen.setdefault(p["name"], {"name": p["name"], "voice": p["name"] in voices})
+    for name, info in _known_people().items():
+        seen.setdefault(name, {"name": name, "voice": name in voices, **info})
     for name in sorted(voices):
         seen.setdefault(name, {"name": name, "voice": True})
     return list(seen.values())[:50]

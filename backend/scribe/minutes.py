@@ -294,9 +294,10 @@ def collect(store: Store, views: Views, meeting_id: str) -> Optional[dict]:
     clock = m.get("clock") or []
     start = float(m.get("held_at") or (clock[0][1] if clock else m["created_at"]))
     duration = float(m.get("duration") or 0)
-    participants = [p["name"] for p in m.get("participants") or []]
-    if not participants:
-        participants = [v for v in (m.get("speakers") or {}).values() if v]
+    people = people_of(m)
+    if not people:
+        people = [{"name": v} for v in (m.get("speakers") or {}).values() if v]
+    participants = [p["name"] for p in people]
     final = views.final_view(meeting_id)
     view = final if final else views.live_view(meeting_id)
     marks = []
@@ -312,7 +313,7 @@ def collect(store: Store, views: Views, meeting_id: str) -> Optional[dict]:
         })
     return {
         "id": m["id"], "title": m.get("title") or "제목 없는 회의", "start": start, "duration": duration,
-        "place": m.get("place") or "", "participants": participants, "summary": m.get("summary_md") or "",
+        "place": m.get("place") or "", "participants": participants, "people": people, "summary": m.get("summary_md") or "",
         "notes": m.get("notes") or [], "marks": marks, "source": m.get("source"),
     }
 
@@ -486,11 +487,29 @@ def render(data: dict, audio_src: Optional[str] = None, generated: Optional[floa
     )
 
 
-def attendees_html(people: list[str], label: str = "참석자") -> str:
+def people_of(m: dict) -> list[dict]:
+    """참석자와 세부 정보 (소속·직무·메모)"""
+    return [{k: p.get(k) or "" for k in ("name", "org", "role", "note")} for p in m.get("participants") or []]
+
+
+def attendees_html(people: list[dict], label: str = "참석자") -> str:
+    """참석자: 소속·직무·메모가 하나라도 있으면 표로, 없으면 이름만 한 줄로"""
     if not people:
         return ""
-    return (f'<div class="attendees"><span class="lbl">{label}<b>{len(people)}</b></span>'
-            f'<span class="people">{"".join(_person(p, i) for i, p in enumerate(people))}</span></div>')
+    head = f'<span class="lbl">{label}<b>{len(people)}</b></span>'
+    if not any(p.get("org") or p.get("role") or p.get("note") for p in people):
+        return f'<div class="attendees">{head}<span class="people">{"".join(_person(p["name"], i) for i, p in enumerate(people))}</span></div>'
+
+    def cell(v: str) -> str:
+        return _esc(v) if v else '<span class="tbd">—</span>'
+
+    rows = "".join(
+        f'<tr><td class="pn">{_person(p["name"], i)}</td><td>{cell(p.get("org", ""))}</td><td>{cell(p.get("role", ""))}</td>'
+        f'<td class="pm">{cell(p.get("note", ""))}</td></tr>'
+        for i, p in enumerate(people)
+    )
+    return (f'<div class="attendees detail">{head}<table class="people-table"><colgroup><col class="c-pn"><col class="c-org"><col class="c-role"><col></colgroup>'
+            f'<thead><tr><th>이름</th><th>소속</th><th>직무</th><th>메모</th></tr></thead><tbody>{rows}</tbody></table></div>')
 
 
 def tools_html(meeting_id: str, active: str) -> str:
@@ -531,7 +550,7 @@ def page(data: dict, *, brand: tuple[str, str, str], facts: str, body: str, audi
   <header class="head">
     <h1>{_esc(data["title"])}</h1>
     <dl class="facts">{facts}</dl>
-    {attendees_html(data["participants"], people_label)}
+    {attendees_html(data.get("people") or [{"name": n} for n in data["participants"]], people_label)}
   </header>
   {body}
   <footer class="foot"><span>회의 노트로 작성</span><span>{gen.year}. {gen.month}. {gen.day}. {gen:%H:%M} 생성</span></footer>
@@ -590,6 +609,13 @@ h1 { margin: 0 0 22px; font-size: 27px; line-height: 1.32; font-weight: 700; let
 .attendees { display: flex; align-items: baseline; gap: 18px; padding: 12px 0 13px; border-bottom: 1px solid var(--line); }
 .lbl { flex: none; font-size: 11.5px; font-weight: 500; color: var(--muted); }
 .attendees .lbl b { margin-left: 5px; color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+.attendees.detail { display: block; padding-bottom: 4px; }
+.people-table { margin-top: 8px; font-size: 13.5px; table-layout: fixed; }
+.people-table .c-pn { width: 132px; } .people-table .c-org { width: 150px; } .people-table .c-role { width: 130px; }
+.people-table th { padding: 6px 12px 6px 0; text-align: left; font-size: 11.5px; font-weight: 500; color: var(--faint); border-bottom: 1px solid var(--line-2); }
+.people-table td { padding: 8px 12px 8px 0; vertical-align: top; border-bottom: 1px solid var(--line-2); color: var(--ink); }
+.people-table tr:last-child td { border-bottom: 0; }
+.people-table .pm { color: var(--text); }
 .people { display: flex; flex-wrap: wrap; gap: 6px 16px; }
 .person { display: inline-flex; align-items: center; gap: 7px; font-weight: 500; color: var(--ink); white-space: nowrap; }
 .av { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; font-size: 9.5px; font-weight: 700; letter-spacing: -0.04em; color: #fff; }
@@ -710,6 +736,13 @@ a { color: var(--accent); text-decoration: none; border-bottom: 1px solid rgba(4
   .facts { grid-template-columns: 1fr 1fr; }
   .fact { padding: 10px 12px; } .fact:nth-child(odd) { padding-left: 0; border-left: 0; } .fact:nth-child(n+3) { border-top: 1px solid var(--line-2); }
   .attendees { flex-direction: column; gap: 6px; }
+  .people-table, .people-table tbody, .people-table tr, .people-table td { display: block; width: auto; }
+  .people-table colgroup, .people-table thead { display: none; }
+  .people-table tr { padding: 8px 0; border-bottom: 1px solid var(--line-2); }
+  .people-table td { padding: 0; border: 0; } .people-table td:nth-child(2), .people-table td:nth-child(3) { display: inline; margin-left: 29px; color: var(--muted); font-size: 12.5px; }
+  .people-table td:nth-child(3) { margin-left: 6px; } .people-table td:nth-child(3)::before { content: "· "; }
+  .people-table td.pm { margin: 3px 0 0 29px; font-size: 13px; }
+  .people-table .tbd { display: none; }
   .summary { padding: 15px 16px; } .summary p { font-size: 15px; }
   .discussion > li { flex-wrap: wrap; row-gap: 2px; } .discussion .dt { width: auto; flex: 1 0 100%; }
   .discussion > li .dd { flex: 1; }

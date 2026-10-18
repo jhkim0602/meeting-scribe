@@ -891,4 +891,30 @@ kbd { display: inline-grid; place-items: center; min-width: 20px; height: 20px; 
 .people-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .people-hints { padding: 4px 0 0; }
 .people-tip { margin: 4px 2px 0; font-size: 12px; line-height: 1.5; color: var(--text-3); }
+.person { cursor: pointer; }
+.people-toggle { gap: 2px; }
+.people-toggle svg { transition: transform 0.15s; }
+.people-toggle.on { color: var(--text-2); }
+.people-toggle.on svg { transform: rotate(180deg); }
+/* 참석자 세부 정보 (소속·직무·메모) */
+.people-details { margin-top: 10px; max-width: 920px; border-top: 1px solid var(--border); }
+.pd-row { display: grid; grid-template-columns: 128px 170px 150px minmax(0, 1fr) 24px; align-items: center; min-height: 34px; border-bottom: 1px solid var(--border); font-size: 13px; }
+.pd-row > *:last-child:not(.pd-close) { grid-column: 4 / span 2; }
+.pd-cols { min-height: 28px; color: var(--text-3); font-size: 12px; }
+.pd-cols span { padding: 0 8px; }
+.pd-cols span:first-child { padding-left: 0; }
+.pd-close { width: 22px; height: 22px; }
+.pd-name { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.pd-name .sp-dot { flex: none; width: 7px; height: 7px; border-radius: 2px; background: currentColor; }
+.pd-input { min-width: 0; height: 28px; padding: 0 8px; border: 0; border-radius: 4px; outline: none; background: none; font: inherit; color: var(--text); }
+.pd-input::placeholder { color: var(--text-3); opacity: 0; transition: opacity 0.12s; }
+.pd-row:hover .pd-input::placeholder, .pd-input:focus::placeholder { opacity: 1; }
+.pd-input:hover { background: var(--bg-hover); }
+.pd-input:focus { background: var(--bg); box-shadow: inset 0 0 0 1px var(--accent), 0 0 0 3px var(--accent-soft); }
+.pd-tip { margin: 6px 0 2px; font-size: 11.5px; color: var(--text-3); }
+@media (max-width: 760px) {
+  .pd-row { grid-template-columns: 96px 1fr 1fr; padding: 4px 0; }
+  .pd-cols { display: none; }
+  .pd-row .pd-note { grid-column: 2 / span 2; }
+}
 

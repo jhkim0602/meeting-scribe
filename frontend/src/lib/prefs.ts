@@ -33,6 +33,9 @@ export function usePref(key: string, fallback: boolean): [boolean, (v: boolean) 
   return [v, (nv: boolean) => setPref(key, nv)]
 }
 
+/** 참석자 세부 정보(소속·직무·메모) 칸을 펼쳐 둘지 */
+export const PEOPLE_DETAILS = 'peopleDetails'
+
 /** 새 댓글을 노트에도 바로 추가할지 */
 export const COMMENT_TO_NOTES = 'commentToNotes'
 

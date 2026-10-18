@@ -133,17 +133,34 @@ def get_embedder() -> Optional[Embedder]:
 
 # ---------------- 참여자 ----------------
 
-def normalize_participants(items: list[dict], old: list[dict]) -> list[dict]:
-    """이름이 같은 참여자는 하나로, 기존 id는 유지, 새 참여자에는 id를 붙인다."""
-    by_name = {p["name"]: p["id"] for p in old}
+PARTICIPANT_FIELDS = {"org": 60, "role": 60, "note": 500}  # 소속, 직무, 메모
+
+
+def normalize_participants(items: list[dict], old: list[dict], known: Optional[dict[str, dict]] = None) -> list[dict]:
+    """이름이 같은 참여자는 하나로, 기존 id는 유지, 새 참여자에는 id를 붙인다.
+    소속·직무·메모는 보낸 값이 있으면 그 값, 보내지 않았으면 기존 값을 둔다.
+    처음 넣는 사람은 지난 회의에서 적어 둔 소속·직무를 이어받는다 (known: {이름: {org, role}})."""
+    by_id = {p["id"]: p for p in old}
+    by_name = {p["name"]: p for p in old}
     out, seen = [], set()
     for it in items:
         name = (it.get("name") or "").strip()[:40]
         if not name or name in seen:
             continue
         seen.add(name)
-        pid = it.get("id") or by_name.get(name) or f"p{secrets.token_hex(3)}"
-        out.append({"id": pid, "name": name})
+        prev = (by_id.get(it["id"]) if it.get("id") else None) or by_name.get(name) or {}
+        pid = it.get("id") or prev.get("id") or f"p{secrets.token_hex(3)}"
+        person = {"id": pid, "name": name}
+        for key, cap in PARTICIPANT_FIELDS.items():
+            if key in it:
+                value = str(it.get(key) or "").strip()[:cap]
+            elif prev:
+                value = prev.get(key) or ""
+            else:
+                value = ((known or {}).get(name) or {}).get(key, "") if key != "note" else ""
+            if value:
+                person[key] = value
+        out.append(person)
     return out
 
 

@@ -46,6 +46,9 @@ export interface Meeting extends MeetingSummary {
 export interface Participant {
   id: string
   name: string
+  org?: string // 소속
+  role?: string // 직무
+  note?: string // 메모
 }
 
 export interface SpeakerChange {
@@ -213,9 +216,9 @@ export const api = {
     req<{ updated: number; exported_at: Record<string, number | null> }>('POST', `/api/meetings/${id}/annotations/exported`, { ids, exported }),
   deleteAnnotation: (annId: string) => req<{ ok: boolean }>('DELETE', `/api/annotations/${annId}`),
   storage: () => req<StorageInfo>('GET', '/api/storage'),
-  setParticipants: (id: string, participants: { id?: string; name: string }[]) =>
+  setParticipants: (id: string, participants: (Partial<Participant> & { name: string })[]) =>
     req<{ participants: Participant[] }>('PUT', `/api/meetings/${id}/participants`, { participants }),
-  suggestParticipants: () => req<{ name: string; voice: boolean }[]>('GET', '/api/participants/suggest'),
+  suggestParticipants: () => req<{ name: string; voice: boolean; org?: string; role?: string }[]>('GET', '/api/participants/suggest'),
   assignSpeaker: (id: string, segmentIds: string[], participantId: string | null, scope: 'voice' | 'one') =>
     req<{ changes: SpeakerChange[]; previous_map: Record<string, string> }>('POST', `/api/meetings/${id}/live/speaker`, {
       segment_ids: segmentIds,

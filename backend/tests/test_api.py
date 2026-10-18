@@ -694,3 +694,33 @@ def test_transcript_html_is_a_call_log_with_marks_in_place(client):
     assert "%EC%A0%84%EC%82%AC%20%EA%B8%B0%EB%A1%9D.html" in d.headers["content-disposition"]  # "전사 기록.html"
     assert 'class="apptools"' not in d.text and 'src="녹음.wav"' in d.text
     client.post(f"/api/meetings/{mid}/cancel")
+
+
+def test_participant_details_are_kept_carried_over_and_shown(client):
+    """참석자 소속·직무·메모: 이름만 다시 보내도 지워지지 않고, 빈 값을 보내면 지워진다.
+    다음 회의에 같은 이름을 넣으면 소속·직무를 이어받고(메모는 아님), 문서와 Markdown에도 나온다."""
+    mid = client.post("/api/meetings", json={"title": "세부 정보"}).json()["id"]
+    url = f"/api/meetings/{mid}/participants"
+    parts = client.put(url, json={"participants": [
+        {"name": "한지우", "org": " 전략기획팀 ", "role": "팀장", "note": "예산 <승인> 권한"}, {"name": "오세린"}]}).json()["participants"]
+    assert parts[0] == {"id": parts[0]["id"], "name": "한지우", "org": "전략기획팀", "role": "팀장", "note": "예산 <승인> 권한"}
+    assert parts[1] == {"id": parts[1]["id"], "name": "오세린"}
+    # 이름만 다시 보내도 (예: 참여자 추가) 세부 정보는 그대로, 빈 값은 지운다
+    parts = client.put(url, json={"participants": [{"name": "한지우"}, {"id": parts[1]["id"], "name": "오세린", "role": "디자이너"}, {"name": "류도윤"}]}).json()["participants"]
+    assert parts[0]["org"] == "전략기획팀" and parts[1]["role"] == "디자이너" and "org" not in parts[2]
+    parts = client.put(url, json={"participants": [dict(parts[0], note=""), parts[1], parts[2]]}).json()["participants"]
+    assert "note" not in parts[0] and parts[0]["role"] == "팀장"
+
+    md = client.get(f"/api/meetings/{mid}/export.md").text
+    assert "  - 한지우 (전략기획팀 · 팀장)" in md and "  - 오세린 (디자이너)" in md
+    client.put(url, json={"participants": [dict(parts[0], note="예산 <승인> 권한"), parts[1], parts[2]]})
+    for doc in ("transcript", "minutes"):
+        h = client.get(f"/api/meetings/{mid}/{doc}.html").text
+        assert 'class="people-table"' in h and "<td>전략기획팀</td><td>팀장</td>" in h and "예산 &lt;승인&gt; 권한" in h, doc
+
+    # 다음 회의: 같은 이름이면 소속·직무를 이어받는다 (메모는 회의마다)
+    m2 = client.post("/api/meetings", json={}).json()["id"]
+    p2 = client.put(f"/api/meetings/{m2}/participants", json={"participants": [{"name": "한지우"}]}).json()["participants"][0]
+    assert p2["org"] == "전략기획팀" and p2["role"] == "팀장" and "note" not in p2
+    sug = {s["name"]: s for s in client.get("/api/participants/suggest").json()}
+    assert sug["한지우"]["org"] == "전략기획팀" and sug["오세린"]["role"] == "디자이너"

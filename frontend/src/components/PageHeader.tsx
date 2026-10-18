@@ -5,7 +5,7 @@ import { deleteLater } from '../lib/annActions'
 import { bridges, useStore } from '../lib/store'
 import { fmtDate, fmtDuration } from '../lib/time'
 import { Floating } from './Floating'
-import { ParticipantsProp } from './Participants'
+import { ParticipantDetails, ParticipantsProp } from './Participants'
 
 const STATUS: Record<string, { label: string; tone: string }> = {
   empty: { label: '녹음 전', tone: 'gray' },
@@ -134,6 +134,7 @@ export function PageHeader() {
           {final && !(meeting.participants || []).length && <span className="prop"><Users size={14} />화자 {final.speakers.length}명</span>}
           {meeting.original_name && <span className="prop"><FileAudio size={14} />{meeting.original_name}</span>}
         </div>
+        <ParticipantDetails />
       </div>
       {menu && (
         <Floating rect={menu} onClose={() => setMenu(null)} className="menu">

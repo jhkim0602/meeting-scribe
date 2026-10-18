@@ -1,5 +1,6 @@
 // 브라우저 E2E: 회의 문서 (전사 기록 · 회의록)
-//  - ⋯ → 전사 기록 보기: 새 탭, 화자별 발언 위에 회의 중 메모(그 순간)·댓글(번호와 옆 칸)
+//  - 참여자 "세부 정보": 사람마다 소속·직무·메모를 적으면 저장되고, 두 문서에 함께 나옴
+//  - ⋯ → 전사 기록 보기: 새 탭, 화자별 발언 위에 회의 중 메모(그 순간)·댓글(번호, 그 문장 바로 아래)
 //  - 위쪽 줄로 회의록 전환: 정보·요약·결정·실행 항목·논의·노트·메모, 방금 쓴 노트까지 담김
 //  - 시각을 누르면 그 부분 녹음이 재생되고, 전사 기록에서는 지금 말하는 문장이 표시됨
 //  - 위쪽 줄 "파일로 받기": "<날짜> <제목> 전사 기록.html" / "… 회의록.html"
@@ -61,12 +62,28 @@ const SUMMARY = `## 한 줄 요약
   const u = units[1]
   await send('POST', `/api/meetings/${m.id}/annotations`, { kind: 'comment', view: 'live', body: '이 숫자 재무팀과 맞추기', start: { unit: u.id, offset: 0 }, end: { unit: u.id, offset: u.text.length } })
   await send('POST', `/api/meetings/${m.id}/annotations`, { kind: 'memo', view: 'live', t: units[2].t1 + 0.01, after: units[2].id, body: '대표님 의견 따로 정리' })
+  // 회의 중에 화자를 고른다 (녹음을 마치면 원본 화자 이름으로 이어진다)
+  await send('POST', `/api/meetings/${m.id}/live/speaker`, { segment_ids: [units[0].id], participant_id: (await get(`/api/meetings/${m.id}`)).participants[0].id })
   await page.click('.btn-stop')
   await page.click('.modal.confirm button:has-text("녹음 종료")')
   await page.waitForSelector('.dock-player', { timeout: 30000 })
   await send('PUT', `/api/meetings/${m.id}/summary`, { markdown: SUMMARY })
 
-  await send('POST', `/api/meetings/${m.id}/live/speaker`, { segment_ids: [units[0].id], participant_id: (await get(`/api/meetings/${m.id}`)).participants[0].id })
+  // 0) 참석자 세부 정보: 이름을 누르면 펼쳐지고 그 사람 칸에 커서
+  await page.click('.prop-people .person:has-text("김민지")')
+  await page.waitForSelector('.people-details')
+  check(await page.evaluate(() => document.activeElement?.closest('.pd-row')?.textContent?.includes('김민지')), '참여자 이름을 누르면 세부 정보가 펼쳐지고 그 사람 칸으로')
+  await page.keyboard.type('모바일사업팀')
+  await page.keyboard.press('Tab')
+  await page.keyboard.type('PM · 회의 진행')
+  await page.keyboard.press('Tab')
+  await page.keyboard.type('최종 결정권자')
+  await page.keyboard.press('Enter')
+  await sleep(500)
+  const p0 = (await get(`/api/meetings/${m.id}`)).participants[0]
+  check(p0.org === '모바일사업팀' && p0.role === 'PM · 회의 진행' && p0.note === '최종 결정권자', `소속·직무·메모 저장 (${p0.org} / ${p0.role} / ${p0.note})`)
+  await page.screenshot({ path: `${OUT}/d0-people.png` })
+
 
   // 1) 전사 기록: 화자별 발언 위에 메모·댓글
   await page.click('.notes-editor .bn-editor')
@@ -79,6 +96,8 @@ const SUMMARY = `## 한 줄 요약
   const names = await doc.locator('.turn .who .name').allInnerTexts()
   const tr = await doc.locator('.transcript').innerText()
   check(names[0] === '김민지' && units.every((x) => tr.includes(x.text.slice(0, 8))), `화자별 발언이 이어짐 (${[...new Set(names)].join(', ')})`)
+  check((await doc.locator('.turn .who .role').first().innerText()) === '모바일사업팀 · PM · 회의 진행' && (await doc.locator('.people-table').innerText()).includes('최종 결정권자'),
+    '문서에도 참석자 소속·직무·메모 (발언 머리와 참석자 표)')
   // 녹음을 마치면 원본(다시 받아 적은 기록)으로 보이므로 문장 번호 대신 시각으로 자리를 본다
   const memoT = units[2].t1 + 0.01
   const around = await doc.evaluate(() => {
@@ -91,8 +110,12 @@ const SUMMARY = `## 한 줄 요약
   })
   check(around.text.includes('대표님 의견 따로 정리') && around.prev !== null && around.prev <= memoT && (around.next === null || around.next >= memoT - 0.5),
     `메모는 남긴 순간에 (앞 문장 ${around.prev}초 · 메모 ${memoT.toFixed(1)}초 · 다음 문장 ${around.next}초)`)
-  const side = await doc.locator('.side .cmt').first().innerText()
-  check(side.includes('이 숫자 재무팀과 맞추기') && (await doc.locator('mark.cm').count()) >= 1 && (await doc.locator('.transcript .cn').first().innerText()) === '1', '댓글은 글자에 번호, 옆 칸에 내용')
+  const under = await doc.evaluate(() => {
+    const mark = document.querySelector('.transcript mark.cm')
+    const p = mark?.closest('p')
+    return p?.nextElementSibling?.matches('.cmt') ? p.nextElementSibling.textContent : ''
+  })
+  check(under.includes('이 숫자 재무팀과 맞추기') && (await doc.locator('.transcript .cn').first().innerText()) === '1', '댓글은 글자에 번호, 그 문장 바로 아래에 내용')
   check((await doc.locator('.index li').count()) === 2, '메모·댓글 모아 보기')
 
   // 2) 시각을 누르면 그 부분 녹음, 지금 말하는 문장 표시

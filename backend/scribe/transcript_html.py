@@ -1,7 +1,7 @@
 """전사 기록 HTML: 통화 기록처럼 화자별 발언이 시간순으로 이어지고, 회의 중 남긴 메모·댓글·수정·강조가 제자리에 붙는다.
 
 - 메모는 그 순간의 흐름 안에 쪽지로
-- 댓글은 글자에 번호를 달고 옆 여백에 (좁은 화면에서는 발언 바로 아래)
+- 댓글은 글자에 번호를 달고 그 문장 바로 아래에 (메모·댓글을 거의 문장마다 달아도 어느 말에 단 것인지 헷갈리지 않게)
 - 수정은 변경 내용 추적처럼 (반영 전: 원문 줄긋기 + 고친 말, 반영 후: 고친 말)
 - 쉬는 시간·구분선은 가로줄
 원본(화자 구분)이 있으면 원본, 없으면 실시간 기록과 회의 중 고른 화자를 쓴다.
@@ -16,7 +16,7 @@ from typing import Any, Optional
 
 from .db import Store
 from .export import _local_ranges, divider_text, record_source
-from .minutes import _chip, _esc, _facts, _initials, page
+from .minutes import _chip, _esc, _facts, _initials, page, people_of
 from .textutil import fmt_time
 from .views import Views, speaker_name
 
@@ -33,12 +33,13 @@ def collect(store: Store, views: Views, meeting_id: str) -> Optional[dict]:
     src = record_source(views, m)
     clock = m.get("clock") or []
     start = float(m.get("held_at") or (clock[0][1] if clock else m["created_at"]))
-    participants = [p["name"] for p in m.get("participants") or []]
-    if not participants and src["final"] is not None:
-        participants = [n for n in (speaker_name(src["speakers"], s) for s in src["final"]["speakers"]) if n]
+    people = people_of(m)
+    if not people and src["final"] is not None:
+        people = [{"name": n} for n in (speaker_name(src["speakers"], s) for s in src["final"]["speakers"]) if n]
+    participants = [p["name"] for p in people]
     return {
         "id": m["id"], "title": m.get("title") or "제목 없는 회의", "start": start, "duration": float(m.get("duration") or 0),
-        "place": m.get("place") or "", "participants": participants, "clock": clock,
+        "place": m.get("place") or "", "participants": participants, "people": people, "clock": clock,
         "units": src["units"], "annotations": src["annotations"], "speakers": src["speakers"],
         "is_final": src["final"] is not None,
     }
@@ -114,8 +115,7 @@ class _Marks:
 
 def _memo_html(m: dict) -> str:
     t = float(m["anchor"].get("t", 0) or 0)
-    return (f'<div class="memo" id="a-{_esc(m["id"])}"><div class="memo-h"><span class="memo-tag">메모</span>{_chip(t)}</div>'
-            f'<p>{_esc(m["body"])}</p></div>')
+    return f'<div class="memo" id="a-{_esc(m["id"])}"><span class="memo-h"><span class="memo-tag">메모</span>{_chip(t)}</span><p>{_esc(m["body"])}</p></div>'
 
 
 def _divider_html(d: dict) -> str:
@@ -169,20 +169,25 @@ def render(data: dict, audio_src: Optional[str] = None, generated: Optional[floa
     for lst in after.values():
         lst.sort(key=lambda a: a["anchor"].get("t", 0))
     colors = _person_index(data)
+    titles = {p["name"]: p for p in data.get("people") or []}
     marks = _Marks()
 
     # 발언 묶기: 같은 사람이 이어서 말하면 한 발언. 구분선이 있으면 끊는다.
     blocks: list[str] = []
     turn: Optional[dict[str, Any]] = None
 
+    def flush() -> None:
+        """이어진 문장을 한 문단으로 (메모나 댓글이 끼면 거기서 나눈다)"""
+        if turn is not None and turn["para"]:
+            turn["flow"].append("<p>" + " ".join(turn["para"]) + "</p>")
+            turn["para"] = []
+
     def close() -> None:
         nonlocal turn
         if turn is None:
             return
-        flow = "".join(turn["flow"]) + ("<p>" + " ".join(turn["para"]) + "</p>" if turn["para"] else "")
-        side = "".join(_comment_html(c) for c in turn["comments"])
-        blocks.append(f'<article class="turn{" has-side" if side else ""}">{turn["head"]}<div class="lines">{flow}</div>'
-                      f'{f"<aside class=side>{side}</aside>" if side else ""}</article>')
+        flush()
+        blocks.append(f'<article class="turn">{turn["head"]}<div class="lines">{"".join(turn["flow"])}</div></article>')
         turn = None
 
     def head(u: dict, key: Optional[str]) -> str:
@@ -196,8 +201,10 @@ def render(data: dict, audio_src: Optional[str] = None, generated: Optional[floa
         anon = re.fullmatch(r"화자\s*(\S{1,3})", name)  # 이름을 아직 못 붙인 화자는 회색에 번호만
         av_cls = "anon" if anon else f"p{colors.get(full, 0) % 6}"
         initials = anon.group(1) if anon else _initials(name)
+        info = " · ".join(x for x in (titles.get(name, {}).get("org"), titles.get(name, {}).get("role")) if x)
         return (f'<div class="who"><span class="av {av_cls}{" guess" if guess else ""}">{_esc(initials)}</span>'
-                f'<span class="name">{_esc(name)}</span>{"<span class=est>추정</span>" if guess else ""}{_chip(u["t0"])}{wall_html}</div>')
+                f'<span class="name">{_esc(name)}</span>{f"<span class=role>{_esc(info)}</span>" if info else ""}'
+                f'{"<span class=est>추정</span>" if guess else ""}{_chip(u["t0"])}{wall_html}</div>')
 
     for m in after.get(None, []):
         blocks.append(_divider_html(m) if m["kind"] == "divider" else f'<div class="free">{_memo_html(m)}</div>')
@@ -209,23 +216,24 @@ def render(data: dict, audio_src: Optional[str] = None, generated: Optional[floa
             gap <= TURN_GAP_S if key is not None else (gap <= PLAIN_GAP_S and turn["n"] < PLAIN_MAX))
         if not same:
             close()
-            turn = {"key": key, "head": head(u, key), "flow": [], "para": [], "comments": [], "n": 0}
+            turn = {"key": key, "head": head(u, key), "flow": [], "para": [], "n": 0}
         assert turn is not None
         comments: list[dict] = []
         body = marks.unit(u["text"], per.get(u["id"], []), comments)
         turn["para"].append(f'<span class="s" id="u-{_esc(u["id"])}" data-t="{u["t0"]:.2f}">{body}</span>')
-        turn["comments"] += comments
         turn["n"] += 1
         prev_end = u["t1"]
+        # 댓글은 그 문장 바로 아래, 메모는 그다음 (남긴 순간)
+        if comments:
+            flush()
+            turn["flow"].append("".join(_comment_html(c) for c in comments))
         for m in after.get(u["id"], []):
             if m["kind"] == "divider":
                 close()
                 blocks.append(_divider_html(m))
             else:
-                turn = turn or {"key": key, "head": head(u, key), "flow": [], "para": [], "comments": [], "n": 0}
-                if turn["para"]:
-                    turn["flow"].append("<p>" + " ".join(turn["para"]) + "</p>")
-                    turn["para"] = []
+                turn = turn or {"key": key, "head": head(u, key), "flow": [], "para": [], "n": 0}
+                flush()
                 turn["flow"].append(_memo_html(m))
     close()
 
@@ -264,13 +272,12 @@ def render(data: dict, audio_src: Optional[str] = None, generated: Optional[floa
                 '<p class="hint">원본을 다시 만들면서 말이 바뀌어 원래 자리를 찾지 못했어요.</p>'
                 f"<ul>{lis}</ul></section>")
 
-    has_side = bool(marks.numbers)
     kind = "원본 · 화자 구분" if data["is_final"] else "실시간 기록"
     body = (f'<div class="rec-top">{"".join(top)}</div>'
-            f'<div class="transcript{"" if has_side else " no-side"}">{"".join(blocks)}</div>{tail}')
+            f'<div class="transcript">{"".join(blocks)}</div>{tail}')
     return page(
         data, brand=("전사 기록", "Transcript", "TR"), facts=_facts(data["start"], data["duration"], data["place"], [("기록", kind)]),
-        body=body, audio_src=audio_src, generated=generated, tools=tools, extra_css=CSS, extra_js=JS, wide=has_side,
+        body=body, audio_src=audio_src, generated=generated, tools=tools, extra_css=CSS, extra_js=JS,
     )
 
 
@@ -297,23 +304,22 @@ CSS = r"""
 .k-memo { color: #8a5a00; background: #fbf1dc; }
 
 .transcript { margin-top: 8px; }
-.turn { display: grid; grid-template-columns: minmax(0, 1fr) 250px; column-gap: 36px; padding: 16px 0 6px; }
-.transcript.no-side .turn { grid-template-columns: minmax(0, 1fr); }
-.who { grid-column: 1; display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.turn { padding: 16px 0 6px; }
+.who { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
 .who .av { width: 24px; height: 24px; font-size: 10px; }
 .who .av.guess { opacity: 0.55; }
 .av.anon { background: #9aa1ad; }
 .who .name { font-weight: 650; color: var(--ink); font-size: 14px; }
+.who .role { font-size: 12px; color: var(--muted); }
 .who .est { font-size: 11px; color: var(--muted); padding: 0 5px; border: 1px dashed #c9ced6; border-radius: 3px; line-height: 16px; }
 .who .t { margin-left: 2px; }
 .who .wall { font-size: 11.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
 .who.plain { margin-bottom: 2px; }
-.lines { grid-column: 1; padding-left: 32px; }
+.lines { padding-left: 32px; }
 .who.plain + .lines { padding-left: 0; }
 .lines p { margin: 0 0 8px; font-size: 15px; line-height: 1.8; color: var(--text); }
 .s { border-radius: 3px; transition: background .2s; }
 .s.now { background: var(--accent-soft); box-shadow: 0 0 0 2px var(--accent-soft); }
-.side { grid-column: 2; grid-row: 1 / span 2; padding-top: 30px; }
 
 mark { color: inherit; padding: 1px 0; border-radius: 2px; }
 .hl-yellow { background: #fbf0c9; } .hl-green { background: #dcefe1; } .hl-blue { background: #dcebf7; }
@@ -324,18 +330,18 @@ del { color: #a34040; text-decoration-color: rgba(163, 64, 64, 0.6); background:
 ins { margin-left: 2px; color: #17663a; text-decoration: none; background: #e3f4e9; border-radius: 2px; padding: 0 1px; }
 .ed { border-bottom: 1px dotted #4b9b6c; }
 
-.memo { margin: 4px 0 12px; padding: 9px 14px 10px; background: #fffaeb; border: 1px solid #f2e3b6; border-radius: 6px; }
-.memo-h { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; }
+.memo { display: flex; align-items: baseline; gap: 10px; margin: 2px 0 10px; padding: 7px 12px 8px; background: #fffaeb; border: 1px solid #f2e3b6; border-radius: 6px; }
+.memo-h { flex: none; display: inline-flex; align-items: center; gap: 6px; transform: translateY(-1px); }
 .memo-tag { display: inline-block; padding: 0 6px; border-radius: 3px; font-size: 11px; font-weight: 700; line-height: 18px; color: #8a5a00; background: #f8e7bb; }
 .memo .t { margin: 0; background: transparent; border-color: #ecdcab; color: #8a6a1f; }
-.memo p { margin: 0 !important; font-size: 14.5px !important; font-weight: 500; color: var(--ink) !important; }
+.memo p { margin: 0 !important; font-size: 14px !important; line-height: 1.6 !important; color: var(--ink) !important; }
 .free { padding: 14px 0 0 32px; }
 
-.cmt { display: flex; gap: 9px; margin: 0 0 12px; padding: 0 0 12px; border-bottom: 1px solid var(--line-2); font-size: 13.5px; line-height: 1.6; }
-.cmt:last-child { border-bottom: 0; }
+.cmt { display: flex; gap: 9px; margin: -2px 0 6px; padding: 6px 12px 7px; background: #f6f8fd; border-left: 2px solid var(--accent); border-radius: 0 6px 6px 0; font-size: 14px; line-height: 1.6; }
+.cmt + p, .cmt + .memo { margin-top: 10px; }
 .cmt .n { flex: none; display: grid; place-items: center; width: 18px; height: 18px; margin-top: 2px; border-radius: 50%; background: var(--accent); color: #fff; font: 700 10px/1 var(--mono); }
 .cmt .cb { min-width: 0; }
-.cmt .body { margin: 0; color: var(--ink); font-weight: 500; }
+.cmt .body { margin: 0; color: var(--ink); }
 .cmt .reply { margin: 4px 0 0; padding-left: 10px; border-left: 2px solid var(--line); color: #4b5260; }
 .cmt .tag { margin-left: 6px; }
 .cmt:target { animation: flash 1.6s ease-out; }
@@ -353,24 +359,24 @@ ins { margin-left: 2px; color: #17663a; text-decoration: none; background: #e3f4
 
 @media screen { .turn { content-visibility: auto; contain-intrinsic-size: auto 120px; } }
 @media (max-width: 860px) {
-  .turn, .transcript.no-side .turn { grid-template-columns: minmax(0, 1fr); }
-  .side { grid-column: 1; grid-row: auto; padding: 4px 0 0 32px; }
-  .cmt { padding: 8px 10px; background: var(--soft); border: 0; border-radius: 6px; margin-bottom: 6px; }
   .legend { margin-left: 0; width: 100%; }
   .index ol { columns: 1; }
 }
 @media (max-width: 720px) {
-  .lines, .side, .free { padding-left: 0; }
+  .lines, .free { padding-left: 0; }
+  .cmt { font-size: 13.5px; }
+  .memo { flex-direction: column; gap: 3px; }
   .lines p { font-size: 14.5px; }
 }
 @media print {
-  .turn, .transcript.no-side .turn { grid-template-columns: minmax(0, 1fr); padding-top: 10px; break-inside: avoid-page; }
-  .side { grid-column: 1; grid-row: auto; padding: 2px 0 0 32px; }
-  .cmt { padding: 6px 10px; background: var(--soft); border: 0; border-radius: 6px; margin-bottom: 4px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .turn { padding-top: 10px; }
+  .who { break-after: avoid; }
+  .lines p, .cmt, .memo { break-inside: avoid; }
   .lines p { font-size: 10pt; }
-  .cmt { font-size: 8.5pt; }
+  .cmt { font-size: 9pt; }
+  .memo p { font-size: 9.5pt !important; }
   .index { display: none; }
-  mark, del, ins, .memo, .memo-tag, .cn, .cmt .n { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  mark, del, ins, .memo, .memo-tag, .cn, .cmt, .cmt .n { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
 """
 
