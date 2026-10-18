@@ -35,6 +35,16 @@ export default function App() {
     return () => window.removeEventListener('hashchange', onHash)
   }, [])
 
+  // 노트 편집기는 따로 불러오므로, 첫 화면이 뜬 뒤 쉬는 틈에 미리 받아 둔다 (회의를 열 때 기다리지 않게)
+  useEffect(() => {
+    const load = () => void import('./components/NotesPane')
+    const ric = (window as { requestIdleCallback?: (cb: () => void) => number }).requestIdleCallback
+    const id = ric ? ric(load) : window.setTimeout(load, 1500)
+    return () => {
+      if (!ric) clearTimeout(id)
+    }
+  }, [])
+
   // 앱으로 돌아오면 실시간 모델을 미리 올려 둔다 (오래 쓰지 않아 내려 두었을 때)
   useEffect(() => {
     let last = 0
@@ -54,15 +64,21 @@ export default function App() {
   // 작업 진행률/엔진 상태 갱신
   useEffect(() => {
     let lastStatus: string | null = null
+    let lastRev: { id: string; rev: number } | null = null
     const tick = async () => {
       const st = useStore.getState()
       const { job, meeting, meetings, health } = st
       if (meeting) {
         const running = job && (job.status === 'queued' || job.status === 'running')
         if (running || meeting.status === 'processing') {
-          const { job: j } = await api.job(meeting.id).catch(() => ({ job: null }))
+          const { job: j, record_rev: rev } = await api.job(meeting.id).catch(() => ({ job: null, record_rev: undefined }))
           if (j && useStore.getState().selectedId === meeting.id) {
             useStore.setState({ job: j })
+            // 올린 파일: 받아 적은 구간이 기록에 들어오면 바로 보여 준다
+            if (meeting.source === 'upload' && rev !== undefined) {
+              if (lastRev?.id === meeting.id && lastRev.rev !== rev) await st.refreshLive()
+              lastRev = { id: meeting.id, rev }
+            }
             if ((j.status === 'done' || j.status === 'error' || j.status === 'cancelled') && lastStatus !== j.status) {
               await st.refreshMeeting()
               await st.refreshLive()
@@ -76,7 +92,8 @@ export default function App() {
         }
       }
       if (meetings.some((m) => m.status === 'processing')) st.loadMeetings()
-      if (!health || health.live.state === 'loading' || health.live.state === 'idle') st.loadHealth()
+      // 모델을 올리는 중일 때만 확인한다 (내려 둔 채 쉬는 동안은 묻지 않는다: 앱을 다시 보거나 녹음하면 올린다)
+      if (!health || health.live.state === 'loading') st.loadHealth()
     }
     const id = setInterval(tick, 1500)
     return () => clearInterval(id)

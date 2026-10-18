@@ -21,8 +21,10 @@ export async function uploadFiles(files: FileList | File[]) {
 }
 
 function Item({ m, active }: { m: MeetingSummary; active: boolean }) {
-  const rec = useStore((s) => s.rec)
-  const recording = rec.status !== 'idle' && rec.meetingId === m.id
+  // 이 회의를 녹음 중일 때의 상태만 본다 (소리 크기·시간이 바뀔 때마다 목록을 다시 그리지 않게)
+  const recStatus = useStore((s) => (s.rec.meetingId === m.id ? s.rec.status : 'idle'))
+  const recording = recStatus !== 'idle'
+  const rec = { status: recStatus }
   return (
     <a className={`side-item ${active ? 'active' : ''}`} href={`#/m/${m.id}`}>
       {m.source === 'upload' ? <FileAudio size={15} className="side-icon" /> : <Mic size={15} className="side-icon" />}

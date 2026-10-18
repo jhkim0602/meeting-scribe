@@ -1,4 +1,4 @@
-import { AlertCircle, Check, Loader2, RefreshCw, X } from 'lucide-react'
+import { AlertCircle, Check, Loader2, PauseCircle, RefreshCw, X } from 'lucide-react'
 import { api, type Job, type Meeting } from '../lib/api'
 import { useStore } from '../lib/store'
 import { fmtDuration } from '../lib/time'
@@ -47,25 +47,29 @@ export function ProcessingCard({ meeting, job, compact }: { meeting: Meeting; jo
 
   if (running && job) {
     const pct = Math.round(job.progress * 100)
+    // 녹음 중이거나 전원을 기다리는 동안은 멈춰 있다 (회의를 방해하지 않게)
+    const waiting = job.waiting || null
+    const icon = (size: number) => (waiting ? <PauseCircle size={size} className="muted" /> : <Loader2 size={size} className="spin" />)
     if (compact) {
+      const what = upload ? '받아 적는 중' : '원본 스크립트'
       return (
-        <div className="proc-banner">
-          <Loader2 size={14} className="spin" />
-          <span>{upload ? '다시 받아 적는 중' : '원본 스크립트 만드는 중'} · {pct}%</span>
-          <span className="muted">기록은 그대로예요</span>
+        <div className={`proc-banner${waiting ? ' waiting' : ''}`}>
+          {icon(14)}
+          <span>{waiting ? `${what} · ${waiting}` : `${upload ? '받아 적는 중' : '원본 스크립트 만드는 중'} · ${pct}%`}</span>
+          {!waiting && <span className="muted">{upload ? '다 받아 적은 부분부터 보여요' : '기록은 그대로예요'}</span>}
           <div className="bar"><div style={{ width: `${pct}%` }} /></div>
           <button className="btn btn-sm btn-ghost" onClick={cancel}>취소</button>
         </div>
       )
     }
     return (
-      <div className="proc-card">
+      <div className={`proc-card${waiting ? ' waiting' : ''}`}>
         <div className="proc-head">
-          <Loader2 size={18} className="spin" />
+          {icon(18)}
           <div>
             <h3>{upload ? '파일을 받아 적고 있어요' : '원본 스크립트를 만들고 있어요'}</h3>
             <p className="muted">
-              {job.status === 'queued' ? '앞선 작업이 끝나면 시작해요' : job.message || '받아 적고 누가 말했는지 나눠요'}
+              {waiting || (job.status === 'queued' ? '앞선 작업이 끝나면 시작해요' : job.message || '받아 적고 누가 말했는지 나눠요')}
             </p>
           </div>
           <span className="spacer" />
@@ -74,20 +78,20 @@ export function ProcessingCard({ meeting, job, compact }: { meeting: Meeting; jo
         <div className="bar big"><div style={{ width: `${pct}%` }} /></div>
         <div className="proc-meta">
           <span>{pct}%</span>
-          {job.eta != null && job.eta > 5 && <span>약 {fmtDuration(job.eta)} 남음</span>}
+          {!waiting && job.eta != null && job.eta > 5 && <span>약 {fmtDuration(job.eta)} 남음</span>}
         </div>
         <ol className="proc-steps">
           {STEPS.filter((s) => s.key !== 'convert' || meeting.source === 'upload').map((s) => {
             const st = stepState(job, s.key)
             return (
               <li key={s.key} className={st}>
-                <span className="step-icon">{st === 'done' ? <Check size={12} /> : st === 'active' ? <Loader2 size={12} className="spin" /> : null}</span>
+                <span className="step-icon">{st === 'done' ? <Check size={12} /> : st === 'active' ? (waiting ? <PauseCircle size={12} /> : <Loader2 size={12} className="spin" />) : null}</span>
                 {s.label}
               </li>
             )
           })}
         </ol>
-        <p className="proc-tip">{upload ? '끝나면 여기에 기록이 나와요. 틀린 글자는 바로 고치고, 화자는 칩이나 숫자키로 고르면 돼요.' : '참고용 원본 스크립트예요. 회의 기록과 메모·댓글은 그대로 두고 따로 받을 수 있어요.'}</p>
+        <p className="proc-tip">{upload ? '10분씩 받아 적는 대로 여기에 기록이 나와요. 틀린 글자는 바로 고치고, 화자는 다 받아 적은 뒤 칩이나 숫자키로 고르면 돼요.' : '참고용 원본 스크립트예요. 회의 기록과 메모·댓글은 그대로 두고 따로 받을 수 있어요.'}</p>
       </div>
     )
   }

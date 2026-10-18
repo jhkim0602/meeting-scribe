@@ -16,7 +16,7 @@
 // - 탭 닫기: 녹음 중이면 브라우저가 한 번 더 묻는다.
 // - 잠자기 방지: 서버가 맥의 caffeinate로 막고, 그럴 수 없으면 화면 꺼짐 방지(Wake Lock)를 쓴다.
 // - 저장 공간: 1시간 분량보다 적으면 알리고, 바닥나면 서버가 여기까지 저장하고 멈춘다.
-import { api, type Job, type Unit } from '../lib/api'
+import { api, type Health, type Job, type Unit } from '../lib/api'
 import { isPersistent, REC_IDLE, useStore, type RecAlert, type Signal } from '../lib/store'
 
 const SR = 16000
@@ -207,6 +207,7 @@ interface Ready {
   divider: unknown
   cancelled_job: boolean
   disk_free_s?: number
+  engine?: Health['live']
 }
 
 /** WebSocket을 열고 'ready'를 기다린다. 이후 메시지와 끊김 처리를 연결한다. */
@@ -297,6 +298,9 @@ function openSocket(s: Session, query: string): Promise<Ready> {
 function afterReady(s: Session, r: Ready) {
   s.offset = r.offset
   s.sent = 0
+  // 실시간 모델 상태(내려 두었으면 지금 올리는 중)를 바로 반영한다. 올리는 동안은 App이 이어서 확인한다.
+  const health = store().health
+  if (r.engine && health) useStore.setState({ health: { ...health, live: r.engine } })
   if (r.divider) refreshLiveSoon(s.meetingId)
   if (r.cancelled_job) store().toast('원본 스크립트 만들기를 멈추고 이어서 녹음해요. 녹음을 마치면 다시 만들어요.')
   if (r.disk_free_s !== undefined) {

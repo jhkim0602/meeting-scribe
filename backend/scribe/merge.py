@@ -186,6 +186,43 @@ def _merge_adjacent(utts: list[dict], boundaries: list[float] | None = None) -> 
     return out
 
 
+SENTENCE_MAX_S = 20.0
+SENTENCE_GAP_S = 1.0
+
+
+def sentence_rows(segments: list[dict]) -> list[dict]:
+    """받아 적은 구간을 회의 기록의 문장으로 나눈다 (화자 구분 전). 문장 끝·긴 쉼에서 자르고 20초를 넘기지 않는다.
+    회의 중 받아 적은 기록처럼 문장마다 화자를 따로 붙일 수 있게 짧게 나눈다. → [{t0, t1, text}]"""
+    out: list[dict] = []
+    for seg in segments:
+        text = seg.get("text") or ""
+        if not text.strip():
+            continue
+        words = locate_words(text, seg.get("words") or [])
+        s0, s1 = float(seg.get("start", 0.0)), float(seg.get("end", 0.0))
+        cuts = [0]
+        if words:
+            piece_t = words[0][2]
+            for i in range(1, len(words)):
+                prev, cur = words[i - 1], words[i]
+                between = text[int(prev[0] + prev[1]) : int(cur[0])]
+                if any(ch in SENTENCE_END for ch in between) or cur[2] - prev[3] > SENTENCE_GAP_S or (cur[3] - piece_t > SENTENCE_MAX_S and between.isspace()):
+                    cuts.append(int(cur[0]))
+                    piece_t = cur[2]
+        cuts.append(len(text))
+        wi = 0
+        for k in range(len(cuts) - 1):
+            group = []
+            while wi < len(words) and words[wi][0] < cuts[k + 1]:
+                group.append(words[wi])
+                wi += 1
+            p = _piece(text, cuts[k], cuts[k + 1], group, None, (s0, s1))
+            if p:
+                out.append({"t0": p["t0"], "t1": p["t1"], "text": p["text"]})
+    out.sort(key=lambda r: (r["t0"], r["t1"]))
+    return out
+
+
 def build_utterances(segments: list[dict], turns: list[dict], boundaries: list[float] | None = None) -> dict:
     """segments: [{text, start, end, words:[{text,start,end}]}], turns: [{speaker,start,end}].
     boundaries: 쉬는 시간/구분선 시각. 이 시각을 넘어 발화를 합치지 않는다."""

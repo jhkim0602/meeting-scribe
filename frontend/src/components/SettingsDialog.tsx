@@ -71,7 +71,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             </label>
             <label className="check">
               <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} />
-              녹음을 마치면 원본 스크립트(참고용) 자동으로 만들기
+              원본 스크립트(참고용) 저절로 만들기 — 전원이 연결돼 있고 녹음하지 않을 때만. 끄면 ⋯ 메뉴에서 만들 때만 만들어요
             </label>
             <label className="field-inline">
               <span>조용한 시간이 이어지면 쉬는 시간인지 묻기</span>

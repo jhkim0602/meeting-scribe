@@ -11,6 +11,10 @@ export interface Job {
   message: string | null
   error: string | null
   eta: number | null
+  /** 녹음을 마쳐 저절로 시작한 작업 (전원이 연결돼 있을 때만 한다) */
+  auto?: number
+  /** 지금 기다리는 까닭 (녹음 중, 전원 연결 대기). 없으면 null */
+  waiting?: string | null
   created_at: number
   started_at: number | null
   finished_at: number | null
@@ -187,7 +191,7 @@ export const api = {
   deleteMeeting: (id: string) => req<{ ok: boolean }>('DELETE', `/api/meetings/${id}`),
   live: (id: string) => req<LiveView>('GET', `/api/meetings/${id}/live`),
   editSegment: (id: string, segmentId: string, text: string) => req<SegmentEdit>('PATCH', `/api/meetings/${id}/segments/${segmentId}`, { text }),
-  job: (id: string) => req<{ job: Job | null }>('GET', `/api/meetings/${id}/job`),
+  job: (id: string) => req<{ job: Job | null; record_rev?: number }>('GET', `/api/meetings/${id}/job`),
   process: (id: string) => req<{ job: Job }>('POST', `/api/meetings/${id}/process`),
   cancel: (id: string) => req<{ ok: boolean }>('POST', `/api/meetings/${id}/cancel`),
   notes: (id: string) => req<{ blocks: unknown[] | null; markdown: string; updated_at: number | null }>('GET', `/api/meetings/${id}/notes`),

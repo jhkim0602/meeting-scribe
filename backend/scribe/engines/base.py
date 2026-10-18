@@ -58,6 +58,8 @@ class AsrEngine:
 
 class Diarizer:
     name = "none"
+    # 녹음 전체를 메모리에 올려 넘겨야 하는지 (파일 경로만 쓰면 False: 3시간이면 약 0.7GB를 아낀다)
+    needs_audio = True
 
     def describe(self) -> str:
         return self.name

@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import os
+import time
 from typing import Optional
 
 import numpy as np
@@ -90,6 +92,8 @@ class MockAsr(AsrEngine):
     def transcribe_long(self, audio, *, language, context="", on_progress=None):
         from .base import split_windows
 
+        # 화면 시험용: 구간마다 받아 적는 데 시간이 걸리는 것처럼 (기본 0)
+        time.sleep(float(os.environ.get("SCRIBE_MOCK_FINAL_DELAY_S", "0")))
         out = []
         total = max(1, len(audio))
         for start, end in split_windows(audio, target_s=600.0):

@@ -1,5 +1,5 @@
 import { ArrowDown, Check, Keyboard, ListTree, MessageSquare, MessageSquarePlus, Mic, MoreHorizontal, NotebookPen, StickyNote } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState, type ComponentProps, type RefObject } from 'react'
 import { type Annotation, type Unit } from '../lib/api'
 import { annActions } from '../lib/annActions'
 import { sendToNotes } from '../lib/notesExport'
@@ -8,8 +8,10 @@ import { bridges, currentClock, useStore, type Tab } from '../lib/store'
 import { fmtTime } from '../lib/time'
 import { Floating } from './Floating'
 import { ProcessingCard } from './ProcessingCard'
-import { SummaryView } from './SummaryView'
 import { TranscriptView } from './TranscriptView'
+
+// AI 요약(마크다운 그리기)은 탭을 열 때 불러온다
+const SummaryView = lazy(() => import('./SummaryView').then((m) => ({ default: m.SummaryView })))
 
 type Filter = 'comment' | 'memo' | 'all'
 
@@ -138,6 +140,12 @@ function ViewMenu({ rect, onClose, hasClock }: { rect: DOMRect; onClose: () => v
   )
 }
 
+/** 아래 입력창. 메모 모드에서 보여 주는 지금 시각은 여기서만 초마다 바뀐다 (기록 화면은 다시 그리지 않는다). */
+function MemoInput({ inputRef, mode, ...props }: { inputRef: RefObject<HTMLInputElement | null>; mode: 'comment' | 'memo' } & ComponentProps<'input'>) {
+  const sec = useStore((s) => (mode === 'memo' ? Math.floor(s.rec.elapsed) : 0))
+  return <input ref={inputRef} placeholder={mode === 'comment' ? '방금 문장에 댓글… (Enter)' : `${fmtTime(sec)} 지금 이 순간에 메모… (Enter)`} {...props} />
+}
+
 export function TranscriptPane() {
   const meeting = useStore((s) => s.meeting)!
   const live = useStore((s) => s.live)
@@ -145,7 +153,8 @@ export function TranscriptPane() {
   const tab = useStore((s) => s.tab)
   const setTab = useStore((s) => s.setTab)
   const partial = useStore((s) => s.partial)
-  const rec = useStore((s) => s.rec)
+  // 녹음 상태만 본다: 소리 크기·시간은 1초에 10번 넘게 바뀌므로 여기서 받으면 긴 기록 화면이 계속 다시 그려진다
+  const recordingHere = useStore((s) => s.rec.status !== 'idle' && s.rec.meetingId === s.meeting?.id)
   const showMarks = useStore((s) => s.showMarks)
   const follow = useStore((s) => s.follow)
   const playing = useStore((s) => s.playing)
@@ -161,7 +170,6 @@ export function TranscriptPane() {
   const [memo, setMemo] = useState('')
   const [barMode, setBarMode] = useState<'comment' | 'memo'>('comment')
   const [toNotes] = usePref(COMMENT_TO_NOTES, false)
-  const recordingHere = rec.status !== 'idle' && rec.meetingId === meeting.id
   const jobActive = !!job && (job.status === 'queued' || job.status === 'running' || job.status === 'error')
 
   const anns = live?.annotations || []
@@ -319,7 +327,11 @@ export function TranscriptPane() {
           </>
         )}
 
-        {tab === 'summary' && <SummaryView meeting={meeting} />}
+        {tab === 'summary' && (
+          <Suspense fallback={null}>
+            <SummaryView meeting={meeting} />
+          </Suspense>
+        )}
       </div>
 
       {showJump && (
@@ -345,10 +357,10 @@ export function TranscriptPane() {
               <StickyNote size={14} />메모
             </button>
           </div>
-          <input
-            ref={memoInput}
+          <MemoInput
+            inputRef={memoInput}
+            mode={barMode}
             value={memo}
-            placeholder={barMode === 'comment' ? '방금 문장에 댓글… (Enter)' : `${fmtTime(rec.elapsed)} 지금 이 순간에 메모… (Enter)`}
             onChange={(e) => setMemo(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.nativeEvent.isComposing) addFromBar()

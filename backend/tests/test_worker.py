@@ -103,3 +103,29 @@ def test_worker_parallel_diarization(tmp_path):
     assert "speaker_map" not in data and "speaker_embeddings" not in data
     assert store.get_job(job["id"])["status"] == "done"
 
+
+
+def test_upload_record_appears_window_by_window(tmp_path):
+    """올린 파일은 10분(여기서는 20초) 구간을 받아 적을 때마다 기록에 바로 넣고, 끝나면 화자 묶음을 붙인다."""
+    data_dir = tmp_path / "data"
+    store = Store(data_dir / "scribe.db")
+    m = store.create_meeting("올린 회의", source="upload")
+    mdir = data_dir / "meetings" / m["id"]
+    mdir.mkdir(parents=True)
+    _make_wav(mdir / "audio.wav", 70.0)
+    env = dict(os.environ, SCRIBE_DATA_DIR=str(data_dir), SCRIBE_FINAL_ENGINE="mock", SCRIBE_DIARIZER="mock",
+               SCRIBE_WINDOW_S="20", PYTHONPATH=str(BACKEND))
+    job = store.create_job(m["id"])
+    r = subprocess.run([sys.executable, "-m", "scribe.worker", job["id"]], cwd=BACKEND, env=env, capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stderr
+    windows = int(dict(kv.split("=") for kv in next(x for x in r.stdout.splitlines() if x.startswith("windows=")).split())["windows"])
+    with store.conn() as c:
+        rows = [dict(x) for x in c.execute("SELECT idx, t0, created_at, speaker_auto FROM live_segments WHERE meeting_id=? ORDER BY idx", (m["id"],))]
+    assert windows >= 3 and len({x["created_at"] for x in rows}) == windows  # 구간마다 따로 들어갔다
+    assert [x["t0"] for x in rows] == sorted(x["t0"] for x in rows)
+    assert all(x["speaker_auto"] for x in rows) and rows[0]["speaker_auto"] == "A"
+    # 다시 받아 적어도 이미 있는 기록은 그대로 (늘어나지 않는다)
+    job2 = store.create_job(m["id"])
+    r = subprocess.run([sys.executable, "-m", "scribe.worker", job2["id"]], cwd=BACKEND, env=env, capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stderr
+    assert len(store.list_live_segments(m["id"])) == len(rows)

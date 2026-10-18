@@ -39,6 +39,8 @@ store = Store(settings.db_path)
 views = Views(store)
 jobs = JobManager(store)
 jobs.is_recording = lambda mid: mid in sessions
+jobs.recording_any = lambda: bool(sessions)
+jobs.on_job_end = lambda mid: forget_tracker(mid)  # 올린 파일: 워커가 정한 화자 묶음을 새로 읽는다
 holder = LiveEngineHolder()
 sessions: dict[str, Any] = {}
 
@@ -324,10 +326,28 @@ async def upload(file: UploadFile = File(...), title: str = Form("")) -> dict:
 
 # ---------------- 기록 ----------------
 
+_ANN_DROP = ("origin", "origin_version", "replacement")  # 예전 "원본에 옮겨 붙이기"·"수정 제안"의 칸
+
+
+def api_ann(a: dict) -> dict:
+    """화면에 보내는 메모·댓글: 화면이 쓰는 칸만 (위치는 pos에 있으므로 anchor의 문장 위치는 뺀다)."""
+    out = {k: v for k, v in a.items() if k not in _ANN_DROP}
+    out["anchor"] = {k: v for k, v in a["anchor"].items() if k not in ("start", "end")}
+    return out
+
+
+def _json(data: Any) -> Response:
+    """큰 응답은 FastAPI의 변환(jsonable_encoder)을 거치지 않고 바로 보낸다 (3시간 회의에서 수십 ms)."""
+    import json
+
+    return Response(json.dumps(data, ensure_ascii=False, separators=(",", ":")), media_type="application/json")
+
+
 @app.get("/api/meetings/{meeting_id}/live")
-def live_view(meeting_id: str) -> dict:
+def live_view(meeting_id: str) -> Response:
     _meeting_or_404(meeting_id)
-    return views.live_view(meeting_id)
+    view = views.live_view(meeting_id)
+    return _json({"units": view["units"], "annotations": [api_ann(a) for a in view["annotations"]]})
 
 
 class SegmentEdit(BaseModel):
@@ -340,7 +360,8 @@ def patch_segment(meeting_id: str, segment_id: str, body: SegmentEdit) -> dict:
     그 문장에 걸린 댓글·강조는 글자 차이대로 위치를 옮겨 함께 돌려준다."""
     _meeting_or_404(meeting_id)
     try:
-        return edit_segment(store, views, meeting_id, segment_id, body.text)
+        r = edit_segment(store, views, meeting_id, segment_id, body.text)
+        return dict(r, annotations=[api_ann(a) for a in r["annotations"]])
     except KeyError:
         raise HTTPException(404, "문장을 찾을 수 없습니다")
     except EditError as exc:
@@ -367,8 +388,9 @@ def cancel(meeting_id: str) -> dict:
 
 @app.get("/api/meetings/{meeting_id}/job")
 def job(meeting_id: str) -> dict:
+    """작업 진행률. record_rev: 기록이 바뀐 횟수 (올린 파일은 받아 적는 동안 기록이 구간마다 늘어난다)"""
     _meeting_or_404(meeting_id)
-    return {"job": store.latest_job(meeting_id)}
+    return {"job": store.latest_job(meeting_id), "record_rev": store.record_rev(meeting_id)}
 
 
 RANGE_RE = re.compile(r"bytes=(\d*)-(\d*)")
@@ -489,13 +511,18 @@ def add_annotation(meeting_id: str, body: AnnotationIn) -> dict:
     _meeting_or_404(meeting_id)
     if body.kind not in KINDS:
         raise HTTPException(400, "알 수 없는 종류")
-    idx = views.index(meeting_id)
     payload = body.model_dump()
+    # 긴 회의에서도 빠르게: 고른 문장(또는 메모를 붙일 문장)만 덮는 작은 색인으로 위치를 정한다
     if body.kind in ("memo", "divider"):
         if body.t is None:
             raise HTTPException(400, "시간이 필요합니다")
+        idx = (views.local_index(meeting_id, [body.after]) if body.after else None) or views.index(meeting_id)
     elif not (body.start and body.end):
         raise HTTPException(400, "선택 범위가 필요합니다")
+    else:
+        idx = views.local_index(meeting_id, [str(body.start.get("unit") or ""), str(body.end.get("unit") or "")])
+        if idx is None:
+            raise HTTPException(400, "선택한 범위를 찾을 수 없습니다")
     anchor = anchor_from_request(idx, payload)
     if anchor is None:
         raise HTTPException(400, "선택한 범위를 찾을 수 없습니다")
@@ -509,7 +536,7 @@ def add_annotation(meeting_id: str, body: AnnotationIn) -> dict:
         color=body.color,
         status="open",
     )
-    return views.resolve_one(ann)
+    return api_ann(views.resolve_one(ann))
 
 
 def _ann_or_404(ann_id: str) -> dict:
@@ -524,7 +551,7 @@ def patch_annotation(ann_id: str, body: AnnotationPatch) -> dict:
     _ann_or_404(ann_id)
     fields = {k: v for k, v in body.model_dump().items() if v is not None}
     ann = store.update_annotation(ann_id, **fields)
-    return views.resolve_one(ann)  # type: ignore[arg-type]
+    return api_ann(views.resolve_one(ann))  # type: ignore[arg-type]
 
 
 @app.post("/api/annotations/{ann_id}/replies")
@@ -533,7 +560,7 @@ def add_reply(ann_id: str, body: ReplyIn) -> dict:
     replies = list(ann.get("replies") or [])
     replies.append({"text": body.text.strip(), "at": time.time()})
     ann = store.update_annotation(ann_id, replies=replies)
-    return views.resolve_one(ann)  # type: ignore[arg-type]
+    return api_ann(views.resolve_one(ann))  # type: ignore[arg-type]
 
 
 @app.post("/api/meetings/{meeting_id}/annotations/exported")
@@ -642,8 +669,9 @@ def search(q: str, limit: int = 30) -> list[dict]:
 # ---------------- 녹음 WebSocket ----------------
 
 def _after_stop(meeting_id: str) -> Optional[dict]:
+    # 참고용 원본 스크립트: 전원이 연결돼 있고 녹음하지 않을 때 저절로 만든다 (설정에서 끄면 '만들기'를 누를 때만)
     if store.get_setting("auto_process", True):
-        return jobs.enqueue(meeting_id)
+        return jobs.enqueue(meeting_id, auto=True)
     return None
 
 

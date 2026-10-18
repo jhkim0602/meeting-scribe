@@ -180,12 +180,21 @@ function PausedFor({ since, heard }: { since: number; heard: boolean }) {
 
 /** 마이크 아이콘: 소리가 들어오면 은은하게 빛나고, 문제가 있으면 주황/빨강 */
 function MicRing() {
-  const level = useStore((s) => (s.rec.status === 'recording' ? s.rec.level : 0))
   const mic = useStore((s) => s.rec.mic)
+  const ref = useRef<HTMLSpanElement>(null)
+  // 소리 크기는 1초에 10번 넘게 바뀐다: 화면 전체를 다시 그리지 않고 아이콘의 CSS 변수만 바꾼다
+  useEffect(() => {
+    const paint = (s: ReturnType<typeof useStore.getState>) => {
+      const lv = s.rec.status === 'recording' ? s.rec.level : 0
+      ref.current?.style.setProperty('--lv', Math.min(1, lv * 1.4).toFixed(2))
+    }
+    paint(useStore.getState())
+    return useStore.subscribe(paint)
+  }, [])
   return (
     <span
+      ref={ref}
       className={`mic-ring ${mic !== 'ok' ? `sig ${mic}` : ''}`}
-      style={{ ['--lv' as string]: Math.min(1, level * 1.4).toFixed(2) }}
       title={mic === 'bad' ? '마이크를 찾을 수 없어요' : mic === 'warn' ? '마이크 소리가 들어오지 않거나 다시 연결하는 중이에요' : undefined}
     >
       {mic === 'ok' ? <Mic size={14} /> : <MicOff size={14} />}
@@ -217,7 +226,13 @@ function Signals() {
 }
 
 function Recorder({ choice }: { choice: MicChoice }) {
-  const rec = useStore((s) => s.rec)
+  // 소리 크기는 마이크 아이콘만 따로 그린다. 여기는 상태와 초 단위 시간이 바뀔 때만 다시 그린다.
+  const rec = {
+    status: useStore((s) => s.rec.status),
+    elapsed: useStore((s) => Math.floor(s.rec.elapsed)),
+    pausedAt: useStore((s) => s.rec.pausedAt),
+    heard: useStore((s) => s.rec.heard),
+  }
   const engine = useStore((s) => s.health?.live)
   const [confirm, setConfirm] = useState(false)
   const [panel, setPanel] = useState<DOMRect | null>(null)
@@ -387,7 +402,7 @@ function Player({ meeting, onResume }: { meeting: Meeting; onResume?: () => void
 
 export function Dock() {
   const meeting = useStore((s) => s.meeting)!
-  const rec = useStore((s) => s.rec)
+  const rec = { status: useStore((s) => s.rec.status), meetingId: useStore((s) => s.rec.meetingId) }
   const toast = useStore((s) => s.toast)
   const choice = useMicChoice()
   const { mics, mic, refresh } = choice

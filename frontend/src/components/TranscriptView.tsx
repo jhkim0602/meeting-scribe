@@ -312,7 +312,8 @@ function estimateTurn(turn: Turn, speaker: boolean, model: ReturnType<typeof bui
   return h
 }
 
-export function TranscriptView({ meetingId, units, annotations, partial, recording, scrollRef }: Props) {
+/** 받은 값이 같으면 다시 그리지 않는다 (위쪽 화면이 다른 까닭으로 다시 그려질 때) */
+export const TranscriptView = memo(function TranscriptView({ meetingId, units, annotations, partial, recording, scrollRef }: Props) {
   const showMarks = useStore((s) => s.showMarks)
   const playing = useStore((s) => s.playing)
   const follow = useStore((s) => s.follow)
@@ -515,9 +516,14 @@ export function TranscriptView({ meetingId, units, annotations, partial, recordi
         toast('문장을 비울 수는 없어요', 'error')
         return
       }
+      // 화면에는 바로 바꿔 보여 주고, 서버가 댓글·강조 위치를 옮겨 돌려주면 그것으로 맞춘다
+      const orig = u.text_orig ?? u.text
+      const apply = useStore.getState().applySegmentEdit
+      apply({ unit: { ...u, text: v, text_orig: v === orig ? undefined : orig }, annotations: [], deleted: [] })
       try {
-        useStore.getState().applySegmentEdit(await api.editSegment(meetingId, u.id, v))
+        apply(await api.editSegment(meetingId, u.id, v))
       } catch (e) {
+        apply({ unit: u, annotations: [], deleted: [] })
         toast(`고치지 못했어요: ${(e as Error).message}`, 'error')
       }
     },
@@ -710,4 +716,4 @@ export function TranscriptView({ meetingId, units, annotations, partial, recordi
       {pop && popAnns.length > 0 && <AnnotationPopover anns={popAnns} rect={pop.rect} onClose={() => setPop(null)} />}
     </div>
   )
-}
+})

@@ -19,7 +19,12 @@ const STATUS: Record<string, { label: string; tone: string }> = {
 
 export function PageHeader() {
   const meeting = useStore((s) => s.meeting)!
-  const rec = useStore((s) => s.rec)
+  const job = useStore((s) => s.job)
+  const recStatus = useStore((s) => s.rec.status)
+  const recMeeting = useStore((s) => s.rec.meetingId)
+  // 길이는 분 단위로 보이므로 그때만 다시 그린다
+  const recElapsed = useStore((s) => (s.rec.elapsed < 60 ? Math.floor(s.rec.elapsed) : Math.floor(s.rec.elapsed / 60) * 60))
+  const rec = { status: recStatus, meetingId: recMeeting, elapsed: recElapsed }
   const sidebarOpen = useStore((s) => s.sidebarOpen)
   const set = useStore((s) => s.set)
   const refreshMeeting = useStore((s) => s.refreshMeeting)
@@ -33,6 +38,11 @@ export function PageHeader() {
     ? (rec.status === 'paused' ? STATUS.paused : STATUS.recording)
     : meeting.status === 'processing' && meeting.source === 'upload' ? { label: '받아 적는 중', tone: 'blue' } : STATUS[meeting.status] || STATUS.empty
   const duration = recordingHere ? rec.elapsed : meeting.duration
+  // 저절로 만들 원본 스크립트가 전원 연결을 기다리는 중이면 '지금 만들기'로 바로 시킬 수 있다
+  const waitingAuto = !!job && job.status === 'queued' && !!job.auto
+  const reprocessLabel = meeting.source === 'upload' && !meeting.final_version
+    ? '다시 받아 적기'
+    : waitingAuto ? '원본 스크립트 지금 만들기' : meeting.final_version ? '원본 스크립트 다시 만들기' : '원본 스크립트 만들기'
 
   useEffect(() => setTitle(meeting.title), [meeting.id, meeting.title])
   useEffect(() => {
@@ -151,8 +161,8 @@ export function PageHeader() {
               <FileAudio size={15} />원본 스크립트 받기 (.md)
             </a>
           )}
-          <button className="menu-item" onClick={reprocess} disabled={!meeting.has_audio || recordingHere || meeting.status === 'processing'}>
-            <RefreshCw size={15} />{meeting.source === 'upload' && !meeting.final_version ? '다시 받아 적기' : '원본 스크립트 다시 만들기'}
+          <button className="menu-item" onClick={reprocess} disabled={!meeting.has_audio || recordingHere || (meeting.status === 'processing' && !waitingAuto)} title={waitingAuto ? job?.waiting ?? undefined : undefined}>
+            <RefreshCw size={15} />{reprocessLabel}
           </button>
           <div className="menu-sep" />
           <button className="menu-item danger" onClick={remove} disabled={recordingHere} title={recordingHere ? '녹음을 마친 뒤 지울 수 있어요' : undefined}><Trash2 size={15} />회의 삭제</button>

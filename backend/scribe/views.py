@@ -27,25 +27,25 @@ class Views:
         self._lock = threading.Lock()
         self._size = cache_size
 
+    @staticmethod
+    def _unit(s: dict) -> dict:
+        u = {"id": s["id"], "t0": s["t0"], "t1": s["t1"], "text": s["text"]}
+        if s.get("text_orig") is not None:
+            u["text_orig"] = s["text_orig"]  # 직접 고친 문장: 처음 받아 적은 글자
+        return u
+
     def units(self, meeting_id: str) -> list[dict]:
-        out = []
-        for s in self.store.list_live_segments(meeting_id):
-            u = {"id": s["id"], "t0": s["t0"], "t1": s["t1"], "text": s["text"]}
-            if s.get("text_orig") is not None:
-                u["text_orig"] = s["text_orig"]  # 직접 고친 문장: 처음 받아 적은 글자
-            out.append(u)
-        return out
+        return [self._unit(s) for s in self.store.list_live_segments(meeting_id)]
 
     def index(self, meeting_id: str) -> TextIndex:
-        """기록의 글자 색인. 문장이 늘거나 고쳐지면 새로 만든다."""
-        units = self.units(meeting_id)
-        key = (meeting_id, len(units), units[-1]["id"] if units else "", hash(tuple(u["text"] for u in units if "text_orig" in u)))
+        """기록의 글자 색인. 문장이 늘거나 고쳐지면(기록이 바뀐 횟수가 오르면) 새로 만든다."""
+        key = (meeting_id, self.store.record_rev(meeting_id))  # 횟수를 먼저 읽어야 낡은 기록이 새 횟수로 남지 않는다
         with self._lock:
             idx = self._cache.get(key)
             if idx is not None:
                 self._cache.move_to_end(key)
                 return idx
-        idx = TextIndex(units)
+        idx = TextIndex(self.units(meeting_id))
         with self._lock:
             self._cache[key] = idx
             while len(self._cache) > self._size:
@@ -63,5 +63,13 @@ class Views:
             units.append(dict(u, speaker=r.get("speaker"), speaker_auto=r.get("speaker_auto"), speaker_src=r.get("speaker_src"), speaker_conf=r.get("speaker_conf")))
         return {"units": units, "annotations": anns}
 
+    def local_index(self, meeting_id: str, unit_ids: list[str]) -> Optional[TextIndex]:
+        """주어진 문장들만 덮는 작은 색인 (메모·댓글 하나를 다룰 때 기록 전체를 읽지 않는다). 없는 문장이 있으면 None."""
+        span = self.store.live_segment_span(meeting_id, unit_ids)
+        return TextIndex([self._unit(s) for s in span]) if span else None
+
     def resolve_one(self, ann: dict) -> dict:
-        return resolve_annotations([ann], self.index(ann["meeting_id"]))[0]
+        a = ann["anchor"]
+        ids = [a["start"]["unit"], a["end"]["unit"]] if a.get("start") and a.get("end") else [a["after"]] if a.get("after") else []
+        idx = self.local_index(ann["meeting_id"], ids) if ids else None
+        return resolve_annotations([ann], idx or self.index(ann["meeting_id"]))[0]

@@ -529,6 +529,9 @@ code { font-family: var(--font-mono); font-size: 0.88em; background: var(--bg-ho
 .proc-banner.error { background: var(--rec-soft); color: var(--rec); }
 .proc-banner .muted { font-size: 12px; }
 .proc-banner .bar { flex: 1; max-width: 200px; }
+/* 녹음 중·전원 대기로 멈춘 작업: 차분한 회색 */
+.proc-banner.waiting { background: var(--bg-hover); color: var(--text-2); font-weight: 500; }
+.proc-banner.waiting .bar > div, .proc-card.waiting .bar > div { background: var(--text-3); }
 .bar { height: 4px; border-radius: 2px; background: var(--bg-active); overflow: hidden; }
 .bar > div { height: 100%; background: var(--accent); border-radius: 2px; transition: width 0.6s ease; }
 .bar.big { height: 6px; border-radius: 3px; margin-top: 18px; }

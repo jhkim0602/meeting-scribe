@@ -3,6 +3,9 @@
 서버가 `python -m scribe.worker <job_id>`로 별도 프로세스를 띄운다. MLX/Metal 메모리를 서버와
 분리하고, 3~5시간 파일을 처리하는 동안에도 실시간 녹음이 영향을 덜 받게 하기 위함이다.
 진행률은 SQLite jobs 테이블에 기록한다.
+
+녹음이 시작되거나(어떤 회의든) 저절로 시작한 작업인데 배터리로 바뀌면 서버가 회의 폴더에 `pause` 파일을
+만든다. 워커는 진행률을 알리는 때마다 그 파일을 보고, 있는 동안 GPU를 쓰지 않고 기다린다.
 """
 
 from __future__ import annotations
@@ -16,6 +19,7 @@ import sys
 import time
 import traceback
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 
@@ -25,7 +29,8 @@ from .db import Store
 from .engines import make_diarizer, make_engine, repos_for, resolve_diarizer_kind
 from .engines.download import DownloadWatch
 from .engines.base import split_windows
-from .record import record_from_utterances
+from .jobs import pause_path
+from .record import add_window_rows, label_speakers
 from .merge import build_utterances
 from .storage import M4A
 
@@ -42,21 +47,56 @@ ORDER = ["convert", "load", "transcribe", "diarize", "merge"]
 
 
 class Progress:
-    def __init__(self, store: Store, job_id: str):
+    def __init__(self, store: Store, job_id: str, meeting_id: str = ""):
         self.store = store
         self.job_id = job_id
         self.started = time.time()
         self._last = 0.0
         self.notes: list[str] = []
+        self.pause_file = pause_path(meeting_id) if meeting_id else None
+        self.paused_s = 0.0  # 멈춰 기다린 시간 (남은 시간 계산에서 뺀다)
+        self.children: list[int] = []  # 같이 멈출 프로세스 (동시에 돌리는 화자 구분)
+
+    def wait_if_paused(self) -> None:
+        """서버가 멈추라고 하면(pause 파일) 다시 하라고 할 때까지 기다린다."""
+        if self.pause_file is None or not self.pause_file.exists():
+            return
+        since = time.time()
+        reason = None
+        self._signal(getattr(signal, "SIGSTOP", None))  # 윈도우에는 없다
+        try:
+            while self.pause_file.exists():
+                try:
+                    text = self.pause_file.read_text(encoding="utf-8").strip() or "잠시 멈췄어요"
+                except OSError:
+                    text = reason or "잠시 멈췄어요"
+                if text != reason:
+                    reason = text
+                    self.store.update_job(self.job_id, waiting=reason)
+                time.sleep(1.0)
+        finally:
+            self._signal(getattr(signal, "SIGCONT", None))
+            self.paused_s += time.time() - since
+            self.store.update_job(self.job_id, waiting=None)
+
+    def _signal(self, sig: Optional[int]) -> None:
+        if sig is None:
+            return
+        for pid in self.children:
+            try:
+                os.kill(pid, sig)
+            except OSError:
+                pass
 
     def set(self, phase: str, frac: float, message: str | None = None, force: bool = False) -> None:
+        self.wait_if_paused()
         base = sum(PHASES[p] for p in ORDER[: ORDER.index(phase)])
         total = min(0.999, base + PHASES[phase] * max(0.0, min(1.0, frac)))
         now = time.time()
         if not force and now - self._last < 0.7:
             return
         self._last = now
-        elapsed = now - self.started
+        elapsed = now - self.started - self.paused_s
         eta = elapsed / total * (1 - total) if total > 0.03 else None
         fields = {"phase": phase, "progress": round(total, 4), "eta": eta}
         if message is not None:
@@ -129,7 +169,7 @@ def _shift(segs: list[dict], offset: float) -> list[dict]:
 
 def _diarize(wav: str, kind: str, num_speakers, on_progress=None) -> dict:
     diarizer = make_diarizer(kind)
-    audio = read_audio(Path(wav))
+    audio = read_audio(Path(wav)) if diarizer.needs_audio else np.zeros(0, dtype=np.float32)
     turns = diarizer.diarize(Path(wav), audio, num_speakers=num_speakers, on_progress=on_progress)
     return {"turns": turns}
 
@@ -168,6 +208,11 @@ class ParallelDiarize:
 
     def stop(self) -> None:
         if self.proc.is_alive():
+            # 멈춰 둔 프로세스는 깨워야 끝난다
+            try:
+                os.kill(self.proc.pid, getattr(signal, "SIGCONT", signal.SIGTERM))
+            except OSError:
+                pass
             self.proc.terminate()
 
 
@@ -191,7 +236,7 @@ def run(job_id: str) -> int:
         return 2
     store.update_job(job_id, status="running", started_at=time.time(), pid=os.getpid(), phase="convert", progress=0.0)
     store.update_meeting(mid, status="processing")
-    prog = Progress(store, job_id)
+    prog = Progress(store, job_id, mid)
     mdir = settings.meeting_dir(mid)
     wav = mdir / "audio.wav"
     work: Path | None = None  # m4a로 줄여 둔 회의를 다시 만들 때 쓰는 임시 WAV
@@ -220,6 +265,7 @@ def run(job_id: str) -> int:
         segments: list[dict] = []
         todo: list[tuple[int, int]] = []
         done = 0
+        upload = meeting.get("source") == "upload"
         for a, b in windows:
             saved = ck.load(f"asr_{a}_{b}")
             if saved is None:
@@ -227,6 +273,8 @@ def run(job_id: str) -> int:
             else:
                 segments.extend(saved)
                 done += b - a
+                if upload:
+                    add_window_rows(store, mid, saved, a / SAMPLE_RATE, b / SAMPLE_RATE)
 
         # 화자 구분: 저장해 둔 결과가 있으면 쓰고, 긴 녹음이면 받아쓰기와 동시에 시작한다
         diar_kind = resolve_diarizer_kind()
@@ -237,6 +285,7 @@ def run(job_id: str) -> int:
         parallel = None
         if diar_saved is None and diar_kind != "none" and duration >= PARALLEL_DIARIZE_MIN_S:
             parallel = ParallelDiarize(wav, diar_kind, num_speakers)
+            prog.children.append(parallel.proc.pid)
 
         if todo:
             prog.set("load", 0.0, "모델 준비 중", force=True)
@@ -269,6 +318,9 @@ def run(job_id: str) -> int:
                 segs = _shift(segs, a / SAMPLE_RATE)
                 ck.save(f"asr_{a}_{b}", segs)
                 segments.extend(segs)
+                if upload:
+                    # 올린 파일은 받아 적은 구간부터 바로 기록에 넣어 먼저 읽고 고칠 수 있게 한다 (화자는 끝나고)
+                    add_window_rows(store, mid, segs, a / SAMPLE_RATE, b / SAMPLE_RATE)
                 done += b - a
             del engine
         print(f"windows={len(windows)} reused={len(windows) - len(todo)}", flush=True)
@@ -286,7 +338,7 @@ def run(job_id: str) -> int:
             try:
                 if parallel is not None:
                     prog.set("diarize", 0.3, "화자 구분 마무리 중", force=True)
-                    res = parallel.result()
+                    res = parallel.result(prog.wait_if_paused)
                 else:
                     prog.set("diarize", 0.0, "화자 구분 중", force=True)
                     res = _diarize(str(wav), diar_kind, num_speakers, on_progress=lambda f: prog.set("diarize", f))
@@ -307,13 +359,13 @@ def run(job_id: str) -> int:
         data["language"] = settings.language
         # 원본 스크립트: 참고용으로만 남긴다 (회의 기록과 섞지 않는다)
         version = store.save_final_version(mid, data, engine=describe_final(), diarizer=diar_name)
-        if meeting.get("source") == "upload":
-            # 올린 파일은 실시간 기록이 없으므로, 받아 적은 결과가 곧 고칠 수 있는 회의 기록이 된다
-            record_from_utterances(store, mid, data["utterances"])
+        if upload:
+            # 올린 파일의 회의 기록: 구간마다 넣어 둔 문장에 목소리 묶음(A, B…)을 붙인다
+            label_speakers(store, mid, turns)
         store.update_meeting(mid, status="ready")
         msg = "완료" + (" · " + " ".join(prog.notes) if prog.notes else "")
         store.update_job(job_id, status="done", phase="done", progress=1.0, message=msg, finished_at=time.time(), eta=0)
-        if meeting.get("source") == "upload":
+        if upload:
             # 올린 파일의 사본은 지운다 (원래 파일은 사용자에게 있고, 재생용 WAV는 남는다)
             for src in mdir.glob("source.*"):
                 src.unlink(missing_ok=True)

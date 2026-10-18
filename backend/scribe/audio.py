@@ -164,7 +164,9 @@ def read_audio(path: Path, start: float = 0.0, end: Optional[float] = None) -> n
     if s1 <= s0:
         return np.zeros(0, dtype=np.float32)
     mm = np.memmap(path, dtype="<i2", mode="r", offset=info.data_offset, shape=(total,))
-    out = np.asarray(mm[s0:s1], dtype=np.float32) / 32768.0
+    # 복사는 한 번만: 3시간이면 float 배열 하나가 약 0.7GB라 임시 배열을 하나 더 만들지 않는다
+    out = mm[s0:s1].astype(np.float32)
+    out *= 1.0 / 32768.0
     del mm
     return out
 

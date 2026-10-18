@@ -153,6 +153,15 @@ class Store:
         # 녹음 시간 → 실제 시각: [[녹음 시간(초), 그때의 실제 시각(epoch)], ...]
         if "clock" not in mcols:
             c.execute("ALTER TABLE meetings ADD COLUMN clock TEXT NOT NULL DEFAULT '[]'")
+        # 기록이 바뀐 횟수: 문장이 늘거나 고쳐질 때마다 올린다 (화면용 글자 색인을 다시 만들지 정한다)
+        if "record_rev" not in mcols:
+            c.execute("ALTER TABLE meetings ADD COLUMN record_rev INTEGER NOT NULL DEFAULT 0")
+        # 원본 스크립트 작업: 녹음을 마쳐 저절로 시작한 것인지(auto), 지금 기다리는 까닭(waiting)
+        jcols = {r["name"] for r in c.execute("PRAGMA table_info(jobs)").fetchall()}
+        if "auto" not in jcols:
+            c.execute("ALTER TABLE jobs ADD COLUMN auto INTEGER NOT NULL DEFAULT 0")
+        if "waiting" not in jcols:
+            c.execute("ALTER TABLE jobs ADD COLUMN waiting TEXT")
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path, timeout=30, isolation_level=None, check_same_thread=False)
@@ -309,7 +318,18 @@ class Store:
             )
             if getattr(self, "fts", False) and text:
                 c.execute("INSERT INTO search_fts(meeting_id,kind,ref,t,text) VALUES(?,?,?,?,?)", (meeting_id, "live", seg["id"], seg["t0"], text))
+            self._bump_record(c, meeting_id)
         return seg
+
+    @staticmethod
+    def _bump_record(c: sqlite3.Connection, meeting_id: str) -> None:
+        c.execute("UPDATE meetings SET record_rev = record_rev + 1 WHERE id=?", (meeting_id,))
+
+    def record_rev(self, meeting_id: str) -> int:
+        """기록이 바뀐 횟수 (문장이 늘거나 고쳐지면 오른다). 다른 프로세스(워커)가 쓴 것도 보인다."""
+        with self.conn() as c:
+            row = c.execute("SELECT record_rev FROM meetings WHERE id=?", (meeting_id,)).fetchone()
+        return int(row["record_rev"]) if row else -1
 
     def add_live_segments(self, meeting_id: str, rows: list[dict]) -> int:
         """올린 파일을 받아 적은 문장을 한꺼번에 기록으로 (화자 묶음과 함께)"""
@@ -324,6 +344,12 @@ class Store:
                 " VALUES(:id,:meeting_id,:idx,:t0,:t1,:text,:created_at,:speaker_auto,:speaker_conf)",
                 segs,
             )
+            if segs and c.execute("SELECT 1 FROM live_segments WHERE meeting_id=? AND idx<? AND t0>? LIMIT 1",
+                                  (meeting_id, start, segs[0]["t0"])).fetchone():
+                # 앞 구간을 나중에 넣었다(멈췄다 이어 하기): 기록은 시간 순서로 보여야 한다
+                order = c.execute("SELECT id FROM live_segments WHERE meeting_id=? ORDER BY t0, idx", (meeting_id,)).fetchall()
+                c.executemany("UPDATE live_segments SET idx=? WHERE id=?", [(i, r["id"]) for i, r in enumerate(order)])
+            self._bump_record(c, meeting_id)
         self._fts_replace(meeting_id, "live", [(s["id"], s["t0"], s["text"]) for s in self.list_live_segments(meeting_id)])
         return len(segs)
 
@@ -332,10 +358,30 @@ class Store:
             rows = c.execute("SELECT id,idx,t0,t1,text,text_orig,edited_at FROM live_segments WHERE meeting_id=? ORDER BY idx", (meeting_id,)).fetchall()
         return [dict(r) for r in rows]
 
+    def has_live_between(self, meeting_id: str, t0: float, t1: float) -> bool:
+        with self.conn() as c:
+            return c.execute("SELECT 1 FROM live_segments WHERE meeting_id=? AND t0>=? AND t0<? LIMIT 1", (meeting_id, t0 - 0.01, t1)).fetchone() is not None
+
     def get_live_segment(self, segment_id: str) -> Optional[dict]:
         with self.conn() as c:
             row = c.execute("SELECT id,meeting_id,idx,t0,t1,text,text_orig,edited_at FROM live_segments WHERE id=?", (segment_id,)).fetchone()
         return dict(row) if row else None
+
+    def live_segment_span(self, meeting_id: str, segment_ids: list[str]) -> Optional[list[dict]]:
+        """주어진 문장들을 처음부터 끝까지 덮는 이어진 문장들 (메모·댓글 하나의 위치만 다룰 때). 없는 문장이 있으면 None."""
+        ids = list(dict.fromkeys(segment_ids))
+        if not ids:
+            return None
+        marks = ",".join("?" * len(ids))
+        with self.conn() as c:
+            rows = c.execute(f"SELECT idx FROM live_segments WHERE meeting_id=? AND id IN ({marks})", [meeting_id, *ids]).fetchall()
+            if len(rows) != len(ids):
+                return None
+            lo, hi = min(r["idx"] for r in rows), max(r["idx"] for r in rows)
+            rows = c.execute(
+                "SELECT id,idx,t0,t1,text,text_orig FROM live_segments WHERE meeting_id=? AND idx BETWEEN ? AND ? ORDER BY idx", (meeting_id, lo, hi)
+            ).fetchall()
+        return [dict(r) for r in rows]
 
     def set_live_text(self, segment_id: str, text: str) -> Optional[dict]:
         """문장 글자를 직접 고친다. 처음 받아 적은 글자는 text_orig에 남기고, 원래대로 돌리면 고친 표시를 지운다."""
@@ -352,6 +398,7 @@ class Store:
             if getattr(self, "fts", False):
                 c.execute("DELETE FROM search_fts WHERE kind='live' AND ref=?", (segment_id,))
                 c.execute("INSERT INTO search_fts(meeting_id,kind,ref,t,text) VALUES(?,?,?,?,?)", (seg["meeting_id"], "live", segment_id, seg["t0"], text))
+            self._bump_record(c, seg["meeting_id"])
         return self.get_live_segment(segment_id)
 
     def list_live_speakers(self, meeting_id: str) -> list[dict]:
@@ -461,6 +508,20 @@ class Store:
             rows = c.execute("SELECT * FROM annotations WHERE meeting_id=? ORDER BY created_at", (meeting_id,)).fetchall()
         return [self._ann_row(r) for r in rows]
 
+    def annotations_on_segment(self, meeting_id: str, segment_id: str) -> list[dict]:
+        """이 문장에서 시작하거나 끝나는 메모·댓글·강조 (문장을 고칠 때 전부 읽지 않으려고)."""
+        with self.conn() as c:
+            rows = c.execute(
+                "SELECT * FROM annotations WHERE meeting_id=? AND anchor LIKE ? ORDER BY created_at", (meeting_id, f'%"{segment_id}"%')
+            ).fetchall()
+        out = []
+        for r in rows:
+            ann = self._ann_row(r)
+            st, en = ann["anchor"].get("start"), ann["anchor"].get("end")
+            if st and en and segment_id in (st.get("unit"), en.get("unit")):
+                out.append(ann)
+        return out
+
     def update_annotation(self, ann_id: str, **fields: Any) -> Optional[dict]:
         allowed = {"body", "replacement", "color", "status", "replies", "anchor", "exported_at", "meta"}
         cols, vals = [], []
@@ -505,11 +566,13 @@ class Store:
         return d
 
     # ---------- jobs ----------
-    def create_job(self, meeting_id: str, kind: str = "postprocess") -> dict:
-        job = {"id": new_id(), "meeting_id": meeting_id, "kind": kind, "status": "queued", "phase": "queued", "progress": 0.0, "created_at": time.time()}
+    def create_job(self, meeting_id: str, kind: str = "postprocess", auto: bool = False) -> dict:
+        job = {"id": new_id(), "meeting_id": meeting_id, "kind": kind, "status": "queued", "phase": "queued", "progress": 0.0,
+               "created_at": time.time(), "auto": int(auto)}
         with self.conn() as c:
             c.execute(
-                "INSERT INTO jobs(id,meeting_id,kind,status,phase,progress,created_at) VALUES(:id,:meeting_id,:kind,:status,:phase,:progress,:created_at)",
+                "INSERT INTO jobs(id,meeting_id,kind,status,phase,progress,created_at,auto)"
+                " VALUES(:id,:meeting_id,:kind,:status,:phase,:progress,:created_at,:auto)",
                 job,
             )
         return self.get_job(job["id"])  # type: ignore[return-value]

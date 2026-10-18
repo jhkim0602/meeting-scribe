@@ -22,6 +22,7 @@ def parse_rttm(text: str) -> list[dict]:
 
 class SpeakrsDiarizer(Diarizer):
     name = "speakrs"
+    needs_audio = False  # 파일을 직접 읽는다
 
     def diarize(self, wav_path, audio: np.ndarray, *, num_speakers: Optional[int] = None, on_progress: Optional[ProgressFn] = None) -> list[dict]:
         import speakrs  # type: ignore
@@ -47,7 +48,7 @@ class PyannoteDiarizer(Diarizer):
             from mlx_qwen3_asr.diarization import DiarizationConfig, infer_speaker_turns
 
             cfg = DiarizationConfig(num_speakers=num_speakers, min_speakers=1, max_speakers=10, device="auto")
-            turns = infer_speaker_turns(audio.astype(np.float32), sr=SAMPLE_RATE, config=cfg)
+            turns = infer_speaker_turns(np.asarray(audio, dtype=np.float32), sr=SAMPLE_RATE, config=cfg)  # 이미 float32면 복사하지 않는다
         except ImportError:
             turns = self._direct(audio, num_speakers)
         if on_progress:

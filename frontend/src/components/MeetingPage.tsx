@@ -1,9 +1,12 @@
+import { lazy, Suspense } from 'react'
 import { Group, Panel, Separator } from 'react-resizable-panels'
 import { useStore } from '../lib/store'
 import { Dock } from './Dock'
-import { NotesPane } from './NotesPane'
 import { PageHeader } from './PageHeader'
 import { TranscriptPane } from './TranscriptPane'
+
+// 노트 편집기(BlockNote)는 크므로 따로 불러온다: 기록이 먼저 뜨고 노트는 바로 뒤따른다
+const NotesPane = lazy(() => import('./NotesPane').then((m) => ({ default: m.NotesPane })))
 
 export function MeetingPage() {
   const meeting = useStore((s) => s.meeting)
@@ -18,7 +21,9 @@ export function MeetingPage() {
           </Panel>
           <Separator className="resize-handle" />
           <Panel id="notes" defaultSize="42%" minSize={320}>
-            <NotesPane />
+            <Suspense fallback={<section className="pane notes-pane" />}>
+              <NotesPane />
+            </Suspense>
           </Panel>
         </Group>
       </div>
