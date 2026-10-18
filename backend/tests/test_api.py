@@ -618,3 +618,44 @@ def test_live_to_final_names_auto_or_suggest():
     assert out["S2"]["name"] == "박준호" and out["S2"]["auto"] is True
     assert out["S1"]["name"] == "김민지" and out["S1"]["auto"] is False  # 55%: 제안만
 
+
+
+def test_minutes_html_has_summary_notes_and_marks_but_no_transcript(client):
+    """회의록: 정보·요약·할 일·노트·메모를 담고, 받아 적은 문장 자체는 넣지 않는다. 글은 모두 이스케이프."""
+    mid = client.post("/api/meetings", json={"title": "주간 <회의>"}).json()["id"]
+    client.put(f"/api/meetings/{mid}/participants", json={"participants": [{"name": "김민지"}, {"name": "박준호"}]})
+    _record(client, mid, _speech_pcm([("s", 2.5), ("n", 1.0), ("s", 2.5), ("n", 1.0)]), messages=[{"type": "pause"}])
+    units = client.get(f"/api/meetings/{mid}/live").json()["units"]
+    u = units[-1]
+    client.post(f"/api/meetings/{mid}/annotations", json={
+        "kind": "comment", "view": "live", "body": "숫자 <확인>",
+        "start": {"unit": u["id"], "offset": 0}, "end": {"unit": u["id"], "offset": len(u["text"])},
+    })
+    client.post(f"/api/meetings/{mid}/annotations", json={"kind": "memo", "view": "live", "t": u["t1"] + 0.01, "after": u["id"], "body": "여기 중요"})
+    client.put(f"/api/meetings/{mid}/summary", json={"markdown": (
+        "## 한 줄 요약\n출시일을 **11월 18일**로 정했다.\n\n## 결정 사항\n- 베타는 18일 [01:30]\n\n"
+        "## 할 일\n| 할 일 | 담당 | 기한 | 근거 |\n|---|---|---|---|\n| 공고 올리기 | 박준호 | 10/24 | [02:05] |\n\n"
+        "## 주요 논의\n- 일정: QA가 길어짐 [00:40]\n  - 캠페인 다시 짜기\n\n## 남은 질문\n- 데이터 이관?\n")})
+    client.put(f"/api/meetings/{mid}/notes", json={"blocks": [
+        {"type": "heading", "props": {"level": 2}, "content": [{"type": "text", "text": "배경", "styles": {}}]},
+        {"type": "checkListItem", "props": {"checked": True}, "content": [{"type": "text", "text": "<script>alert(1)</script>", "styles": {}}]},
+    ]})
+
+    r = client.get(f"/api/meetings/{mid}/minutes.html")
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/html")
+    h = r.text
+    assert "주간 &lt;회의&gt;" in h and "<strong>11월 18일</strong>" in h
+    for title in ("결정 사항", "실행 항목", "주요 논의", "노트", "회의 중 메모·댓글", "남은 질문"):
+        assert f'<span class="ttl">{title}</span>' in h, title
+    assert '<span class="dt">일정</span>' in h and 'data-t="40.0"' in h and 'data-t="125.0"' in h  # 시각은 오른쪽 열로
+    assert "박준호</span></td>" in h and "김민지" in h  # 담당자는 참석자로 알아본다
+    assert "숫자 &lt;확인&gt;" in h and "여기 중요" in h
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in h and "<script>alert" not in h
+    assert units[0]["text"] not in h and h.count(u["text"]) == 1  # 댓글 인용 말고는 받아 적은 문장이 없다
+    assert f"/api/meetings/{mid}/audio" in h
+
+    d = client.get(f"/api/meetings/{mid}/minutes.html?download=1")
+    assert "attachment" in d.headers["content-disposition"] and "%ED%9A%8C%EC%9D%98%EB%A1%9D.html" in d.headers["content-disposition"]
+    assert 'src="녹음.wav"' in d.text  # 받은 파일은 같은 폴더의 녹음 파일을 쓴다
+    assert client.get("/api/meetings/nope/minutes.html").status_code == 404
+    client.post(f"/api/meetings/{mid}/cancel")

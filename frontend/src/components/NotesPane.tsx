@@ -88,6 +88,13 @@ function NotesEditor({ meetingId, initial }: { meetingId: string; initial: Parti
       insertBlocks: (blocks: unknown[]) => insertAtEnd(blocks),
       insertQuote: (text: string, t: number) =>
         insertAtEnd([{ type: 'quote', content: [{ type: 'timestamp', props: { t: Math.round(t * 10) / 10 } }, ` ${text}`] }]),
+      // 회의록을 열기 전에: 아직 저장 안 된 노트가 있으면 지금 저장
+      flush: async () => {
+        if (!timer.current) return
+        window.clearTimeout(timer.current)
+        timer.current = null
+        await save()
+      },
     }
     return () => {
       bridges.notes = null

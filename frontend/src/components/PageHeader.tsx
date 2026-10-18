@@ -1,8 +1,8 @@
-import { CalendarDays, Clock3, Download, FileAudio, Mic, MoreHorizontal, PanelLeft, RefreshCw, Trash2, Users } from 'lucide-react'
+import { CalendarDays, Clock3, Download, FileAudio, FileText, Mic, MoreHorizontal, PanelLeft, RefreshCw, Trash2, Users } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api'
 import { deleteLater } from '../lib/annActions'
-import { useStore } from '../lib/store'
+import { bridges, useStore } from '../lib/store'
 import { fmtDate, fmtDuration } from '../lib/time'
 import { Floating } from './Floating'
 import { ParticipantsProp } from './Participants'
@@ -59,6 +59,17 @@ export function PageHeader() {
     } catch (e) {
       toast((e as Error).message, 'error')
     }
+  }
+
+  // 방금 쓴 노트까지 담기도록 저장을 마친 뒤 연다 (새 탭은 먼저 열어 두어야 팝업 차단에 안 걸린다)
+  const openMinutes = async (download: boolean) => {
+    setMenu(null)
+    const url = `/api/meetings/${meeting.id}/minutes.html${download ? '?download=1' : ''}`
+    const tab = download ? null : window.open('', '_blank')
+    await bridges.notes?.flush().catch(() => undefined)
+    if (download) location.href = url
+    else if (tab) tab.location.href = url
+    else window.open(url, '_blank')
   }
 
   // 확인창 대신 바로 숨기고 10초 동안 되돌릴 수 있게 한다
@@ -126,6 +137,12 @@ export function PageHeader() {
       </div>
       {menu && (
         <Floating rect={menu} onClose={() => setMenu(null)} className="menu">
+          <button className="menu-item" onClick={() => openMinutes(false)}>
+            <FileText size={15} />회의록 보기
+          </button>
+          <button className="menu-item" onClick={() => openMinutes(true)}>
+            <Download size={15} />회의록 파일로 받기 (.html)
+          </button>
           <a className="menu-item" href={`/api/meetings/${meeting.id}/export.md?download=1`} onClick={() => setMenu(null)}>
             <Download size={15} />Markdown으로 내보내기
           </a>

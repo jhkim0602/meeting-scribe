@@ -285,7 +285,7 @@ export const useStore = create<State>((set, get) => ({
 // ---- 화면 사이 연결고리 (오디오 재생, 노트 삽입) ----
 
 type PlayerBridge = { seek: (t: number, play?: boolean) => void; time: () => number }
-type NotesBridge = { insertQuote: (text: string, t: number) => void; insertTimestamp: (t: number) => void; insertBlocks: (blocks: unknown[]) => void }
+type NotesBridge = { insertQuote: (text: string, t: number) => void; insertTimestamp: (t: number) => void; insertBlocks: (blocks: unknown[]) => void; flush: () => Promise<void> }
 /** 긴 기록은 보이는 부분만 그리므로, 특정 문장으로 가려면 이 길을 쓴다 */
 type TranscriptBridge = {
   scrollToUnit: (unitId: string, opts?: { align?: 'center' | 'start' | 'end'; smooth?: boolean }) => void

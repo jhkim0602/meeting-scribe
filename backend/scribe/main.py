@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -563,6 +563,13 @@ def delete_annotation(ann_id: str) -> dict:
 
 # ---------------- 내보내기 / 검색 ----------------
 
+def _attachment(name: str, ascii_name: str) -> str:
+    """받을 파일 이름. 한글 이름(filename*)을 못 읽는 브라우저를 위해 영문 이름도 함께 준다."""
+    from urllib.parse import quote
+
+    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(name)}"
+
+
 @app.get("/api/meetings/{meeting_id}/export.md")
 def export_md(meeting_id: str, version: str = "auto", download: int = 0) -> Response:
     md = meeting_markdown(views, meeting_id, version=version, include_summary=True)
@@ -570,21 +577,36 @@ def export_md(meeting_id: str, version: str = "auto", download: int = 0) -> Resp
         raise HTTPException(404, "회의를 찾을 수 없습니다")
     headers = {}
     if download:
-        from urllib.parse import quote
-
         title = (store.get_meeting(meeting_id) or {}).get("title") or "meeting"
-        headers["Content-Disposition"] = f"attachment; filename*=UTF-8''{quote(title)}.md"
+        headers["Content-Disposition"] = _attachment(f"{title}.md", "meeting.md")
     return PlainTextResponse(md, media_type="text/markdown; charset=utf-8", headers=headers)
+
+
+@app.get("/api/meetings/{meeting_id}/minutes.html")
+def minutes(meeting_id: str, download: int = 0) -> Response:
+    """보기 좋은 회의록 (정보·요약·할 일·노트·메모). 받은 파일은 옆에 녹음 파일이 있으면 시각을 눌러 들을 수 있다."""
+    import datetime as _dt
+
+    from .minutes import collect, render
+
+    data = collect(store, views, meeting_id)
+    if data is None:
+        raise HTTPException(404, "회의를 찾을 수 없습니다")
+    path = _audio_path(meeting_id)
+    if not download:
+        return HTMLResponse(render(data, audio_src=f"/api/meetings/{meeting_id}/audio" if path else None))
+    day = _dt.datetime.fromtimestamp(data["start"]).strftime("%Y-%m-%d")
+    name = re.sub(r'[\\/:*?"<>|]+', " ", f"{day} {data['title']} 회의록.html").strip()
+    headers = {"Content-Disposition": _attachment(name, f"{day} minutes.html")}
+    return HTMLResponse(render(data, audio_src=f"녹음{path.suffix}" if path else None), headers=headers)
 
 
 @app.get("/api/backup.zip")
 def backup() -> StreamingResponse:
     """전체 백업 (DB + 녹음 + 회의록 .md)"""
-    from urllib.parse import quote
-
     from .backup import backup_name, iter_backup
 
-    headers = {"Content-Disposition": f"attachment; filename*=UTF-8''{quote(backup_name())}"}
+    headers = {"Content-Disposition": _attachment(backup_name(), "meeting-scribe-backup.zip")}
     return StreamingResponse(iter_backup(store, views), media_type="application/zip", headers=headers)
 
 
