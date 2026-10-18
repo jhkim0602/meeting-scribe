@@ -148,6 +148,7 @@ export interface Health {
 export interface AppSettings {
   vocabulary: string
   auto_process: boolean
+  auto_on_battery: boolean
   break_prompt_minutes: number
 }
 

@@ -181,7 +181,10 @@ const mock = (() => {
           state.server.state = 'running'
           emit('server', state.server)
           return null
+        case 'is_recording':
+          return params.get('recording') === '1'
         case 'server_stop':
+          if (params.get('recording') === '1') throw '녹음 중이라 지금은 바꿀 수 없어요. 녹음을 마친 뒤 다시 해 주세요.'
           state.server.state = 'stopped'
           return state.server
         case 'autostart_set':

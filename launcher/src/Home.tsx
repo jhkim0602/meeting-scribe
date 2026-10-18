@@ -21,6 +21,7 @@ export function Home({ state, refresh, onQuit }: { state: AppState; refresh: () 
   const [doctor, setDoctor] = useState<DoctorItem[] | null>(null)
   const [free, setFree] = useState<number | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
   const open = (url: string) => void call('open_link', { url })
   const dataDir = state.config.data_dir || state.paths.default_data_dir
 
@@ -42,9 +43,21 @@ export function Home({ state, refresh, onQuit }: { state: AppState; refresh: () 
     call<number | null>('free_space', { path: dataDir }).then(setFree)
   }, [dataDir])
 
+  /** 서버를 끄는 일(모델·저장 위치 바꾸기, 다시 켜기)은 녹음 중이면 하지 않는다. 녹음이 끊기기 때문 */
+  const notRecording = async () => {
+    setNotice(null)
+    if (!(await call<boolean>('is_recording').catch(() => false))) return true
+    setNotice('녹음 중이라 지금은 바꿀 수 없어요. 녹음을 마친 뒤 다시 해 주세요.')
+    return false
+  }
   const restart = async () => {
+    try {
+      await call('server_stop')
+    } catch (e) {
+      setNotice(String(e))
+      return
+    }
     setServer((s) => ({ ...s, state: 'starting' }))
-    await call('server_stop')
     await call('server_start')
   }
   const afterInstall = async () => {
@@ -85,6 +98,7 @@ export function Home({ state, refresh, onQuit }: { state: AppState; refresh: () 
         </button>
         <p className="muted small">브라우저에서 열려요 · {server.url}</p>
         {server.state === 'error' && server.error && <pre className="callout err">{server.error}</pre>}
+        {notice && <p className="callout warn">{notice}</p>}
         {server.external && <p className="muted small">다른 곳에서 켠 서버를 쓰고 있어요 (예: scripts/launchagent.sh). 설정을 바꾸려면 그쪽을 먼저 꺼 주세요.</p>}
       </div>
 
@@ -104,6 +118,7 @@ export function Home({ state, refresh, onQuit }: { state: AppState; refresh: () 
               <div className="row end">
                 <button className="btn" onClick={() => setPanel(null)}>취소</button>
                 <button className="btn primary" disabled={live === state.config.live && final === state.config.final} onClick={async () => {
+                  if (!(await notRecording())) return
                   await call('save_config', { patch: { live, final } })
                   setPanel(null)
                   setInstalling('새 모델을 받는 중')
@@ -121,7 +136,7 @@ export function Home({ state, refresh, onQuit }: { state: AppState; refresh: () 
           <button className="btn small quiet" onClick={() => call('open_folder', { path: dataDir })}>열기</button>
           <button className="btn small" disabled={busy === 'folder'} onClick={async () => {
             const p = await call<string | null>('pick_folder', { start: dataDir })
-            if (!p || p === dataDir) return
+            if (!p || p === dataDir || !(await notRecording())) return
             setBusy('folder')
             await call('save_config', { patch: { data_dir: p } })
             await refresh()
@@ -154,7 +169,7 @@ export function Home({ state, refresh, onQuit }: { state: AppState; refresh: () 
                 }}>{busy === 'hf' ? '확인 중' : '확인'}</button>
               </div>
               {hf && <p className={`callout ${hf.ok ? 'ok' : 'warn'}`}>{hf.message}</p>}
-              {hf?.ok && <div className="row end"><button className="btn primary" onClick={() => { setPanel(null); setInstalling('화자 구분 모델을 받는 중') }}>화자 구분 모델 받기</button></div>}
+              {hf?.ok && <div className="row end"><button className="btn primary" onClick={async () => { if (!(await notRecording())) return; setPanel(null); setInstalling('화자 구분 모델을 받는 중') }}>화자 구분 모델 받기</button></div>}
             </div>
           )}
         </li>

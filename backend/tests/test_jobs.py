@@ -86,6 +86,19 @@ def test_manual_job_runs_on_battery_and_upgrades_a_waiting_auto_job(manager, mon
     assert manager.store.get_meeting(mid)["status"] == "processing"
 
 
+def test_auto_job_on_battery_when_allowed(manager, monkeypatch):
+    monkeypatch.setattr(jobs, "power_source", lambda: "battery")
+    mid = _meeting(manager)
+    job = manager.enqueue(mid, auto=True)
+    assert not manager.started
+    # 설정에서 '배터리로 쓸 때도 만들기'를 켜면 기다리던 작업이 바로 시작한다
+    manager.store.set_setting("auto_on_battery", True)
+    manager._kick()
+    assert len(manager.started) == 1 and manager.current == job["id"]
+    assert manager.store.get_job(job["id"])["waiting"] is None
+    assert manager.hold_reason(manager.store.get_job(job["id"]), running=True) is None
+
+
 def test_running_job_is_paused_while_recording(manager):
     mid = _meeting(manager)
     recording = [False]

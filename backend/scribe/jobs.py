@@ -87,7 +87,7 @@ class JobManager:
         upload = (self.store.get_meeting(job["meeting_id"]) or {}).get("source") == "upload"
         if self.recording_any():
             return "녹음 중이라 잠시 멈췄어요. 녹음을 마치면 이어서 " + ("받아 적어요" if upload else "만들어요")
-        if job.get("auto") and power_source() == "battery":
+        if job.get("auto") and power_source() == "battery" and not self.store.get_setting("auto_on_battery", False):
             return "전원을 연결하면 " + ("이어서 " if running else "") + "만들어요"
         return None
 

@@ -33,7 +33,7 @@ export function Install({ onDone, title = '설치하는 중', autoStart = true }
     }).then((f) => (gone ? f() : (off = f)))
     if (autoStart && !started.current) {
       started.current = true
-      void call('install_start')
+      call('install_start').catch((e) => setFailed(String(e)))
     }
     return () => {
       gone = true
@@ -45,7 +45,7 @@ export function Install({ onDone, title = '설치하는 중', autoStart = true }
     setFailed(null)
     setLog(null)
     setRows(Object.fromEntries(STEPS.map((s) => [s.key, { status: 'todo', progress: null, message: '' }])))
-    void call('install_start')
+    call('install_start').catch((e) => setFailed(String(e)))
   }
   const total = STEPS.reduce((n, s) => {
     const r = rows[s.key]

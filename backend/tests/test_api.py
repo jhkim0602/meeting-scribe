@@ -294,7 +294,8 @@ def test_manual_divider_and_settings(client):
     assert client.patch(f"/api/annotations/{d['id']}", json={"body": "안건 2"}).json()["body"] == "안건 2"
     assert "──── 안건 2 ────" in client.get(f"/api/meetings/{mid}/export.md").text
     s = client.put("/api/settings", json={"break_prompt_minutes": 5}).json()
-    assert s["break_prompt_minutes"] == 5
+    assert s["break_prompt_minutes"] == 5 and s["auto_on_battery"] is False
+    assert client.put("/api/settings", json={"auto_on_battery": True}).json()["auto_on_battery"] is True
     client.post(f"/api/meetings/{mid}/cancel")
 
 

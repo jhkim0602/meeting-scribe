@@ -147,6 +147,7 @@ def storage() -> dict:
 class SettingsIn(BaseModel):
     vocabulary: Optional[str] = None
     auto_process: Optional[bool] = None
+    auto_on_battery: Optional[bool] = None
     break_prompt_minutes: Optional[float] = None
 
 
@@ -155,6 +156,8 @@ def get_settings() -> dict:
     return {
         "vocabulary": store.get_setting("vocabulary", ""),
         "auto_process": store.get_setting("auto_process", True),
+        # 저절로 만드는 원본 스크립트를 배터리로 쓸 때도 만든다 (끄면 전원을 연결할 때까지 기다림)
+        "auto_on_battery": store.get_setting("auto_on_battery", False),
         # 이만큼 조용하면 '쉬는 시간인가요?'를 묻는다 (0이면 묻지 않음)
         "break_prompt_minutes": store.get_setting("break_prompt_minutes", 3),
     }
@@ -166,6 +169,8 @@ def put_settings(body: SettingsIn) -> dict:
         store.set_setting("vocabulary", body.vocabulary.strip())
     if body.auto_process is not None:
         store.set_setting("auto_process", bool(body.auto_process))
+    if body.auto_on_battery is not None:
+        store.set_setting("auto_on_battery", bool(body.auto_on_battery))
     if body.break_prompt_minutes is not None:
         store.set_setting("break_prompt_minutes", max(0.0, min(60.0, float(body.break_prompt_minutes))))
     return get_settings()

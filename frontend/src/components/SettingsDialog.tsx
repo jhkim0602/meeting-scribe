@@ -31,6 +31,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const toast = useStore((s) => s.toast)
   const [vocab, setVocab] = useState(settings?.vocabulary || '')
   const [auto, setAuto] = useState(settings?.auto_process ?? true)
+  const [onBattery, setOnBattery] = useState(settings?.auto_on_battery ?? false)
   const [breakMin, setBreakMin] = useState(settings?.break_prompt_minutes ?? 3)
   const [storage, setStorage] = useState<StorageInfo | null>(null)
 
@@ -45,7 +46,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   }, [onClose])
 
   const save = async () => {
-    await api.saveSettings({ vocabulary: vocab, auto_process: auto, break_prompt_minutes: breakMin })
+    await api.saveSettings({ vocabulary: vocab, auto_process: auto, auto_on_battery: onBattery, break_prompt_minutes: breakMin })
     await loadSettings()
     toast('설정을 저장했어요', 'success')
     onClose()
@@ -71,7 +72,11 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             </label>
             <label className="check">
               <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} />
-              원본 스크립트(참고용) 저절로 만들기 — 전원이 연결돼 있고 녹음하지 않을 때만. 끄면 ⋯ 메뉴에서 만들 때만 만들어요
+              원본 스크립트(참고용) 저절로 만들기 — 녹음하지 않을 때만. 끄면 ⋯ 메뉴에서 만들 때만 만들어요
+            </label>
+            <label className="check sub">
+              <input type="checkbox" checked={onBattery} disabled={!auto} onChange={(e) => setOnBattery(e.target.checked)} />
+              배터리로 쓸 때도 만들기 — 끄면 전원을 연결할 때까지 기다려요. 1시간 녹음에 15분쯤 칩을 바쁘게 써서 배터리가 더 줄어요
             </label>
             <label className="field-inline">
               <span>조용한 시간이 이어지면 쉬는 시간인지 묻기</span>

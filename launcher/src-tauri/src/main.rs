@@ -195,6 +195,7 @@ fn run_app(background: bool) {
             pick_folder,
             install_start,
             install_cancel,
+            is_recording,
             installer,
             server_start,
             server_stop,
@@ -281,8 +282,25 @@ async fn pick_folder(app: AppHandle, start: Option<String>) -> Option<String> {
         .map(|p| p.display().to_string())
 }
 
+/// 녹음 중에 서버를 끄면 녹음이 끊긴다. 설정을 바꾸거나 서버를 다시 켜기 전에 확인한다.
+const RECORDING_BUSY: &str = "녹음 중이라 지금은 바꿀 수 없어요. 녹음을 마친 뒤 다시 해 주세요.";
+
+fn recording_now(state: &AppState) -> bool {
+    let port = state.server.lock().unwrap().port;
+    port != 0 && server::recording(port)
+}
+
+#[tauri::command]
+async fn is_recording(state: State<'_, AppState>) -> Result<bool, String> {
+    let port = state.server.lock().unwrap().port;
+    tauri::async_runtime::spawn_blocking(move || port != 0 && server::recording(port)).await.map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn install_start(app: AppHandle, state: State<AppState>) -> Result<(), String> {
+    if recording_now(&state) {
+        return Err(RECORDING_BUSY.into());
+    }
     {
         let mut busy = state.installing.lock().unwrap();
         if *busy {
@@ -337,9 +355,14 @@ fn server_start(app: AppHandle) {
 }
 
 #[tauri::command]
-fn server_stop(app: AppHandle) -> Value {
+fn server_stop(app: AppHandle) -> Result<Value, String> {
+    let state = app.state::<AppState>();
+    if recording_now(&state) {
+        return Err(RECORDING_BUSY.into());
+    }
     stop_server(&app);
-    app.state::<AppState>().server.lock().unwrap().status()
+    let status = state.server.lock().unwrap().status();
+    Ok(status)
 }
 
 /// 회의 노트 열기: 서버가 꺼져 있으면 켜고 브라우저로 연다
@@ -377,8 +400,7 @@ fn autostart_set(app: AppHandle, enabled: bool) -> Result<bool, String> {
 #[tauri::command]
 fn quit(app: AppHandle, force: bool) -> Value {
     let state = app.state::<AppState>();
-    let port = state.server.lock().unwrap().port;
-    if !force && port != 0 && server::recording(port) {
+    if !force && recording_now(&state) {
         return json!({"confirm": true});
     }
     stop_server(&app);
