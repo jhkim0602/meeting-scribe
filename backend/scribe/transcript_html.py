@@ -17,13 +17,14 @@ from typing import Any, Optional
 from .db import Store
 from .export import _local_ranges, divider_text, record_source
 from .minutes import _chip, _esc, _facts, _initials, page, people_of
-from .textutil import fmt_time
+from .textutil import fmt_time, normalize
 from .views import Views, speaker_name
 
 HL_COLORS = ("yellow", "green", "blue", "pink", "purple")
 TURN_GAP_S = 60.0  # 같은 사람이라도 이만큼 조용했으면 새 발언으로
 PLAIN_GAP_S = 2.0  # 화자 구분이 없을 때는 이 정도 쉬면 문단을 나눈다
 PLAIN_MAX = 8
+INDEX_OPEN_MAX = 20  # 모아 보기를 처음부터 펼쳐 두는 최대 개수
 
 
 def collect(store: Store, views: Views, meeting_id: str) -> Optional[dict]:
@@ -125,8 +126,13 @@ def _divider_html(d: dict) -> str:
 def _comment_html(c: dict) -> str:
     replies = "".join(f'<p class="reply">{_esc(r.get("text", ""))}</p>' for r in c.get("replies") or [])
     done = '<span class="tag ok">해결</span>' if c.get("status") == "resolved" else ""
+    # 후처리 원본에서 말이 바뀌었으면 회의 중에 단 글자도 함께 (자리를 시간으로만 찾았으면 "추정")
+    pos, quote = c.get("pos") or {}, (c.get("anchor") or {}).get("quote") or ""
+    was = ""
+    if quote and (pos.get("approx") or normalize(pos.get("text") or "") != normalize(quote)):
+        was = f'<p class="was">{"자리 추정 · " if pos.get("approx") else ""}회의 중 기록: “{_esc(quote)}”</p>'
     return (f'<div class="cmt" id="c-{c["n"]}"><span class="n">{c["n"]}</span>'
-            f'<div class="cb"><p class="body">{_esc(c.get("body") or "")}{done}</p>{replies}</div></div>')
+            f'<div class="cb"><p class="body">{_esc(c.get("body") or "")}{done}</p>{was}{replies}</div></div>')
 
 
 def _ann_t(a: dict) -> float:
@@ -252,8 +258,8 @@ def render(data: dict, audio_src: Optional[str] = None, generated: Optional[floa
     turns_n = sum(1 for b in blocks if b.startswith("<article"))
 
     top = []
-    stats = (f'<div class="stats"><span>발언 <b>{turns_n}</b></span><span>메모 <b>{counts["memo"]}</b></span><span>댓글 <b>{counts["comment"]}</b></span>'
-             f'<span>수정 <b>{counts["edit"]}</b></span><span>강조 <b>{counts["highlight"]}</b></span>'
+    stats = (f'<div class="stats"><span>발언 <b>{turns_n:,}</b></span><span>메모 <b>{counts["memo"]:,}</b></span><span>댓글 <b>{counts["comment"]:,}</b></span>'
+             f'<span>수정 <b>{counts["edit"]:,}</b></span><span>강조 <b>{counts["highlight"]:,}</b></span>'
              '<span class="legend"><mark class="hl hl-yellow">강조</mark><mark class="cm">댓글</mark><a class="cn">1</a>'
              '<del>원문</del><ins>고친 말</ins><span class="memo-tag">메모</span></span></div>')
     top.append(stats)
@@ -263,7 +269,10 @@ def render(data: dict, audio_src: Optional[str] = None, generated: Optional[floa
             f'<span class="k k-{kind}">{"메모" if kind == "memo" else "댓글"}</span><span class="tx">{_esc(text)}</span></a></li>'
             for t, kind, href, text in index_items
         )
-        top.append(f'<details class="index" open><summary>메모·댓글 모아 보기 <b>{len(index_items)}</b></summary><ol>{lis}</ol></details>')
+        # 많으면 접어 둔다 (펼친 목록이 문서 앞을 다 차지하고 여는 속도도 느려진다)
+        n_memo = sum(1 for x in index_items if x[1] == "memo")
+        detail = f' <span class="mix">메모 {n_memo:,} · 댓글 {len(index_items) - n_memo:,}</span>' if len(index_items) > INDEX_OPEN_MAX else ""
+        top.append(f'<details class="index"{" open" if len(index_items) <= INDEX_OPEN_MAX else ""}><summary>메모·댓글 모아 보기 <b>{len(index_items):,}</b>{detail}</summary><ol>{lis}</ol></details>')
 
     tail = ""
     if orphans:
@@ -294,6 +303,7 @@ CSS = r"""
 .index summary::before { content: ""; display: inline-block; width: 6px; height: 6px; margin: 0 9px 2px 2px; border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted); transform: rotate(-45deg); transition: transform .15s; }
 .index[open] summary::before { transform: rotate(45deg); margin-bottom: 4px; }
 .index summary b { margin-left: 4px; color: var(--muted); font-weight: 500; }
+.index summary .mix { margin-left: 8px; font-size: 12px; font-weight: 400; color: var(--faint); }
 .index ol { list-style: none; margin: 0 0 12px; padding: 0; columns: 2; column-gap: 28px; }
 .index li { break-inside: avoid; }
 .index .jump { display: flex; align-items: baseline; gap: 8px; padding: 4px 0; border: 0; color: var(--text); font-size: 13px; }
@@ -339,9 +349,10 @@ ins { margin-left: 2px; color: #17663a; text-decoration: none; background: #e3f4
 
 .cmt { display: flex; gap: 9px; margin: -2px 0 6px; padding: 6px 12px 7px; background: #f6f8fd; border-left: 2px solid var(--accent); border-radius: 0 6px 6px 0; font-size: 14px; line-height: 1.6; }
 .cmt + p, .cmt + .memo { margin-top: 10px; }
-.cmt .n { flex: none; display: grid; place-items: center; width: 18px; height: 18px; margin-top: 2px; border-radius: 50%; background: var(--accent); color: #fff; font: 700 10px/1 var(--mono); }
+.cmt .n { flex: none; display: grid; place-items: center; min-width: 18px; height: 18px; padding: 0 4px; margin-top: 2px; border-radius: 9px; background: var(--accent); color: #fff; font: 700 10px/1 var(--mono); }
 .cmt .cb { min-width: 0; }
 .cmt .body { margin: 0; color: var(--ink); }
+.cmt .was { margin: 2px 0 0; font-size: 12.5px; color: var(--muted); }
 .cmt .reply { margin: 4px 0 0; padding-left: 10px; border-left: 2px solid var(--line); color: #4b5260; }
 .cmt .tag { margin-left: 6px; }
 .cmt:target { animation: flash 1.6s ease-out; }

@@ -17,6 +17,9 @@ from .textutil import fmt_time
 from .views import Views
 
 WEEKDAYS = "월화수목금토일"
+# 글꼴은 기다리지 않는다: 시스템 글꼴로 먼저 보여 주고, 받아지면 바뀐다 (긴 문서도 바로 뜨게, 인터넷이 없어도)
+FONT_CSS = "https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css"
+MARKS_ALL_MAX = 40  # 회의록에 메모·댓글을 모두 싣는 최대 개수 (넘으면 메모만, 댓글은 전사 기록에서)
 TIME_RE = re.compile(r"\[(\d{1,2}:\d{2}(?::\d{2})?)\]")
 
 
@@ -462,13 +465,23 @@ def render(data: dict, audio_src: Optional[str] = None, generated: Optional[floa
         section("노트", f'<div class="prose notes">{notes}</div>')
 
     if data["marks"]:
+        # 거의 문장마다 댓글을 단 회의는 회의록에 다 실으면 전사 기록만큼 길어진다: 메모만 싣고 댓글은 전사 기록으로
+        shown = data["marks"]
+        n_cmt = sum(1 for mk in shown if mk["kind"] == "comment")
+        hint = ""
+        if len(shown) > MARKS_ALL_MAX and n_cmt:
+            shown = [mk for mk in shown if mk["kind"] == "memo"]
+            hint = f'<p class="count">댓글 {n_cmt:,}개는 전사 기록에서 그 문장과 함께 볼 수 있어요.</p>'
         items = []
-        for mk in data["marks"]:
+        for mk in shown:
             quote = f'<p class="q">{_esc(mk["quote"])}</p>' if mk.get("quote") else ""
             replies = "".join(f'<p class="reply">{_esc(r)}</p>' for r in mk["replies"])
             tag = '<span class="tag memo">메모</span>' if mk["kind"] == "memo" else ('<span class="tag ok">해결</span>' if mk["resolved"] else '<span class="tag">댓글</span>')
             items.append(f'<li><span class="at">{_chip(mk["t"])}</span><div class="mk">{quote}<p class="c">{_esc(mk["body"])}{tag}</p>{replies}</div></li>')
-        section("회의 중 메모·댓글", f'<ul class="marks">{"".join(items)}</ul>', f"{len(data['marks'])}건")
+        if shown is data["marks"]:
+            section("회의 중 메모·댓글", f'<ul class="marks">{"".join(items)}</ul>', f"{len(shown):,}건")
+        else:
+            section("회의 중 메모", f'{hint}<ul class="marks">{"".join(items)}</ul>', f"{len(shown):,}건")
 
     if questions:
         lis = []
@@ -540,7 +553,8 @@ def page(data: dict, *, brand: tuple[str, str, str], facts: str, body: str, audi
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{_esc(data["title"])} · {ko}</title>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<link rel="stylesheet" media="print" onload="this.media='all'" href="{FONT_CSS}">
+<noscript><link rel="stylesheet" href="{FONT_CSS}"></noscript>
 <style>{CSS}{extra_css}</style>
 </head>
 <body{' class="in-app"' if tools else ""}>
