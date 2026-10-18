@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Apple Silicon 맥 설치 스크립트: ffmpeg, Python 3.12 가상환경, MLX 음성인식 패키지, (선택) 모델 미리 받기
+# Apple Silicon 맥 설치 스크립트: Python 3.12 가상환경(ffmpeg 포함), MLX 음성인식 패키지, (선택) 모델 미리 받기
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"

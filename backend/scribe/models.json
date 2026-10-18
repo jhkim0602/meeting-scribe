@@ -45,7 +45,7 @@
     },
     {
       "id": "qwen3-1.7b-fp16", "engine": "qwen3", "model": "Qwen/Qwen3-ASR-1.7B",
-      "label": "Qwen3-ASR 1.7B 원본 정밀도", "tag": "최고 정밀도",
+      "label": "Qwen3-ASR 1.7B 원본", "tag": "메모리 32GB 이상",
       "detail": "8bit와 결과가 거의 같고 두 배 넘게 커요. 메모리 32GB 이상에서만 권해요.",
       "repos": ["Qwen/Qwen3-ASR-1.7B", "Qwen/Qwen3-ForcedAligner-0.6B"], "memory_gb": 8, "min_ram_gb": 32
     }

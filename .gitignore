@@ -7,3 +7,12 @@ backend/.venv/
 frontend/node_modules/
 *.log
 scripts/e2e/out/
+launcher/node_modules/
+launcher/dist/
+launcher/src-tauri/target/
+launcher/src-tauri/gen/
+launcher/src-tauri/resources/app/*
+launcher/src-tauri/resources/bin/*
+!launcher/src-tauri/resources/app/.keep
+!launcher/src-tauri/resources/bin/.keep
+*.tsbuildinfo

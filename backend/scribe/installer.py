@@ -101,11 +101,11 @@ def download_targets(token: Optional[str]) -> tuple[list[str], list[str]]:
 def download(emit: Emit = emit_json, snapshot: Optional[Callable] = None, every: float = 0.5) -> int:
     from .engines.download import MODEL_SIZES, downloaded_bytes
 
-    if snapshot is None:
-        from huggingface_hub import snapshot_download as snapshot  # type: ignore
     token = settings.hf_token or os.environ.get("HF_TOKEN") or None
     models, speaker = download_targets(token)
     repos = models + speaker
+    if snapshot is None and repos:
+        from huggingface_hub import snapshot_download as snapshot  # type: ignore
     total = sum(MODEL_SIZES.get(r, 0) for r in repos)
     emit({"event": "start", "repos": repos, "total": total})
     state = {"repo": None}

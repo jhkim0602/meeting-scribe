@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- macOS 앱 아이콘 틀: 824px 둥근 사각형, 위아래 여백 -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3a3935"/><stop offset="1" stop-color="#232220"/></linearGradient>
+    <filter id="sh" x="-10%" y="-10%" width="120%" height="125%"><feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#000" flood-opacity="0.28"/></filter>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)" filter="url(#sh)"/>
+  <g transform="translate(100 100) scale(12.875)">
+    <rect x="16" y="22" width="5" height="20" rx="2.5" fill="#fff"/>
+    <rect x="25" y="15" width="5" height="34" rx="2.5" fill="#fff"/>
+    <rect x="34" y="24" width="5" height="16" rx="2.5" fill="#fff"/>
+    <rect x="43" y="19" width="5" height="26" rx="2.5" fill="#e3b341"/>
+  </g>
+</svg>

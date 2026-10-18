@@ -1,0 +1,101 @@
+# 맥 앱(.dmg) 만들기: Actions 탭에서 직접 돌리거나, v로 시작하는 태그를 올리면 릴리스에 붙는다.
+# 서명·공증 없이 만든다(애드혹 서명). 처음 열 때 '그래도 열기'가 필요하다 (README 참고).
+name: 맥 앱
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  dmg:
+    runs-on: macos-14
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash  # -eo pipefail
+    env:
+      APP: launcher/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/회의 노트.app
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            launcher/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: launcher/src-tauri
+
+      - name: 회의 노트 화면
+        working-directory: frontend
+        run: npm ci && npm run build
+
+      - name: 앱에 넣을 것 모으기 (서버 코드, 화면, uv)
+        run: launcher/scripts/prepare.sh aarch64-apple-darwin
+
+      - name: 실행기 시험
+        working-directory: launcher/src-tauri
+        run: cargo test
+
+      - name: 앱 만들기
+        working-directory: launcher
+        run: |
+          npm ci
+          npx tauri build --target aarch64-apple-darwin --bundles app,dmg
+
+      - name: 만든 앱으로 설치·서버 켜기 시험 (모델은 받지 않음)
+        env:
+          SCRIBE_LIVE_ENGINE: mock
+          SCRIBE_FINAL_ENGINE: mock
+          SCRIBE_DIARIZER: mock
+        run: |
+          codesign --verify --deep --verbose=2 "$APP"
+          bin="$APP/Contents/MacOS/meeting-scribe"
+          res="$APP/Contents/Resources"
+          support="$RUNNER_TEMP/support"
+          "$bin" --headless install --support "$support" --resources "$res" --set "data_dir=$RUNNER_TEMP/data" | tee "$RUNNER_TEMP/install.jsonl"
+          "$bin" --headless serve --support "$support" --resources "$res"
+          "$bin" --headless doctor --support "$support" --resources "$res"
+          # 서명된 앱 안에 아무것도 쓰지 않았는지 (__pycache__ 등)
+          codesign --verify --deep --strict "$APP"
+
+      - name: 파일 이름 정리
+        run: |
+          v=$(node -p "require('./launcher/src-tauri/tauri.conf.json').version")
+          mkdir -p out
+          cp launcher/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg "out/MeetingScribe_${v}_mac-arm64.dmg"
+          du -h out/*.dmg
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: MeetingScribe-mac-arm64
+          path: out/*.dmg
+          if-no-files-found: error
+
+      - name: 릴리스에 올리기
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > "$RUNNER_TEMP/notes.md" <<'EOF'
+          ## 설치
+          1. 아래 `MeetingScribe_…_mac-arm64.dmg`를 받아 열고, **회의 노트**를 응용 프로그램 폴더로 끌어다 놓아요.
+          2. 응용 프로그램 폴더에서 회의 노트를 열어요. "열 수 없습니다"가 뜨면 **시스템 설정 → 개인정보 보호 및 보안**에서 **그래도 열기**를 눌러요 (처음 한 번).
+          3. 설치 도우미를 따라가면 돼요. 파이썬·패키지·모델을 받는 데 10분 안팎 걸려요.
+
+          Apple Silicon(M1 이상) 맥, macOS 13 이상.
+          EOF
+          gh release create "$GITHUB_REF_NAME" out/*.dmg --title "회의 노트 $GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/notes.md" \
+            || gh release upload "$GITHUB_REF_NAME" out/*.dmg --clobber
