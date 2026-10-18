@@ -16,14 +16,16 @@ BACKEND = Path(__file__).resolve().parents[1]
 def test_config_file_becomes_server_settings(tmp_path):
     cfg = tmp_path / "config.json"
     cfg.write_text(json.dumps({"data_dir": str(tmp_path / "회의"), "port": 9911, "hf_token": " hf_abc ",
-                               "live": "qwen3-0.6b-8bit", "final": "qwen3-1.7b-fp16"}), encoding="utf-8")
-    code = ("from scribe.config import settings as s; from scribe.engines import model_for;"
-            "print(s.data_dir, s.port, s.hf_token, model_for('live'), model_for('final'), sep='|')")
+                               "live": "qwen3-0.6b-8bit", "final": "qwen3-1.7b-fp16",
+                               "env": {"SCRIBE_LIVE_SPK_SAME": 0.6, "SCRIBE_LIVE_MODEL": "덮어쓰지 않음", "PATH": "/무시"}}), encoding="utf-8")
+    code = ("import os; from scribe.config import settings as s; from scribe.engines import model_for;"
+            "print(s.data_dir, s.port, s.hf_token, model_for('live'), model_for('final'), os.environ['SCRIBE_LIVE_SPK_SAME'], os.environ['PATH'] != '/무시', sep='|')")
     env = {k: v for k, v in os.environ.items() if not k.startswith("SCRIBE_") and k != "HF_TOKEN"}
     env.update(SCRIBE_CONFIG=str(cfg), PYTHONPATH=str(BACKEND), SCRIBE_PORT="9922")  # 직접 준 환경 변수가 이긴다
     out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, check=True).stdout.strip().split("|")
     assert out[0] == str(tmp_path / "회의") and out[1] == "9922" and out[2] == "hf_abc"
     assert out[3] == "('qwen3', 'moona3k/mlx-qwen3-asr-0.6b-8bit')" and out[4] == "('qwen3', 'Qwen/Qwen3-ASR-1.7B')"
+    assert out[5] == "0.6" and out[6] == "True"  # 세부 설정은 SCRIBE_만
 
 
 def test_catalog_choices_sizes_and_recommendation():

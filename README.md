@@ -30,20 +30,29 @@
 |---|---|
 | ![전사 기록](docs/screenshots/transcript-doc.png) | ![참석자](docs/screenshots/people.png) |
 
-## 빠른 시작 (Apple Silicon 맥)
+## 설치 (Apple Silicon 맥, macOS 13 이상)
+
+**앱으로 (권장)** 터미널이나 Homebrew 없이 됩니다.
+
+1. [Releases](https://github.com/jhkim0602/meeting-scribe/releases)에서 `MeetingScribe_…_mac-arm64.dmg`를 받아 열고, **회의 노트**를 응용 프로그램 폴더로 끌어다 놓습니다. (릴리스가 없으면 [Actions → 맥 앱](https://github.com/jhkim0602/meeting-scribe/actions/workflows/mac-app.yml)의 마지막 성공한 실행에서 Artifacts를 받습니다. GitHub 로그인이 필요합니다.)
+2. 응용 프로그램 폴더에서 엽니다. 서명하지 않은 앱이라 처음 한 번은 "열 수 없습니다"가 뜹니다. **시스템 설정 → 개인정보 보호 및 보안** 맨 아래에서 **그래도 열기**를 누르고 다시 엽니다.
+3. 설치 도우미가 이 맥의 메모리에 맞는 받아쓰기 모델을 골라 둡니다. 저장 위치, 화자 구분 토큰(선택), Claude 데스크톱 연결, 로그인할 때 켜기를 정하면 파이썬·패키지·모델을 받습니다. 처음 한 번, 10분 안팎(메모리 16GB 이상 맥의 기본 선택으로 약 6GB)입니다.
+4. **회의 노트 열기**를 누르면 브라우저에서 회의 화면이 열립니다. 창을 닫아도 앱은 메뉴 막대에 남아 서버를 켜 둡니다. 모델·저장 위치 바꾸기, 점검, 끄기는 메뉴 막대 아이콘에서 합니다.
+
+- 화자 구분 토큰은 [모델 페이지](https://huggingface.co/pyannote/speaker-diarization-community-1)에서 약관에 동의한 뒤 [토큰 페이지](https://huggingface.co/settings/tokens)에서 Read 토큰을 만들어 넣습니다. 없어도 받아쓰기는 되고, 화자만 나뉘지 않습니다.
+- 파이썬·패키지·설정은 `~/Library/Application Support/com.meetingscribe.app`, 모델은 `~/.cache/huggingface`, 회의는 고른 저장 위치(기본 `~/MeetingScribe`)에 있습니다. 앱을 지우고 새로 받아도 회의와 받은 모델은 그대로이고, 터미널로 설치하며 받은 모델도 그대로 씁니다.
+- "그래도 열기"가 보이지 않으면 터미널에서 `xattr -dr com.apple.quarantine "/Applications/회의 노트.app"`를 한 번 실행해도 됩니다.
+
+**터미널로 (개발용)**
 
 ```bash
-./setup_mac.sh      # ffmpeg, Python 3.12, Qwen3-ASR(MLX) 설치 + 모델 미리 받기(선택, 약 4.7GB)
+./setup_mac.sh      # Python 3.12 가상환경(ffmpeg 포함), Qwen3-ASR(MLX) 설치 + 모델 미리 받기(선택)
 ./run.sh            # http://127.0.0.1:8765 이 열립니다
 ```
 
-- 로그인할 때 서버를 저절로 켜려면 `scripts/launchagent.sh install` (끄기: `uninstall`). 터미널을 열어 둘 필요가 없습니다.
+- 로그인할 때 서버를 저절로 켜려면 `scripts/launchagent.sh install` (끄기: `uninstall`).
+- 화자 구분 토큰은 `.env`의 `HF_TOKEN=`에 붙여 넣습니다.
 - 처음 맥에서 쓸 때는 `cd backend && .venv/bin/python -m scribe.selftest --compare`로 속도와 정확도를 확인하고, [맥 점검표](docs/MAC_CHECKLIST.md)를 한 번 따라 해 보세요.
-
-원본 스크립트와 올린 파일에서 화자를 나누려면 한 번만 준비합니다. 토큰이 없어도 받아쓰기는 되고, 화자만 나뉘지 않습니다.
-
-1. https://huggingface.co/pyannote/speaker-diarization-community-1 에서 약관에 동의합니다.
-2. https://huggingface.co/settings/tokens 에서 Read 토큰을 만들어 `.env`의 `HF_TOKEN=`에 붙여 넣습니다.
 
 ## 쓰는 법
 
@@ -169,8 +178,9 @@ mkdir -p ~/.claude/skills && cp -r claude/skills/meeting-minutes ~/.claude/skill
 
 - 회의 중 화자는 문장마다 목소리 특징을 비교한 **추정**입니다. 짧은 대답("네")이나 겹쳐 말한 부분은 틀릴 수 있어 직접 고르기를 함께 둡니다. 목소리 특징은 pyannote(`[diarize]` 설치)가 있을 때만 뽑고, 없으면 바로 앞 문장의 화자를 이어받는 정도만 합니다.
 - 원본 스크립트의 화자 구분은 5명 이상이거나 여러 명이 동시에 말할 때 정확도가 떨어집니다.
-- 실제 MLX 엔진 코드는 패키지 API(mlx-qwen3-asr 0.4.4)에 맞춰 작성했지만, 개발 환경이 리눅스라 맥 실기기 실행은 아직 확인하지 않았습니다. [맥 점검표](docs/MAC_CHECKLIST.md)대로 확인해 주시고, 문제가 있으면 `~/MeetingScribe/meetings/<회의ID>/worker.log`와 `~/MeetingScribe/server.log`를 봐 주세요.
+- 실제 MLX 엔진 코드는 패키지 API(mlx-qwen3-asr 0.4.4)에 맞춰 작성했지만, 개발 환경이 리눅스라 맥 실기기 실행은 아직 확인하지 않았습니다. [맥 점검표](docs/MAC_CHECKLIST.md)대로 확인해 주시고, 문제가 있으면 `~/MeetingScribe/meetings/<회의ID>/worker.log`와 `~/MeetingScribe/server.log`(앱으로 설치했다면 `~/Library/Application Support/com.meetingscribe.app/logs/`)를 봐 주세요.
 - 8bit 모델은 패키지 제작자가 영어로 검증한 것입니다. 한국어 정확도는 `selftest --compare`로 확인하세요.
+- 앱은 Apple 개발자 서명·공증 없이 만듭니다(나·팀 안에서 쓰는 용도). 처음 열 때 한 번 "그래도 열기"가 필요합니다.
 - 녹음 동의는 참석자에게 꼭 받아 주세요.
 
 ## 더 보기

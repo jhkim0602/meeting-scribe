@@ -44,8 +44,11 @@ def recommend(ram_gb: Optional[float]) -> dict:
 
 
 def config_env(cfg: dict) -> dict[str, str]:
-    """설치 도우미가 저장한 설정(config.json) → 서버 환경 변수"""
-    env: dict[str, str] = {}
+    """설치 도우미가 저장한 설정(config.json) → 서버 환경 변수.
+    "env": {"SCRIBE_…": 값}에 적은 세부 설정도 넘긴다(.env 대신). 화면에서 고르는 값이 이긴다."""
+    env: dict[str, str] = {
+        k: str(v) for k, v in (cfg.get("env") or {}).items() if isinstance(k, str) and k.startswith("SCRIBE_") and v is not None
+    }
     if cfg.get("data_dir"):
         env["SCRIBE_DATA_DIR"] = str(cfg["data_dir"])
     if cfg.get("port"):

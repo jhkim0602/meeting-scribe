@@ -92,6 +92,46 @@ M4 Pro 공개 수치를 M3 Pro 메모리 대역폭 비율로 환산한 추정치
 | 백업 | 설정 → "전체 백업 내려받기": DB, 녹음, 사람이 읽는 회의록(.md)을 zip 하나로 | - |
 | Docker | 쓰지 않습니다. 맥의 Docker에서는 GPU(Metal)를 쓸 수 없어 받아쓰기가 크게 느려집니다 | - |
 
+## 맥 앱 (launcher/)
+
+터미널 없이 쓰는 작은 앱입니다(Tauri 2: Rust + React). 앱에는 서버 코드, 회의 화면, 설치 도구 [uv](https://github.com/astral-sh/uv)만 들어 있고, 처음 열 때 파이썬·패키지는 앱 전용 폴더(`~/Library/Application Support/com.meetingscribe.app`)에, 모델은 `~/.cache/huggingface`에 받습니다. 회의 화면은 지금처럼 브라우저에서 열고, 앱은 메뉴 막대에서 서버를 켜 두는 제어판입니다.
+
+```
+앱 열기 ─▶ config.json에 setup_done이 없으면 설치 도우미, 있으면 제어판 (메뉴 막대 아이콘, 창을 닫아도 남음)
+설치    ─▶ uv를 앱 전용 폴더에 새로 써서(격리 표시 피하기) → uv venv (Python 3.12, uv가 받음)
+           → uv pip install -r requirements-mac.txt → python -m scribe.installer download (JSON 줄 진행률) → doctor
+           앱이 새 버전이라 requirements가 바뀌면(packages_rev) 패키지 단계만 다시
+서버    ─▶ 앱 전용 파이썬으로 uvicorn 127.0.0.1:8765. 이미 회의 노트 서버가 응답하면(launchagent 등) 그것을 씀
+           SCRIBE_CONFIG=config.json → 서버가 모델·저장 위치·토큰을 환경변수 기본값으로 씀 (catalog.config_env, 직접 준 환경변수가 이김)
+           PYTHONPYCACHEPREFIX로 서명된 앱 안에 .pyc를 쓰지 않음
+끄기    ─▶ 녹음 중이면 묻고, SIGTERM → 서버가 녹음 파일을 마무리하고 끝남 (8초 뒤에도 살아 있으면 SIGKILL)
+```
+
+- 모델 목록은 `backend/scribe/models.json` 하나를 설치 도우미와 서버가 같이 읽습니다(크기, 권장 메모리, 메모리별 기본 선택).
+- 설치 도우미의 Claude 연결은 `scribe.installer claude connect`가 `claude_desktop_config.json`에 MCP 서버를 더합니다(원래 파일은 `.bak`으로 남김).
+- 서명: 애드혹(`signingIdentity: "-"`). Apple Silicon에서 실행에 필요한 최소 서명이고, 공증이 없어 처음 한 번 "그래도 열기"가 필요합니다. 디스크 이미지나 다운로드 폴더에서 바로 열면(App Translocation) 앱이 옮기라고 알립니다.
+- 빌드: `.github/workflows/mac-app.yml` (macos-14). 앱 코드가 바뀐 main 푸시마다 .dmg를 만들고, 만든 앱으로 설치(모델 없이)·서버 켜기·점검을 돌린 뒤 서명이 그대로인지 확인합니다. `v0.1.0` 같은 태그를 올리면 릴리스에 붙습니다.
+
+```bash
+# 화면만 (Tauri 없이 브라우저에서, 가짜 응답): http://localhost:1420/?ram=18  ?installed=1  ?fail=packages  ?misplaced=1
+cd launcher && npm install && npx vite --port 1420
+
+# 앱에 넣을 것 모으기 (서버 코드, frontend/dist, uv) → launcher/src-tauri/resources
+launcher/scripts/prepare.sh                 # 이 기기용, 맥 빌드는 aarch64-apple-darwin
+cd launcher/src-tauri && cargo test
+
+# 창 없이 설치·서버·점검 (CI와 같은 시험, 맥이 아니어도 됨)
+SCRIBE_LIVE_ENGINE=mock SCRIBE_FINAL_ENGINE=mock SCRIBE_DIARIZER=mock \
+  ./target/debug/meeting-scribe --headless install --support /tmp/ms --resources $(pwd)/resources --set data_dir=/tmp/ms-data
+./target/debug/meeting-scribe --headless serve  --support /tmp/ms --resources $(pwd)/resources
+./target/debug/meeting-scribe --headless doctor --support /tmp/ms --resources $(pwd)/resources
+
+# 앱 창으로 (개발): MEETING_SCRIBE_RESOURCES로 resources 위치를 바꿀 수 있음
+cd launcher && npx tauri dev
+# 맥에서 .dmg 만들기
+cd launcher && npm ci && npx tauri build --target aarch64-apple-darwin --bundles app,dmg
+```
+
 ## 개발
 
 ```bash
@@ -136,9 +176,15 @@ backend/scribe/
   transcript_html.py 전사 기록 문서
   minutes.py         회의록 문서, 두 문서의 공통 틀
   mcp_server.py      Claude용 MCP 서버
+  installer.py       설치 도우미가 부르는 것: 모델 받기(JSON 진행률), 토큰 확인, Claude 연결, 점검
+  catalog.py         모델 목록(models.json): 메모리별 기본 선택, 받을 크기, config.json → 환경변수
   search.py          전체 검색 (FTS5)
   engines/           qwen3_mlx, whisper_mlx, faster_whisper, diarizers, mock
 frontend/src/
   components/        Sidebar, TranscriptView(기록·고치기·메모·댓글), NotesPane(BlockNote), Dock(녹음/재생) …
   lib/               api, store(zustand), model(표시 조각), turns(화자 단락), speakers …
+launcher/
+  src/               설치 도우미(Wizard), 설치 진행(Install), 제어판(Home)
+  src-tauri/src/     main(창·메뉴 막대·명령), install(설치 단계), server(서버 켜기·끄기), config, paths, sys(칩·메모리·공간)
+  scripts/prepare.sh 앱에 넣을 것 모으기
 ```

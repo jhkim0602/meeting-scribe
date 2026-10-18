@@ -1,11 +1,33 @@
 # 맥 실기기 점검표 (M3 Pro 18GB 기준)
 
-개발 환경(리눅스)에서는 시연용 엔진으로 흐름만 확인했습니다. 실제 맥에서 처음 한 번 아래 순서로 확인하고, 결과가 "정상"과 다르면 오른쪽 칸대로 조정하세요. 설정은 프로젝트 폴더의 `.env`에 적고 서버를 다시 켜면 적용됩니다.
+개발 환경(리눅스)에서는 시연용 엔진으로 흐름만 확인했습니다. 실제 맥에서 처음 한 번 아래 순서로 확인하고, 결과가 "정상"과 다르면 오른쪽 칸대로 조정하세요. 설정은 프로젝트 폴더의 `.env`에 적고 서버를 다시 켜면 적용됩니다. 앱으로 설치했다면 `~/Library/Application Support/com.meetingscribe.app/config.json`에 `"env": {"SCRIBE_LIVE_SPK_SAME": "0.6"}`처럼 적고 메뉴 막대 → 서버 다시 켜기를 누릅니다.
+
+## 0. 앱으로 설치 (15분)
+
+| # | 확인할 것 | 어떻게 | 정상 | 다르면 |
+|---|---|---|---|---|
+| 1 | 처음 열기 | .dmg에서 응용 프로그램 폴더로 옮기고 열기 | "열 수 없습니다" → 시스템 설정 → 개인정보 보호 및 보안 → 그래도 열기 → 설치 도우미 | "손상되었기 때문에 열 수 없습니다"가 뜨면 `xattr -dr com.apple.quarantine "/Applications/회의 노트.app"` 후 열고 알려 주세요 |
+| 2 | 이 맥 확인 | 첫 화면 | 칩 "Apple M3 Pro", 메모리 18GB, 남은 공간 | 메모리가 ?면 알려 주세요 |
+| 3 | 모델 기본값 | 다음 | 회의 중 Qwen3-ASR 0.6B(권장), 원본 스크립트 Qwen3-ASR 1.7B(권장), 약 4.6GB | - |
+| 4 | 설치 | 설치하기 | 파이썬 1분 → 패키지(약 1GB) → 모델(진행률이 GB로) → 점검, 10분 안팎 | 실패하면 "설치 기록 보기"를 열어 마지막 줄을 알려 주세요. "다시 시도"는 받은 것을 건너뜀 |
+| 5 | Claude 연결 | 완료 화면 → Claude 데스크톱을 다시 켜기 | Claude의 도구 목록에 meeting-scribe | 완료 화면의 Claude 줄 메시지 확인 |
+| 6 | 회의 노트 열기 | 회의 노트 열기 | 브라우저에서 회의 화면, 메뉴 막대에 아이콘 | 메뉴 막대 → 회의 노트 창 → 점검하기 |
+| 7 | 로그인할 때 켜기 | 켜 두고 로그아웃 → 로그인 | 메뉴 막대에 아이콘, 창은 뜨지 않음. 시스템 설정 → 일반 → 로그인 항목에 회의 노트 | - |
+| 8 | 끄기 | 녹음 중에 메뉴 막대 → 끝내기 | "녹음 중이에요" 확인 → 그래도 끄기 → 그때까지의 녹음이 저장됨 | - |
+| 9 | 앱 서명 그대로 | 몇 번 녹음한 뒤 터미널에서 `codesign --verify --deep --strict "/Applications/회의 노트.app"` | 아무것도 출력하지 않음 | 출력이 있으면 알려 주세요 |
 
 ## 1. 자동 점검 (5분)
 
 ```bash
 cd backend && .venv/bin/python -m scribe.selftest --compare
+```
+
+앱으로 설치했다면:
+
+```bash
+SUP="$HOME/Library/Application Support/com.meetingscribe.app"
+cd "/Applications/회의 노트.app/Contents/Resources/app/backend" && \
+  SCRIBE_CONFIG="$SUP/config.json" PYTHONPYCACHEPREFIX="$SUP/pycache" "$SUP/venv/bin/python" -m scribe.selftest --compare
 ```
 
 macOS의 한국어 목소리(Yuna)로 문장을 만들어 받아 적고, 속도와 글자 오류율(CER)을 잽니다. Yuna가 없으면 시스템 설정 → 손쉬운 사용 → 읽기 및 말하기 → 시스템 목소리 → 목소리 관리에서 받습니다.
@@ -51,7 +73,7 @@ macOS의 한국어 목소리(Yuna)로 문장을 만들어 받아 적고, 속도�
 | 2 | 원본 스크립트 화자 수 | 실제 인원과 같음 | 다시 만들기 전에 인원을 정할 수 있게 하려면 알려 주세요 |
 | 3 | 목소리 기억 | 회의 중 참석자를 고른 뒤 다음 회의에 같은 이름을 넣으면 처음부터 그 사람으로(흐린 이름) 알아봄 | 잘 못 알아보면 2번 표 11번의 `SCRIBE_LIVE_SPK_SAME`을 조정 |
 | 4 | m4a로 줄이기 | `SCRIBE_COMPRESS_AFTER_H=0`으로 켜면 1~2분 안에 `~/MeetingScribe/meetings/<id>/audio.m4a` | 재생·이어서 녹음이 그대로 되는지 확인 |
-| 5 | 자동 실행 | `scripts/launchagent.sh install` 후 다시 로그인 → 주소가 바로 열림 | `scripts/launchagent.sh status`, `~/MeetingScribe/server.log` |
+| 5 | 자동 실행 (터미널로 설치했을 때) | `scripts/launchagent.sh install` 후 다시 로그인 → 주소가 바로 열림 | `scripts/launchagent.sh status`, `~/MeetingScribe/server.log` |
 | 6 | 백업 | 설정 → 전체 백업 내려받기 | zip 안에 scribe.db, meetings, 회의록 폴더 |
 | 7 | 연달아 회의 | 30분 회의를 마치고 바로 다른 회의 녹음 시작 | 앞 회의의 띠가 "녹음 중이라 잠시 멈췄어요", 새 회의 자막 지연이 2번 표 2번과 같음. 녹음을 마치면 앞 회의 작업이 이어짐 | 자막이 느려지면 알려 주세요 |
 | 8 | 배터리로 마치기 | 전원을 뽑은 채 녹음을 마침 | 띠에 "전원을 연결하면 만들어요", 연결하면 1분 안에 시작. ⋯ → 지금 만들기는 바로 시작 | - |
