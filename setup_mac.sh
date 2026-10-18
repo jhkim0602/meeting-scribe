@@ -16,8 +16,7 @@ if ! command -v brew >/dev/null 2>&1; then
   exit 1
 fi
 
-say "1/5 ffmpeg, uv 확인"
-command -v ffmpeg >/dev/null 2>&1 || brew install ffmpeg
+say "1/5 uv 확인 (ffmpeg는 파이썬 패키지에 들어 있어요)"
 command -v uv >/dev/null 2>&1 || brew install uv
 
 say "2/5 Python 3.12 가상환경"

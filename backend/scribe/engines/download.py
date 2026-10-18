@@ -11,16 +11,11 @@ import threading
 from pathlib import Path
 from typing import Optional
 
-# 알려진 모델의 대략적인 크기 (바이트)
+from ..catalog import sizes_bytes
+
+# 알려진 모델의 대략적인 크기 (바이트, models.json)
 GB = 1024 ** 3
-MODEL_SIZES = {
-    "moona3k/mlx-qwen3-asr-0.6b-8bit": int(0.80 * GB),
-    "moona3k/mlx-qwen3-asr-1.7b-8bit": int(2.0 * GB),
-    "Qwen/Qwen3-ASR-0.6B": int(1.88 * GB),
-    "Qwen/Qwen3-ASR-1.7B": int(4.7 * GB),
-    "Qwen/Qwen3-ForcedAligner-0.6B": int(1.84 * GB),
-    "mlx-community/whisper-large-v3-turbo": int(1.6 * GB),
-}
+MODEL_SIZES = sizes_bytes()
 
 
 def hub_cache() -> Path:

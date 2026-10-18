@@ -8,6 +8,27 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
+def _apply_config_file() -> None:
+    """설치 도우미(앱)가 저장한 설정 파일(SCRIBE_CONFIG)을 환경 변수 기본값으로 쓴다. 직접 준 환경 변수가 이긴다.
+    서버에서 띄우는 작업 프로세스와 MCP 서버도 같은 파일을 읽는다."""
+    path = os.environ.get("SCRIBE_CONFIG")
+    if not path:
+        return
+    try:
+        import json
+
+        from .catalog import config_env
+
+        cfg = json.loads(Path(path).expanduser().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    for key, value in config_env(cfg).items():
+        os.environ.setdefault(key, value)
+
+
+_apply_config_file()
+
+
 def _env(name: str, default: str) -> str:
     value = os.environ.get(name)
     return value if value not in (None, "") else default

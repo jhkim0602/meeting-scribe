@@ -178,21 +178,43 @@ def pcm16_to_float(pcm16: bytes) -> np.ndarray:
 # ---------------- ffmpeg ----------------
 
 def ffmpeg_path() -> Optional[str]:
-    return shutil.which("ffmpeg")
+    """설치된 ffmpeg, 없으면 파이썬 패키지(imageio-ffmpeg)에 들어 있는 것 (앱으로 설치하면 Homebrew가 없어도 된다)"""
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+    try:
+        import imageio_ffmpeg  # type: ignore
+
+        exe = imageio_ffmpeg.get_ffmpeg_exe()
+        return exe if exe and os.path.exists(exe) else None
+    except Exception:  # noqa: BLE001 - 패키지가 없거나 이 기기용 ffmpeg가 없다
+        return None
+
+
+_DURATION_RE = re.compile(r"Duration:\s*(\d+):(\d{2}):(\d{2}(?:\.\d+)?)")
 
 
 def probe_duration(src: Path) -> Optional[float]:
+    """파일 길이(초). ffprobe가 없으면 ffmpeg가 알려 주는 Duration을 읽는다."""
     ffprobe = shutil.which("ffprobe")
-    if not ffprobe:
+    if ffprobe:
+        try:
+            out = subprocess.run(
+                [ffprobe, "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", str(src)],
+                capture_output=True, text=True, timeout=60,
+            )
+            return float(out.stdout.strip())
+        except (ValueError, subprocess.SubprocessError):
+            pass
+    ff = ffmpeg_path()
+    if not ff:
         return None
     try:
-        out = subprocess.run(
-            [ffprobe, "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", str(src)],
-            capture_output=True, text=True, timeout=60,
-        )
-        return float(out.stdout.strip())
-    except (ValueError, subprocess.SubprocessError):
+        err = subprocess.run([ff, "-hide_banner", "-nostdin", "-i", str(src)], capture_output=True, text=True, timeout=60).stderr
+    except (OSError, subprocess.SubprocessError):
         return None
+    m = _DURATION_RE.search(err or "")
+    return int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3)) if m else None
 
 
 _TIME_RE = re.compile(r"out_time_(?:us|ms)=(\d+)")
@@ -202,7 +224,7 @@ def convert_to_wav(src: Path, dst: Path, on_progress: Optional[Callable[[float],
     """아무 오디오/영상 파일을 16 kHz 모노 16-bit WAV로 변환하고 길이(초)를 돌려준다."""
     ff = ffmpeg_path()
     if not ff:
-        raise RuntimeError("ffmpeg가 설치되어 있지 않습니다. 'brew install ffmpeg'로 설치해 주세요.")
+        raise RuntimeError("ffmpeg를 찾지 못했어요. 앱의 환경설정에서 '다시 설치'를 누르거나 'brew install ffmpeg'로 설치해 주세요.")
     total = probe_duration(src) or 0.0
     tmp = dst.with_suffix(".tmp.wav")
     cmd = [

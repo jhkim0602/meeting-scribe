@@ -1,0 +1,62 @@
+{
+  "_": "받아쓰기 모델 목록. 설치 도우미(launcher)와 서버가 같이 읽는다. 크기는 GB(1024^3), 내려받는 양 계산에 쓴다.",
+  "sizes_gb": {
+    "moona3k/mlx-qwen3-asr-0.6b-8bit": 0.80,
+    "moona3k/mlx-qwen3-asr-1.7b-8bit": 2.0,
+    "Qwen/Qwen3-ASR-0.6B": 1.88,
+    "Qwen/Qwen3-ASR-1.7B": 4.7,
+    "Qwen/Qwen3-ForcedAligner-0.6B": 1.84,
+    "mlx-community/whisper-large-v3-turbo": 1.6,
+    "pyannote/speaker-diarization-community-1": 0.03,
+    "pyannote/wespeaker-voxceleb-resnet34-LM": 0.03
+  },
+  "live": [
+    {
+      "id": "qwen3-0.6b-8bit", "engine": "qwen3", "model": "moona3k/mlx-qwen3-asr-0.6b-8bit",
+      "label": "Qwen3-ASR 0.6B", "tag": "권장",
+      "detail": "가볍고 빨라요. 말하고 1~2초 안에 글자가 올라와요.",
+      "repos": ["moona3k/mlx-qwen3-asr-0.6b-8bit"], "memory_gb": 1.5
+    },
+    {
+      "id": "qwen3-1.7b-8bit", "engine": "qwen3", "model": "moona3k/mlx-qwen3-asr-1.7b-8bit",
+      "label": "Qwen3-ASR 1.7B", "tag": "더 정확",
+      "detail": "더 정확하지만 글자가 조금 늦게 올라와요. 메모리 16GB 이상에서 권해요.",
+      "repos": ["moona3k/mlx-qwen3-asr-1.7b-8bit"], "memory_gb": 3, "min_ram_gb": 16
+    },
+    {
+      "id": "whisper-turbo", "engine": "whisper", "model": "mlx-community/whisper-large-v3-turbo",
+      "label": "Whisper large-v3 turbo", "tag": "대안",
+      "detail": "영어가 많이 섞인 회의에 맞을 수 있어요.",
+      "repos": ["mlx-community/whisper-large-v3-turbo"], "memory_gb": 2.5
+    }
+  ],
+  "final": [
+    {
+      "id": "qwen3-1.7b-8bit", "engine": "qwen3", "model": "moona3k/mlx-qwen3-asr-1.7b-8bit",
+      "label": "Qwen3-ASR 1.7B", "tag": "권장",
+      "detail": "정확하고 메모리를 적게 써요. 1시간 녹음에 15분 안팎.",
+      "repos": ["moona3k/mlx-qwen3-asr-1.7b-8bit", "Qwen/Qwen3-ForcedAligner-0.6B"], "memory_gb": 4
+    },
+    {
+      "id": "qwen3-0.6b-8bit", "engine": "qwen3", "model": "moona3k/mlx-qwen3-asr-0.6b-8bit",
+      "label": "Qwen3-ASR 0.6B", "tag": "가볍게",
+      "detail": "메모리 8GB 맥이나 빨리 끝내고 싶을 때. 정확도는 조금 낮아요.",
+      "repos": ["moona3k/mlx-qwen3-asr-0.6b-8bit", "Qwen/Qwen3-ForcedAligner-0.6B"], "memory_gb": 2
+    },
+    {
+      "id": "qwen3-1.7b-fp16", "engine": "qwen3", "model": "Qwen/Qwen3-ASR-1.7B",
+      "label": "Qwen3-ASR 1.7B 원본 정밀도", "tag": "최고 정밀도",
+      "detail": "8bit와 결과가 거의 같고 두 배 넘게 커요. 메모리 32GB 이상에서만 권해요.",
+      "repos": ["Qwen/Qwen3-ASR-1.7B", "Qwen/Qwen3-ForcedAligner-0.6B"], "memory_gb": 8, "min_ram_gb": 32
+    }
+  ],
+  "recommend": [
+    {"max_ram_gb": 12, "live": "qwen3-0.6b-8bit", "final": "qwen3-0.6b-8bit"},
+    {"live": "qwen3-0.6b-8bit", "final": "qwen3-1.7b-8bit"}
+  ],
+  "speaker": {
+    "repos": ["pyannote/speaker-diarization-community-1", "pyannote/wespeaker-voxceleb-resnet34-LM"],
+    "terms_url": "https://huggingface.co/pyannote/speaker-diarization-community-1",
+    "token_url": "https://huggingface.co/settings/tokens"
+  }
+}

@@ -4,3 +4,5 @@
 mlx-qwen3-asr[aligner,diarize]>=0.4.4,<0.5
 # 대안 엔진 (SCRIBE_LIVE_ENGINE=whisper)
 mlx-whisper>=0.4.3
+# ffmpeg를 따로 설치하지 않아도 되게 (앱 설치: Homebrew 없이)
+imageio-ffmpeg>=0.5
