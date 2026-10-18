@@ -206,10 +206,11 @@ impl UvProgress {
         } else if let Some(rest) = l.strip_prefix("Downloading ") {
             self.downloading += 1;
             self.message = format!("받는 중: {}", rest);
-        } else if l.starts_with("Downloaded ") {
+        } else if let Some(name) = l.strip_prefix("Downloaded ") {
             self.downloaded += 1;
-            let frac = self.downloaded as f64 / self.downloading.max(self.downloaded).max(1) as f64;
-            self.progress = self.progress.max(0.1 + 0.75 * frac);
+            let total = self.downloading.max(self.downloaded).max(1);
+            self.progress = self.progress.max(0.1 + 0.75 * self.downloaded as f64 / total as f64);
+            self.message = format!("받는 중 {}/{}개 · {} 받음", self.downloaded, total, name);
         } else if l.starts_with("Prepared ") {
             self.progress = self.progress.max(0.9);
             self.message = "설치하는 중".into();
@@ -372,14 +373,11 @@ mod tests {
     #[test]
     fn uv_progress_from_output() {
         let mut p = UvProgress::default();
-        for l in [
-            "Resolved 85 packages in 1.20s",
-            "Downloading torch (70.2MiB)",
-            "Downloading numpy (5.1MiB)",
-            " Downloaded numpy",
-            " Downloaded torch",
-            "Prepared 85 packages in 30.1s",
-        ] {
+        for l in ["Resolved 85 packages in 1.20s", "Downloading torch (70.2MiB)", "Downloading numpy (5.1MiB)", " Downloaded numpy"] {
+            p.feed(l);
+        }
+        assert_eq!(p.message, "받는 중 1/2개 · numpy 받음");
+        for l in [" Downloaded torch", "Prepared 85 packages in 30.1s"] {
             p.feed(l);
         }
         assert!((p.progress - 0.9).abs() < 1e-9);

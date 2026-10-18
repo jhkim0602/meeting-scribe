@@ -19,6 +19,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: mac-app-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   dmg:
     runs-on: macos-14
