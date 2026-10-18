@@ -13,7 +13,7 @@ from typing import Optional
 from .config import SAMPLE_RATE
 
 BYTES_PER_SECOND = SAMPLE_RATE * 2
-# DB, 원본 결과, 로그를 위해 남겨 두는 공간
+# DB, 원본 스크립트, 로그를 위해 남겨 두는 공간
 DISK_RESERVE = 300 * 1024 * 1024
 
 

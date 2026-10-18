@@ -1,7 +1,7 @@
 """녹음 파일 정리: 다 만든 회의의 WAV를 m4a로 줄이고, 필요할 때 다시 WAV로 푼다.
 
 WAV(16 kHz 16-bit)는 1시간에 약 115MB, m4a(AAC 64kbps)는 약 29MB다.
-녹음을 마치고 원본까지 만든 뒤 한동안(기본 6시간) 손대지 않은 회의만 줄인다.
+녹음을 마치고 원본 스크립트까지 만든 뒤 한동안(기본 6시간) 손대지 않은 회의만 줄인다.
 그 전에는 WAV 그대로라 "이어서 녹음"이 바로 된다. 줄인 뒤에 이어서 녹음하면 먼저 WAV로 푼다.
 """
 
@@ -17,7 +17,7 @@ from .audio import convert_to_wav, ffmpeg_path, probe_duration, wav_info
 
 WAV = "audio.wav"
 M4A = "audio.m4a"
-# 원본을 다 만들고 녹음 파일을 이만큼 건드리지 않았으면 줄인다 (시간, 음수면 끔)
+# 원본 스크립트를 다 만들고 녹음 파일을 이만큼 건드리지 않았으면 줄인다 (시간, 음수면 끔)
 COMPRESS_AFTER_H = float(os.environ.get("SCRIBE_COMPRESS_AFTER_H", "6"))
 AAC_BITRATE = "64k"
 

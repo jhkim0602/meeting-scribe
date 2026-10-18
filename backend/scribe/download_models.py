@@ -1,6 +1,6 @@
 """모델 미리 내려받기: python -m scribe.download_models
 
-처음 녹음할 때 기다리지 않도록 Qwen3-ASR(실시간 0.6B, 원본 1.7B), 단어 정렬기,
+처음 녹음할 때 기다리지 않도록 Qwen3-ASR(실시간 0.6B, 원본 스크립트 1.7B), 단어 정렬기,
 화자 분리 모델(pyannote community-1, Hugging Face 토큰 필요)을 받아 둔다.
 """
 

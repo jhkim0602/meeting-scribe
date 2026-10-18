@@ -1,0 +1,131 @@
+# 개발 문서
+
+쓰는 법은 [README](../README.md), 무엇을 왜 만들었는지는 [사용자 시나리오](USER_SCENARIOS.md)에 있습니다.
+
+## 어떻게 동작하나
+
+```
+브라우저 마이크 ──16kHz PCM──▶ FastAPI WebSocket ──▶ audio.wav (계속 이어 쓰기)
+                                    │
+                                    └─▶ 무음 기준 분할 → Qwen3-ASR-0.6B → 회의 기록의 문장 (+진행 중 문장)
+                                                       └▶ 목소리 특징 → 임시 화자 A, B … (참석자를 고르면 같은 목소리 전체에)
+사람이 고친 글자 ─▶ 같은 문장의 text를 바꾸고 처음 받아 적은 글은 text_orig에 남김
+메모·댓글·강조 ─▶ 문장 id + 글자 위치. 문장을 고치면 글자 차이(difflib)대로 위치를 옮김
+녹음 종료 ─▶ 별도 프로세스: Qwen3-ASR-1.7B + 단어 정렬 → pyannote 화자 구분 → 원본 스크립트 (참고용 .md)
+올린 파일 ─▶ 같은 프로세스로 한 번 받아 적어 회의 기록으로 (화자는 목소리 묶음 A, B …)
+```
+
+**기록은 하나입니다.** 회의 중 받아 적은 문장(올린 파일이면 한 번 받아 적은 문장)에 사람이 고친 글자가 그대로 들어가고, 메모·댓글·강조는 그 문장 위에 문장 id와 글자 위치로 붙습니다. 다른 기록으로 옮겨 붙이는 일이 없으니, 받아쓰기가 크게 달라져도 자리가 무너지지 않습니다.
+
+- **문장 고치기** (`record.edit_segment`): 고치기 전후 글자를 `difflib.SequenceMatcher`로 비교해, 그 문장에 걸린 범위의 시작은 남은 글자를 따라가고(바뀐 글자 안이면 바뀐 부분의 처음), 끝은 마지막 글자를 따라갑니다(바뀐 글자 안이면 바뀐 부분의 끝). 댓글 단 글자를 모두 지우면 댓글은 문장 전체로, 강조는 지웁니다.
+- **원본 스크립트** (`export.script_markdown`): 후처리 결과는 `final_versions`에 마지막 것만 두고 Markdown으로만 내보냅니다. 화면, 문서, 검색, AI 요약의 기록은 모두 회의 기록을 씁니다. AI는 `get_reference_script`로 참고만 할 수 있습니다.
+- **예전 데이터**: 서버를 켤 때 한 번, 예전 "수정 제안"을 실시간 기록의 직접 고친 글자로 바꿉니다 (`record.apply_legacy_edits`).
+
+| 구성 | 기본값 | 바꾸는 법 (`.env`) |
+|---|---|---|
+| 실시간 받아쓰기 | Qwen3-ASR-0.6B (MLX, 8bit) | `SCRIBE_LIVE_MODEL` |
+| 원본 스크립트 받아쓰기 | Qwen3-ASR-1.7B + ForcedAligner (MLX, 8bit) | `SCRIBE_FINAL_MODEL` |
+| 대안 엔진 | whisper-large-v3-turbo (mlx-whisper) | `SCRIBE_LIVE_ENGINE=whisper` |
+| 화자 구분 (원본 스크립트·올린 파일) | speakrs(설치 시) → pyannote community-1 | `SCRIBE_DIARIZER` |
+| 회의 중 화자 묶기 | pyannote wespeaker 목소리 특징 | `SCRIBE_LIVE_SPK_SAME` (0.5) |
+| 데이터 | `~/MeetingScribe` (SQLite + WAV/m4a) | `SCRIBE_DATA_DIR` |
+
+설정 → "자주 나오는 용어·이름"에 사람 이름이나 전문 용어를 적으면 받아쓰기에 힌트로 들어갑니다.
+
+## 긴 회의 (3~5시간)
+
+- **보이는 문장만 그립니다.** 5시간 기록(3,000문장 이상)도 화면에는 수십 개만 그려서 스크롤과 탭 전환이 가볍습니다.
+- **⌘F는 기록 안에서 찾기**로 바뀝니다. 띄어쓰기는 무시하고 찾고(“예산숫자”로 “예산 숫자”도 찾음), Enter/Shift+Enter로 이동합니다.
+- **구간 목차:** 구분선(쉬는 시간, 2부 등)이 있으면 탭 오른쪽에 목차 버튼이 생깁니다. 재생 막대에도 댓글(노랑)과 구분선(회색) 눈금이 옅게 보입니다.
+- **바뀐 것만 다시 그립니다.** 댓글을 달거나 문장을 고치면 서버가 바뀐 항목만 돌려주고 화면은 그것만 바꿔 끼웁니다.
+- **원본 스크립트는 10분 단위로 만듭니다.** 구간마다 결과를 저장해 두므로, 만드는 중에 취소하거나 이어서 녹음해도 끝난 구간은 다시 하지 않습니다.
+- **문서:** 전사 기록은 화면 밖 발언을 그리지 않고(`content-visibility`), 메모·댓글 모아 보기는 20개가 넘으면 접어 둡니다. 글꼴은 기다리지 않고 시스템 글꼴로 먼저 보여 줍니다.
+
+3시간 회의, 문장 2,103개, 메모·댓글·강조 약 2,000개 (이 개발 서버, 시연용 엔진, 브라우저 기준):
+
+| 측정 | 결과 |
+|---|---|
+| 기록 첫 표시 | 0.57초 (화면 요소 약 900개) |
+| 스크롤 | 61fps |
+| 탭 전환 (AI 요약 → 기록) | 0.17초 |
+| 문장 고치기 저장 → 화면 반영 | 0.01초 |
+| ⌘F 찾기 | 0.18초 |
+| 가장 긴 멈춤 | 0.08초 |
+| 전사 기록 문서: 만들기 / 첫 화면 / 가장 긴 멈춤 | 0.1초 / 0.24초 / 0.08초 |
+
+## M3 Pro 18GB 기준 예상
+
+| 항목 | 예상 |
+|---|---|
+| 실시간 자막 지연 | 1~2초 |
+| 모델 내려받기 | 약 4.7GB (8bit 기본) · fp16이면 약 8.4GB |
+| 메모리 사용 | 약 4GB (8bit 실시간 + 원본 스크립트 동시) · fp16이면 약 7GB |
+| 원본 스크립트 만들기 | 1시간 녹음당 약 15분 (받아쓰기와 화자 구분을 동시에) |
+| 녹음 파일 | 녹음 중 WAV 1시간 약 115MB → 다 만든 뒤 m4a 1시간 약 29MB (5시간 약 0.14GB) |
+
+M4 Pro 공개 수치를 M3 Pro 메모리 대역폭 비율로 환산한 추정치입니다. `python -m scribe.selftest`로 직접 확인해 보세요.
+
+## 가볍게 운영하기
+
+| 기능 | 하는 일 | 바꾸는 법 (`.env`) |
+|---|---|---|
+| 8bit 모델 | mlx-qwen3-asr가 검증해 올린 8bit 모델을 기본으로 씁니다 (영어 기준 fp16과 같은 결과, 크기 절반 이하). 한국어는 `selftest --compare`로 확인하세요 | `SCRIBE_PRECISION=fp16` |
+| 녹음 파일 줄이기 | 원본 스크립트까지 만들고 6시간 손대지 않은 회의는 WAV를 m4a로 줄입니다. 재생·다시 만들기·이어서 녹음은 그대로 됩니다 | `SCRIBE_COMPRESS_AFTER_H` (음수면 끔) |
+| 올린 파일 사본 | 다 받아 적으면 앱 안의 사본은 지웁니다 (원래 파일은 그대로) | - |
+| 원본 스크립트 버전 | 마지막 것만 남깁니다 | - |
+| 쉬는 모델 내리기 | 녹음 없이 30분이 지나면 실시간 모델을 메모리에서 내리고, 앱을 다시 보면 미리 올립니다 | `SCRIBE_LIVE_IDLE_UNLOAD_MIN` (0이면 안 내림) |
+| 배터리 절약 | 배터리로 쓸 때는 진행 중 문장을 2초마다 갱신합니다. 받아 적기가 느리면 간격을 스스로 늘립니다 | - |
+| 동시 처리 | 10분이 넘는 녹음은 화자 구분을 받아쓰기와 동시에 돌립니다 | `SCRIBE_PARALLEL_DIARIZE_MIN_S` |
+| 검색 | 모든 회의의 기록(고친 글자 포함)·노트·제목을 SQLite 색인(FTS5)으로 찾습니다 | - |
+| 목소리 기억 | 회의 중 참석자를 고르면 그 목소리를 기억해, 다음 회의에서 같은 이름을 넣으면 처음부터 알아봅니다 | - |
+| 백업 | 설정 → "전체 백업 내려받기": DB, 녹음, 사람이 읽는 회의록(.md)을 zip 하나로 | - |
+| Docker | 쓰지 않습니다. 맥의 Docker에서는 GPU(Metal)를 쓸 수 없어 받아쓰기가 크게 느려집니다 | - |
+
+## 개발
+
+```bash
+# 백엔드 테스트 (모델 없이 시연용 엔진으로 전체 흐름 검증)
+cd backend && uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python -r requirements-dev.txt
+.venv/bin/python -m pytest -q
+
+# 시연용 엔진으로 서버 실행 (맥이 아니어도 됨)
+SCRIBE_LIVE_ENGINE=mock SCRIBE_FINAL_ENGINE=mock SCRIBE_DIARIZER=mock .venv/bin/python -m uvicorn scribe.main:app --port 8765
+
+# 화면 개발 (Vite, /api는 8765로 프록시)
+cd frontend && npm install && npm run dev
+npx tsc -b && npm run build     # 타입 검사와 배포용 빌드 (frontend/dist)
+
+# 브라우저 E2E (가짜 마이크)
+python scripts/e2e/make_fake_audio.py scripts/e2e/out/speech.wav
+python scripts/e2e/make_quiet_audio.py scripts/e2e/out/quiet.wav
+python scripts/e2e/make_quiet_audio.py scripts/e2e/out/zero.wav zero
+node scripts/e2e/run.cjs        # 댓글·노트 흐름, 문장 고치기(E, 고르고 고치기, 처음대로), 원본 스크립트, ⌘F
+node scripts/e2e/ui.cjs         # 녹음 표시줄, 단축키, 되돌리기, 보기 설정
+node scripts/e2e/speakers.cjs   # 임시 화자, 참석자, 숫자키, 녹음 뒤에도 그대로 (빈 데이터 폴더에서)
+node scripts/e2e/docs.cjs       # 참석자 정보, 전사 기록·회의록 보기·받기, 메모 자리, 시각 눌러 듣기
+SCRIBE_MIN_BREAK_S=2 로 서버를 띄운 뒤 RESTART_CMD="서버 재시작 명령" node scripts/e2e/breaks.cjs   # 예외 처리 흐름
+```
+
+맥이 아닌 환경에서는 `pip install faster-whisper`를 하면 `faster-whisper` 엔진이 자동으로 선택됩니다.
+
+```
+backend/scribe/
+  main.py            REST API, 녹음 WebSocket, 화면 파일 제공
+  recording.py       녹음 세션 (파일 저장 + 실시간 받아쓰기 + 임시 화자)
+  live.py            무음 기준 문장 분할, 진행 중 문장
+  live_speakers.py   임시 화자 (목소리 묶음 → 참석자), 목소리 기억
+  record.py          문장 고치기와 위치 옮기기, 올린 파일 → 기록, 예전 수정 제안 정리
+  anchors.py         메모·댓글 위치 (문장 id + 글자 위치), 글자 차이 계산
+  views.py           기록 + 메모·댓글 + 화자를 화면용으로
+  worker.py          원본 스크립트 만들기 / 올린 파일 받아 적기 (별도 프로세스, 진행률 기록)
+  merge.py           단어 타임스탬프 + 화자 구간 → 화자별 발화 (원본 스크립트)
+  export.py          Markdown 내보내기 (AI가 읽는 형식), 원본 스크립트
+  transcript_html.py 전사 기록 문서
+  minutes.py         회의록 문서, 두 문서의 공통 틀
+  mcp_server.py      Claude용 MCP 서버
+  search.py          전체 검색 (FTS5)
+  engines/           qwen3_mlx, whisper_mlx, faster_whisper, diarizers, mock
+frontend/src/
+  components/        Sidebar, TranscriptView(기록·고치기·메모·댓글), NotesPane(BlockNote), Dock(녹음/재생) …
+  lib/               api, store(zustand), model(표시 조각), turns(화자 단락), speakers …
+```

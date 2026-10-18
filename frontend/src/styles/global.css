@@ -179,8 +179,6 @@ code { font-family: var(--font-mono); font-size: 0.88em; background: var(--bg-ho
   display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 7px; border-radius: 10px;
   font-size: 11.5px; font-weight: 500; background: var(--bg-hover); color: var(--text-2); white-space: nowrap;
 }
-.chip-soft { background: var(--accent-soft); color: var(--accent); }
-.chip-warn { background: rgba(183, 121, 31, 0.14); color: var(--warn); }
 .chip-ok { background: var(--ok-soft); color: var(--ok); }
 .tool-btn {
   display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 8px; border-radius: 6px;
@@ -320,7 +318,6 @@ code { font-family: var(--font-mono); font-size: 0.88em; background: var(--bg-ho
 
 /* ---------- 기록 ---------- */
 .transcript { padding: 18px 28px 120px 8px; max-width: 900px; }
-.speaker-row { padding: 14px 0 2px 76px; }
 .sp-1 { color: var(--sp-1); } .sp-2 { color: var(--sp-2); } .sp-3 { color: var(--sp-3); } .sp-4 { color: var(--sp-4); }
 .sp-5 { color: var(--sp-5); } .sp-6 { color: var(--sp-6); } .sp-7 { color: var(--sp-7); } .sp-8 { color: var(--sp-8); }
 
@@ -494,7 +491,6 @@ code { font-family: var(--font-mono); font-size: 0.88em; background: var(--bg-ho
 .kind-dot.kind-highlight { background: var(--sp-4); }
 .ann-quote { margin: 0; padding-left: 9px; border-left: 2px solid var(--comment-line); color: var(--text-2); font-size: 13px; }
 .ann-body { margin: 0; font-size: 14px; white-space: pre-wrap; }
-.ann-note { margin: 0; font-size: 12.5px; color: var(--ok); }
 .ann-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .ann-replyline { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-2); padding-left: 4px; }
 .ann-reply-row { display: flex; gap: 6px; }
@@ -510,7 +506,6 @@ code { font-family: var(--font-mono); font-size: 0.88em; background: var(--bg-ho
 .ann-list-export { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 6px 10px; margin-bottom: 4px; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
 .ann-list-item { display: grid; grid-template-columns: 10px 44px 1fr 14px; align-items: center; gap: 6px; width: 100%; padding: 7px 8px; border-radius: 6px; text-align: left; font-size: 13px; }
 .ann-list-item:hover { background: var(--bg-hover); }
-.ann-list-kind { font-weight: 600; font-size: 12px; }
 .ann-list-time { color: var(--text-3); font-variant-numeric: tabular-nums; font-size: 12px; }
 .ann-list-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
 .ann-list-text em { display: block; font-style: normal; color: var(--text-3); font-size: 12px; overflow: hidden; text-overflow: ellipsis; }

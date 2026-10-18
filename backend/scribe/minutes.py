@@ -2,7 +2,7 @@
 
 파일 하나로 열리고(글꼴은 인터넷이 있으면 Pretendard, 없으면 시스템 글꼴), 인쇄하면 A4에 맞는다.
 같은 폴더에 녹음 파일이 있으면 시각을 눌러 그 부분을 들을 수 있다.
-원본 전사는 넣지 않는다 (요약과 사람이 쓴 것만).
+받아 적은 기록 자체는 넣지 않는다 (요약과 사람이 쓴 것만, 기록은 전사 기록 문서에).
 """
 
 from __future__ import annotations
@@ -298,8 +298,6 @@ def collect(store: Store, views: Views, meeting_id: str) -> Optional[dict]:
     start = float(m.get("held_at") or (clock[0][1] if clock else m["created_at"]))
     duration = float(m.get("duration") or 0)
     people = people_of(m)
-    if not people:
-        people = [{"name": v} for v in (m.get("speakers") or {}).values() if v]
     participants = [p["name"] for p in people]
     view = views.live_view(meeting_id)
     marks = []

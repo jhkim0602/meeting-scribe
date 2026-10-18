@@ -24,7 +24,7 @@ export function SummaryView({ meeting }: { meeting: Meeting }) {
         <Bot size={26} />
         <h3>AI 요약은 내가 구독한 Claude가 만들어요</h3>
         <p className="muted">
-          이 앱은 MCP로 Claude Desktop이나 Claude Code와 연결됩니다. Claude에게 아래처럼 말하면 노트·첨삭·기록을 읽고 회의록을 만들어 여기에 저장해요.
+          이 앱은 MCP로 Claude Desktop이나 Claude Code와 연결됩니다. Claude에게 아래처럼 말하면 노트·기록·메모·댓글을 읽고 회의록을 만들어 여기에 저장해요.
         </p>
         <div className="prompt-box">
           <code>방금 회의 회의록으로 정리해줘</code>

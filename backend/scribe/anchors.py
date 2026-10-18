@@ -4,7 +4,7 @@
 문장 id + 글자 위치로 저장한다. 사람이 문장을 고치면 글자 차이를 따라 위치를 정확히 옮긴다
 (다른 기록으로 옮겨 붙이는 일은 하지 않는다).
 
-unit 형식: {"id", "t0", "t1", "text", "words"?: [[offset, length, start, end], ...]}
+unit 형식: {"id", "t0", "t1", "text"}
 """
 
 from __future__ import annotations
@@ -17,27 +17,11 @@ import numpy as np
 
 
 def unit_char_times(unit: dict) -> np.ndarray:
-    text = unit.get("text") or ""
-    n = len(text)
-    t0, t1 = float(unit["t0"]), float(unit["t1"])
+    """문장 안 글자별 시각 (문장 시작~끝을 글자 수로 고르게 나눈다)"""
+    n = len(unit.get("text") or "")
     if n == 0:
         return np.zeros(0)
-    words = unit.get("words") or []
-    if words:
-        known_idx: list[float] = []
-        known_val: list[float] = []
-        for o, length, s, e in words:
-            if length <= 0 or o >= n:
-                continue
-            length = min(length, n - o)
-            for k in range(length):
-                known_idx.append(o + k)
-                known_val.append(s + (e - s) * (k / length))
-        if known_idx:
-            order = np.argsort(known_idx, kind="stable")
-            xi = np.asarray(known_idx)[order]
-            yi = np.maximum.accumulate(np.asarray(known_val)[order])
-            return np.interp(np.arange(n), xi, yi)
+    t0, t1 = float(unit["t0"]), float(unit["t1"])
     return t0 + (t1 - t0) * (np.arange(n) + 0.5) / n
 
 

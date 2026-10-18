@@ -85,7 +85,7 @@ def test_full_flow(client):
     units = live["units"]
     assert [u["id"] for u in units] == [s["id"] for s in segs]
 
-    u0, u1 = units[0], units[1]
+    u0 = units[0]
     w = u0["text"].split(" ")
     c = client.post(f"/api/meetings/{mid}/annotations", json={
         "kind": "comment", "body": "이 숫자 확인 필요",

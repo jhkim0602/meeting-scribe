@@ -42,7 +42,7 @@ export function Welcome() {
           <button className="start-card primary" onClick={() => createAndRecord().catch(() => undefined)}>
             <span className="start-icon rec"><Mic size={20} /></span>
             <span className="start-title">새 회의 녹음</span>
-            <span className="start-desc">실시간 기록 + 노트, 끝나면 화자를 나눈 원본</span>
+            <span className="start-desc">실시간으로 받아 적고, 틀린 글자는 그 자리에서 고쳐요</span>
           </button>
           <button className="start-card" onClick={() => fileRef.current?.click()}>
             <span className="start-icon"><FileUp size={20} /></span>

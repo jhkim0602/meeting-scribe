@@ -73,7 +73,7 @@ def make_engine(role: str) -> AsrEngine:
     if kind == "qwen3":
         from .qwen3_mlx import Qwen3MlxEngine
 
-        # 원본은 단어 정렬기까지 미리 올려 내려받기 진행률에 함께 잡히게 한다
+        # 원본 스크립트용은 단어 정렬기까지 미리 올려 내려받기 진행률에 함께 잡히게 한다
         return Qwen3MlxEngine(model, with_aligner=(role == "final"))
     if kind == "whisper":
         from .whisper_mlx import WhisperMlxEngine

@@ -103,7 +103,7 @@ function Toc({ anns, units, rect, onClose }: { anns: Annotation[]; units: Unit[]
   )
 }
 
-/** ⋯ 보기 설정: 첨삭, 댓글 접기, 실제 시각, 글자 크기 */
+/** ⋯ 보기 설정: 메모·댓글, 댓글 접기, 실제 시각, 글자 크기 */
 function ViewMenu({ rect, onClose, hasClock }: { rect: DOMRect; onClose: () => void; hasClock: boolean }) {
   const showMarks = useStore((s) => s.showMarks)
   const set = useStore((s) => s.set)
@@ -118,7 +118,7 @@ function ViewMenu({ rect, onClose, hasClock }: { rect: DOMRect; onClose: () => v
   )
   return (
     <Floating rect={rect} onClose={onClose} className="menu view-menu">
-      <Item on={showMarks} label="첨삭 보기" onClick={() => set({ showMarks: !showMarks })} />
+      <Item on={showMarks} label="메모·댓글 보기" onClick={() => set({ showMarks: !showMarks })} />
       <Item on={collapsed} label="댓글 한 줄로 접기" onClick={() => setCollapsed(!collapsed)} />
       <Item on={clock && hasClock} label="실제 시각으로 보기" onClick={() => setClock(!clock)} disabled={!hasClock} title={hasClock ? undefined : '올린 파일은 녹음한 시각을 몰라요'} />
       <div className="menu-sep" />

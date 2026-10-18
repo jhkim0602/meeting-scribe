@@ -206,4 +206,4 @@ def build_utterances(segments: list[dict], turns: list[dict], boundaries: list[f
         u["speaker"] = mapping.get(sp) if sp is not None else None
     for i, u in enumerate(utts):
         u["id"] = f"u{i}"
-    return {"utterances": utts, "speakers": list(mapping.values()), "speaker_map": mapping}
+    return {"utterances": utts, "speakers": list(mapping.values())}

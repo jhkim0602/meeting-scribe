@@ -416,7 +416,7 @@ export function Dock() {
 
   if (recordingHere) return <Recorder choice={choice} />
   if (meeting.has_audio) {
-    // 원본을 만드는 중이어도 이어서 녹음할 수 있다 (서버가 그 작업을 취소한다)
+    // 원본 스크립트를 만드는 중이어도 이어서 녹음할 수 있다 (서버가 그 작업을 취소한다)
     const canResume = meeting.source === 'live'
     return <Player key={meeting.id} meeting={meeting} onResume={canResume ? start : undefined} />
   }
@@ -435,7 +435,7 @@ export function Dock() {
       {isBluetooth(mics, mic) ? (
         <span className="dock-hint warn-hint">블루투스 마이크는 통화 음질로 바뀌어 받아쓰기가 부정확해질 수 있어요. 맥북 내장 마이크를 권해요.</span>
       ) : (
-        <span className="muted dock-hint">말하는 동안 실시간으로 받아 적고, 끝나면 화자를 나눈 원본을 만들어요.</span>
+        <span className="muted dock-hint">말하는 동안 실시간으로 받아 적어요. 틀린 글자는 그 자리에서 고치면 돼요.</span>
       )}
       {panel && <MicPanel rect={panel} onClose={() => setPanel(null)} choice={choice} recording={false} />}
     </div>

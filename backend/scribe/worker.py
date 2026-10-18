@@ -1,4 +1,4 @@
-"""후처리(원본 만들기) 작업 프로세스.
+"""후처리 작업 프로세스: 원본 스크립트(참고용) 만들기, 올린 파일은 받아 적어 회의 기록으로.
 
 서버가 `python -m scribe.worker <job_id>`로 별도 프로세스를 띄운다. MLX/Metal 메모리를 서버와
 분리하고, 3~5시간 파일을 처리하는 동안에도 실시간 녹음이 영향을 덜 받게 하기 위함이다.
@@ -131,7 +131,7 @@ def _diarize(wav: str, kind: str, num_speakers, on_progress=None) -> dict:
     diarizer = make_diarizer(kind)
     audio = read_audio(Path(wav))
     turns = diarizer.diarize(Path(wav), audio, num_speakers=num_speakers, on_progress=on_progress)
-    return {"turns": turns, "embeddings": diarizer.embeddings}
+    return {"turns": turns}
 
 
 def _diarize_child(conn, wav: str, kind: str, num_speakers) -> None:
@@ -280,9 +280,8 @@ def run(job_id: str) -> int:
                 f.unlink()
 
         turns: list[dict] = []
-        embeddings = None
         if diar_saved is not None:
-            turns, embeddings = diar_saved["turns"], diar_saved.get("embeddings")
+            turns = diar_saved["turns"]
         elif diar_kind != "none":
             try:
                 if parallel is not None:
@@ -291,9 +290,9 @@ def run(job_id: str) -> int:
                 else:
                     prog.set("diarize", 0.0, "화자 구분 중", force=True)
                     res = _diarize(str(wav), diar_kind, num_speakers, on_progress=lambda f: prog.set("diarize", f))
-                turns, embeddings = res["turns"], res.get("embeddings")
+                turns = res["turns"]
                 ck.drop_prefix("diar_", keep=diar_key)
-                ck.save(diar_key, {"turns": turns, "embeddings": embeddings})
+                ck.save(diar_key, {"turns": turns})
             except Exception as exc:  # noqa: BLE001 - 화자 구분 실패해도 전사는 살린다
                 diar_name = f"{diar_name} (실패: {type(exc).__name__})"
                 prog.notes.append(f"화자 구분을 건너뛰었어요: {exc}")
@@ -306,7 +305,6 @@ def run(job_id: str) -> int:
         data = build_utterances(segments, turns, boundaries)
         data["duration"] = duration
         data["language"] = settings.language
-        data.pop("speaker_map", None)
         # 원본 스크립트: 참고용으로만 남긴다 (회의 기록과 섞지 않는다)
         version = store.save_final_version(mid, data, engine=describe_final(), diarizer=diar_name)
         if meeting.get("source") == "upload":
@@ -328,8 +326,7 @@ def run(job_id: str) -> int:
         if work is not None:
             work.unlink(missing_ok=True)
         store.update_job(job_id, status="error", error=f"{type(exc).__name__}: {exc}", message=tb[-2000:], finished_at=time.time())
-        has_final = store.get_final(mid) is not None
-        store.update_meeting(mid, status="ready" if has_final else "error")
+        store.update_meeting(mid, status=store.status_after_job(mid))
         print(tb, file=sys.stderr)
         return 1
 

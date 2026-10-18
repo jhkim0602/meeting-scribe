@@ -13,7 +13,7 @@ export async function uploadFiles(files: FileList | File[]) {
       const m = await api.upload(f)
       await st.loadMeetings()
       location.hash = `#/m/${m.id}`
-      st.toast('올렸어요. 원본을 만들기 시작했어요.', 'success')
+      st.toast('올렸어요. 받아 적기를 시작했어요.', 'success')
     } catch (e) {
       st.toast(`업로드 실패: ${(e as Error).message}`, 'error')
     }

@@ -113,13 +113,6 @@ export function unitAtTime(units: { t0: number; t1: number; id: string }[], t: n
 }
 
 export function timeAtOffset(u: Unit, offset: number): number {
-  if (u.words && u.words.length) {
-    for (const [o, l, s, e] of u.words) {
-      if (offset < o) return s
-      if (offset < o + l) return s + ((e - s) * (offset - o)) / Math.max(1, l)
-    }
-    return u.words[u.words.length - 1][3]
-  }
   const n = Math.max(1, u.text.length)
   return u.t0 + ((u.t1 - u.t0) * Math.min(offset, n)) / n
 }

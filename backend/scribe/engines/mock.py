@@ -1,6 +1,6 @@
-"""개발/시연용 가짜 엔진. 실제 모델 없이 전체 흐름(실시간 → 원본 → 첨삭 재배치)을 확인할 수 있다.
+"""개발/시연용 가짜 엔진. 실제 모델 없이 전체 흐름(실시간 기록 → 원본 스크립트)을 확인할 수 있다.
 
-같은 오디오 시간에는 실시간과 원본이 같은 대본 위치를 가리키되, 원본은 숫자/띄어쓰기/문장부호가
+같은 오디오 시간에는 실시간과 원본 스크립트가 같은 대본 위치를 가리키되, 원본 스크립트는 숫자/띄어쓰기/문장부호가
 조금 다르게 나오도록 만들어 실제 ASR 버전 차이를 흉내 낸다.
 """
 
@@ -58,7 +58,7 @@ class MockAsr(AsrEngine):
         super().__init__(model)
         self.final = final
         self.offset_hint = 0.0  # 실시간 엔진은 절대 시간을 알아야 대본 위치를 맞출 수 있다
-        self.base_offset = 0.0  # 원본을 창별로 만들 때 이 창이 파일의 몇 초부터인지
+        self.base_offset = 0.0  # 원본 스크립트를 창별로 만들 때 이 창이 파일의 몇 초부터인지
         self._window_offset = 0.0
 
     def transcribe(self, audio: np.ndarray, *, language: str, context: str = "", t0: Optional[float] = None) -> str:
@@ -121,7 +121,4 @@ class MockDiarizer(Diarizer):
             i += 1
         if on_progress:
             on_progress(1.0)
-        # 같은 사람(A/B/C)은 회의가 달라도 비슷한 목소리 특징을 낸다
-        basis = {"A": [1.0, 0.1, 0.0, 0.0], "B": [0.0, 1.0, 0.1, 0.0], "C": [0.1, 0.0, 1.0, 0.0]}
-        self.embeddings = {sp: basis[sp] for sp in {t["speaker"] for t in turns}}
         return turns

@@ -298,7 +298,7 @@ function afterReady(s: Session, r: Ready) {
   s.offset = r.offset
   s.sent = 0
   if (r.divider) refreshLiveSoon(s.meetingId)
-  if (r.cancelled_job) store().toast('원본 만들기를 멈추고 이어서 녹음해요. 녹음을 마치면 처음부터 다시 만들어요.')
+  if (r.cancelled_job) store().toast('원본 스크립트 만들기를 멈추고 이어서 녹음해요. 녹음을 마치면 다시 만들어요.')
   if (r.disk_free_s !== undefined) {
     if (r.disk_free_s < DISK_LOW_S) raise({ kind: 'disk-low', freeS: r.disk_free_s })
     else clearAlert('disk-low')
@@ -658,7 +658,7 @@ export async function stopRecording(): Promise<Job | null> {
   }
   // 실수로 끝냈을 때 바로 되돌릴 수 있게
   st.toast(
-    job ? '녹음을 마쳤어요. 원본을 만들기 시작했어요.' : '녹음을 마쳤어요.',
+    '녹음을 마쳤어요.',
     'success',
     { label: '이어서 녹음', run: () => startRecording(meetingId, s.deviceId).catch(() => undefined) },
     10000,

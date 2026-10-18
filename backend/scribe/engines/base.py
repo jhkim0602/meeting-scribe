@@ -58,8 +58,6 @@ class AsrEngine:
 
 class Diarizer:
     name = "none"
-    # diarize() 뒤에 채워지는 화자별 목소리 특징 {라벨: 벡터} (지원할 때만)
-    embeddings: Optional[dict] = None
 
     def describe(self) -> str:
         return self.name

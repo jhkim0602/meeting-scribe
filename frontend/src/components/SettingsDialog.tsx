@@ -71,7 +71,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             </label>
             <label className="check">
               <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} />
-              녹음을 마치면 자동으로 원본 만들기
+              녹음을 마치면 원본 스크립트(참고용) 자동으로 만들기
             </label>
             <label className="field-inline">
               <span>조용한 시간이 이어지면 쉬는 시간인지 묻기</span>
@@ -95,7 +95,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                   <span className="muted"> · 남은 공간 {fmtBytes(storage.free_bytes)} (약 {Math.floor(storage.free_s / 3600)}시간 더 녹음할 수 있어요)</span>
                 </p>
                 <p className="storage-help muted">
-                  원본까지 만든 회의는 6시간 뒤 녹음 파일을 m4a로 줄여 1시간에 약 29MB만 써요.
+                  원본 스크립트까지 만든 회의는 6시간 뒤 녹음 파일을 m4a로 줄여 1시간에 약 29MB만 써요.
                   <a className="storage-backup" href="/api/backup.zip" download>전체 백업 내려받기</a>
                 </p>
               </>
@@ -105,7 +105,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
           </section>
           <section>
             <h3>Claude 연결 (MCP)</h3>
-            <p className="muted">내가 구독한 Claude가 회의 기록·노트·첨삭을 읽고 요약을 이 앱에 저장할 수 있어요.</p>
+            <p className="muted">내가 구독한 Claude가 회의 기록·노트·메모·댓글을 읽고 요약을 이 앱에 저장할 수 있어요.</p>
             <p className="field-label">Claude Code</p>
             <CopyBlock text={`claude mcp add meeting-scribe -- ${mcpPath}`} />
             <p className="field-label">Claude Desktop · 설정 → 개발자 → 구성 편집</p>
@@ -118,7 +118,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             {health ? (
               <dl className="kv">
                 <dt>실시간</dt><dd>{health.live.kind} · {health.live.model} <em className={`st-${health.live.state}`}>{health.live.state}</em></dd>
-                <dt>원본</dt><dd>{health.final.kind} · {health.final.model}</dd>
+                <dt>원본 스크립트</dt><dd>{health.final.kind} · {health.final.model}</dd>
                 <dt>화자 구분</dt><dd>{health.diarizer === 'none' ? '사용 안 함 (HF_TOKEN 설정 필요)' : health.diarizer}</dd>
                 <dt>데이터 위치</dt><dd><code>{health.data_dir}</code></dd>
                 <dt>잠자기 방지</dt><dd>{health.keep_awake ? '녹음 중 caffeinate' : '브라우저 화면 꺼짐 방지'}</dd>

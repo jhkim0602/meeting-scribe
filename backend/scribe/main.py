@@ -18,7 +18,7 @@ from pydantic import BaseModel
 
 from . import __version__
 from .anchors import anchor_from_request
-from .audio import ffmpeg_path, wav_info
+from .audio import ffmpeg_path
 from .config import settings
 from .db import Store
 from .engines import LiveEngineHolder, engines_info
@@ -247,7 +247,7 @@ def _known_people(exclude: Optional[str] = None) -> dict[str, dict]:
 @app.get("/api/participants/suggest")
 def suggest_participants() -> list[dict]:
     """참여자 이름 자동 완성: 최근 회의 참여자(소속·직무와 함께) + 목소리를 기억하는 사람"""
-    voices = {s["name"] for s in store.list_voice_samples()}
+    voices = {s["name"] for s in store.list_voice_samples() if (s.get("space") or "").startswith("live")}
     seen: dict[str, dict] = {}
     for name, info in _known_people().items():
         seen.setdefault(name, {"name": name, "voice": name in voices, **info})
@@ -454,7 +454,7 @@ def put_summary(meeting_id: str, body: SummaryIn) -> dict:
     return get_summary(meeting_id)
 
 
-# ---------------- 첨삭(메모/댓글/수정/강조) ----------------
+# ---------------- 메모·댓글·강조·구분선 ----------------
 
 class AnnotationIn(BaseModel):
     kind: str  # comment | memo | highlight | divider
@@ -648,7 +648,7 @@ def _after_stop(meeting_id: str) -> Optional[dict]:
 
 
 def _before_resume(meeting_id: str) -> bool:
-    """원본을 만드는 중에 다시 녹음하면 그 작업을 취소한다. 취소했으면 True."""
+    """원본 스크립트를 만드는 중에 다시 녹음하면 그 작업을 취소한다. 취소했으면 True."""
     latest = store.latest_job(meeting_id)
     if latest and latest["status"] in ("queued", "running"):
         jobs.cancel(meeting_id)

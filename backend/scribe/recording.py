@@ -229,7 +229,7 @@ async def handle_recording(
         await ws.send_text(json.dumps({"type": "error", "message": "저장 공간이 거의 없어 녹음할 수 없어요. 공간을 비운 뒤 다시 시도해 주세요."}))
         await ws.close()
         return
-    # 원본을 만드는 중이면(예: 실수로 녹음 종료) 그 작업을 멈추고 이어서 녹음한다
+    # 원본 스크립트를 만드는 중이면(예: 실수로 녹음 종료) 그 작업을 멈추고 이어서 녹음한다
     cancelled_job = bool(on_resume(meeting_id)) if on_resume and meeting["status"] == "processing" else False
     holder.start_loading()
     mdir = settings.meeting_dir(meeting_id)

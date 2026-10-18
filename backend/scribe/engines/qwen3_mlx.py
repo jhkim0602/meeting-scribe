@@ -1,6 +1,6 @@
 """Qwen3-ASR (Apple Silicon, MLX) — mlx-qwen3-asr 패키지 사용.
 
-실시간: Qwen/Qwen3-ASR-0.6B, 원본: Qwen/Qwen3-ASR-1.7B + Qwen3-ForcedAligner(단어 타임스탬프).
+실시간: Qwen/Qwen3-ASR-0.6B, 원본 스크립트: Qwen/Qwen3-ASR-1.7B + Qwen3-ForcedAligner(단어 타임스탬프).
 """
 
 from __future__ import annotations

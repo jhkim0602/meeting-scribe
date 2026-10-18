@@ -30,7 +30,6 @@ export interface MeetingSummary {
 
 export interface Meeting extends MeetingSummary {
   original_name: string | null
-  speakers: Record<string, string>
   num_speakers: number | null
   final_version: number
   summary_md: string | null
@@ -73,16 +72,15 @@ export interface Unit {
   t0: number
   t1: number
   text: string
-  /** 원본: S1, S2 … / 실시간: 참여자 id */
+  /** 고른 화자 (참여자 id) */
   speaker?: string | null
-  /** 실시간: 목소리 묶음 (A, B …) */
+  /** 목소리 묶음 (A, B …) */
   speaker_auto?: string | null
-  /** 실시간: manual(직접 고름) | auto(목소리로 추정) */
+  /** manual(직접 고름) | auto(목소리로 추정) */
   speaker_src?: 'manual' | 'auto' | null
   speaker_conf?: number | null
   /** 직접 고친 문장: 처음 받아 적은 글자 */
   text_orig?: string
-  words?: [number, number, number, number][]
   idx?: number
 }
 

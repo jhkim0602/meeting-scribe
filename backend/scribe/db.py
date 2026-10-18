@@ -146,7 +146,7 @@ class Store:
             "CREATE TABLE IF NOT EXISTS voice_samples (meeting_id TEXT NOT NULL, label TEXT NOT NULL, name TEXT NOT NULL,"
             " embedding TEXT NOT NULL, updated_at REAL NOT NULL, PRIMARY KEY (meeting_id, label))"
         )
-        # 목소리 특징의 종류: 원본 화자 구분(diar)과 실시간(live:…)은 서로 비교하지 않는다
+        # 목소리 특징의 종류(live:…): 같은 종류끼리만 비교한다 (예전 diar 항목은 쓰지 않는다)
         vcols = {r["name"] for r in c.execute("PRAGMA table_info(voice_samples)").fetchall()}
         if "space" not in vcols:
             c.execute("ALTER TABLE voice_samples ADD COLUMN space TEXT NOT NULL DEFAULT 'diar'")
@@ -395,10 +395,20 @@ class Store:
                 (meeting_id, version, time.time(), engine, diarizer, json.dumps(data, ensure_ascii=False)),
             )
             c.execute("UPDATE meetings SET final_version=?, updated_at=? WHERE id=?", (version, time.time(), meeting_id))
-            # 원본은 최근 KEEP_FINAL_VERSIONS개만 남긴다 (첨삭은 시간+인용문으로 묶여 있어 옛 버전이 없어도 된다)
+            # 원본 스크립트는 참고용이라 마지막 것만 남긴다 (회의 기록과 메모·댓글은 여기에 묶여 있지 않다)
             c.execute("DELETE FROM final_versions WHERE meeting_id=? AND version<=?", (meeting_id, version - KEEP_FINAL_VERSIONS))
             c.execute("COMMIT")
         return version
+
+    def status_after_job(self, meeting_id: str, failed: bool = True) -> str:
+        """원본 스크립트 작업이 끝나지 못했을 때의 회의 상태: 기록이 있으면 회의는 멀쩡하다."""
+        if self.get_final(meeting_id):
+            return "ready"
+        with self.conn() as c:
+            has_record = c.execute("SELECT 1 FROM live_segments WHERE meeting_id=? LIMIT 1", (meeting_id,)).fetchone() is not None
+        if has_record:
+            return "recorded"
+        return "error" if failed else "empty"
 
     def get_final(self, meeting_id: str, version: Optional[int] = None) -> Optional[dict]:
         with self.conn() as c:
