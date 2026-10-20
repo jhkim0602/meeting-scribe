@@ -156,7 +156,7 @@ def test_worker_waits_while_paused_then_finishes(tmp_path):
     progress = store.get_job(job["id"])["progress"]
     time.sleep(1.5)
     assert store.get_job(job["id"])["progress"] == progress and proc.poll() is None
-    (mdir / "pause").unlink()
+    (mdir / ".work" / "pause").unlink()
     assert proc.wait(timeout=120) == 0
     j = store.get_job(job["id"])
     assert j["status"] == "done" and j["waiting"] is None
