@@ -11,6 +11,7 @@ import re
 import sqlite3
 import time
 import zipfile
+from contextlib import closing
 from pathlib import Path
 from typing import Iterator
 
@@ -79,7 +80,8 @@ def iter_backup(store: Store, views: Views) -> Iterator[bytes]:
     with zipfile.ZipFile(sink, "w", allowZip64=True) as zf:
         snap = settings.data_dir / ".backup-snapshot.db"
         try:
-            with sqlite3.connect(store.path) as src, sqlite3.connect(snap) as dst:
+            # 꼭 닫는다: 윈도우는 열려 있는 사본 파일을 지우지 못한다
+            with closing(sqlite3.connect(store.path)) as src, closing(sqlite3.connect(snap)) as dst:
                 src.backup(dst)
             yield from _add_file(zf, sink, snap, "scribe.db", compress=True)
         finally:

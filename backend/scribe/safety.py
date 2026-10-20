@@ -11,6 +11,7 @@ import shutil
 import sqlite3
 import sys
 import time
+from contextlib import closing
 from pathlib import Path
 from typing import Optional
 
@@ -26,7 +27,8 @@ def check_and_recover(db: Path) -> Optional[str]:
     if not db.exists():
         return None
     try:
-        with sqlite3.connect(db) as c:
+        # with sqlite3.connect()는 닫아 주지 않는다: 윈도우는 열린 파일을 옮기지 못하므로 꼭 닫는다
+        with closing(sqlite3.connect(db)) as c:
             ok = c.execute("PRAGMA quick_check").fetchone()[0] == "ok"
     except sqlite3.DatabaseError:
         ok = False
@@ -48,24 +50,28 @@ def check_and_recover(db: Path) -> Optional[str]:
 
 
 def backup_daily(db: Path) -> Optional[Path]:
-    """오늘 사본이 없으면 만든다 (SQLite 백업: 쓰는 중에도 일관된 사본). 만든 파일."""
+    """오늘 사본이 없으면 만든다 (SQLite 백업: 쓰는 중에도 일관된 사본). 만든 파일.
+    사본은 덤이다: 어떤 까닭으로 실패해도 서버가 멈추지 않게 로그만 남긴다."""
     folder = backups_dir(db)
     target = folder / f"scribe-{time.strftime('%Y-%m-%d')}.db"
     if target.exists() or not db.exists():
         return None
-    folder.mkdir(parents=True, exist_ok=True)
     tmp = target.with_suffix(".tmp")
     try:
-        with sqlite3.connect(db) as src, sqlite3.connect(tmp) as dst:
+        folder.mkdir(parents=True, exist_ok=True)
+        with closing(sqlite3.connect(db)) as src, closing(sqlite3.connect(tmp)) as dst:
             src.backup(dst)
         tmp.replace(target)
-    except (sqlite3.Error, OSError) as exc:
-        tmp.unlink(missing_ok=True)
-        print(f"DB 사본을 만들지 못했어요: {exc}", file=sys.stderr, flush=True)
+        for old in sorted(folder.glob("scribe-*.db"))[:-KEEP]:
+            old.unlink(missing_ok=True)
+        return target
+    except Exception as exc:  # noqa: BLE001
+        print(f"DB 사본을 만들지 못했어요: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
         return None
-    for old in sorted(folder.glob("scribe-*.db"))[:-KEEP]:
-        old.unlink(missing_ok=True)
-    return target
 
 
 def sync_folder_warning(data_dir: Path) -> Optional[str]:

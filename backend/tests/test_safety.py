@@ -128,3 +128,43 @@ def test_old_cpu_falls_back_from_int8(monkeypatch):
     start = notices.since(0)[-1]["id"] if notices.since(0) else 0
     FasterWhisperEngine("small").load()
     assert calls == ["int8", "default"] and any("int8" in n["text"] for n in notices.since(start))
+
+
+def test_backup_failure_never_crashes_startup(tmp_path, monkeypatch):
+    """윈도우처럼 사본 파일을 옮기지 못해도 서버가 멈추지 않는다 (로그만 남긴다)."""
+    db = tmp_path / "scribe.db"
+    _db(db)
+
+    def locked(self, target):
+        raise PermissionError("[WinError 32] The process cannot access the file because it is being used by another process")
+
+    monkeypatch.setattr(Path, "replace", locked)
+    monkeypatch.setattr(Path, "unlink", lambda self, missing_ok=False: (_ for _ in ()).throw(PermissionError("locked")))
+    assert safety.backup_daily(db) is None  # 예외를 던지지 않는다
+
+
+def test_connections_are_closed_after_backup_and_check(tmp_path):
+    """연결을 닫아야 윈도우에서 사본을 옮기고 깨진 DB를 옆으로 옮길 수 있다."""
+    db = tmp_path / "scribe.db"
+    _db(db)
+    opened = []
+    real = sqlite3.connect
+
+    def tracking(*a, **k):
+        c = real(*a, **k)
+        opened.append(c)
+        return c
+
+    import scribe.safety as s
+    s.sqlite3.connect = tracking
+    try:
+        s.check_and_recover(db)
+        s.backup_daily(db)
+    finally:
+        s.sqlite3.connect = real
+    for c in opened:
+        try:
+            c.execute("SELECT 1")
+            raise AssertionError("열린 연결이 남았어요")
+        except sqlite3.ProgrammingError:
+            pass  # 닫힘
