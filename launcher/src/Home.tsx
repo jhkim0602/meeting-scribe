@@ -277,7 +277,7 @@ export function Home({ state, refresh, onQuit }: { state: AppState; refresh: () 
             <div className="s-value">받은 모델마다 크기를 보고 지우거나, 회의 노트를 깨끗이 지워요</div>
           </div>
           <button className="btn small" onClick={() => setPanel(panel === 'storage' ? null : 'storage')}>{panel === 'storage' ? '닫기' : '보기'}</button>
-          {panel === 'storage' && <StoragePanel notRecording={notRecording} />}
+          {panel === 'storage' && <StoragePanel notRecording={notRecording} serverUrl={server.url} />}
         </li>
 
         <li>
