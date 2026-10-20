@@ -5,7 +5,7 @@
     "moona3k/mlx-qwen3-asr-1.7b-8bit": 2.0,
     "Qwen/Qwen3-ASR-0.6B": 1.88,
     "Qwen/Qwen3-ASR-1.7B": 4.7,
-    "Qwen/Qwen3-ForcedAligner-0.6B": 1.84,
+    "Qwen/Qwen3-ForcedAligner-0.6B": 1.71,
     "mlx-community/whisper-large-v3-turbo": 1.6,
     "Systran/faster-whisper-base": 0.13,
     "Systran/faster-whisper-small": 0.45,

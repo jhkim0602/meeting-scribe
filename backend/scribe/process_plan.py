@@ -13,13 +13,12 @@ from typing import Optional
 from . import catalog
 from .db import Store
 from .engines import model_for, resolve_diarizer_kind
-from .engines.download import downloaded_bytes, repo_dir
+from .engines.download import downloaded_bytes
 
 
 def _downloaded(repos: list[str]) -> bool:
-    """받아 둔 모델인지. MLX 모델은 무게 파일을 Hugging Face 캐시 밖에 두기도 해서, 받기를 마친 표시(refs/main)도 본다."""
     sizes = catalog.sizes_bytes()
-    return all(downloaded_bytes(r) >= sizes.get(r, 0) * 0.97 or (repo_dir(r) / "refs" / "main").exists() for r in repos)
+    return all(downloaded_bytes(r) >= sizes.get(r, 0) * 0.97 for r in repos)
 
 
 def measured_rates(store: Store) -> dict[tuple[str, bool], float]:

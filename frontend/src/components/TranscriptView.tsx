@@ -219,11 +219,25 @@ const TurnRow = memo(function TurnRow(p: TurnProps) {
   const body = useRef<HTMLDivElement>(null)
   const [hu, setHu] = useState<{ id: string; top: number } | null>(null)
   const first = turn.units[0]
-  const onOver = (e: RMouseEvent) => {
-    const el = (e.target as HTMLElement).closest<HTMLElement>('.utext')
-    if (!el || !body.current || el.dataset.unit === hu?.id) return
-    setHu({ id: el.dataset.unit!, top: Math.max(0, el.getBoundingClientRect().top - body.current.getBoundingClientRect().top - 2) })
-    p.onHoverUnit(el.dataset.unit!)
+  // 글자 위가 아니어도 그 줄 어디에 올리면(줄 끝 빈 곳, 오른쪽 버튼 위) 그 줄의 문장에 버튼을 띄운다
+  const onMove = (e: RMouseEvent) => {
+    if (!body.current) return
+    let el = (e.target as HTMLElement).closest<HTMLElement>('.utext')
+    let line: DOMRect | undefined
+    if (el) {
+      line = [...el.getClientRects()].find((r) => e.clientY >= r.top && e.clientY <= r.bottom)
+    } else {
+      // 마우스 높이에 있는 줄들 중, 마우스보다 왼쪽에서 끝나는 마지막 문장 (줄 끝 빈 곳이면 그 줄의 마지막 문장)
+      for (const u of body.current.querySelectorAll<HTMLElement>('.utext')) {
+        const r = [...u.getClientRects()].find((r) => e.clientY >= r.top && e.clientY <= r.bottom)
+        if (r && (!line || r.left <= e.clientX)) [el, line] = [u, r]
+      }
+    }
+    if (!el || !line) return
+    const top = Math.max(0, line.top - body.current.getBoundingClientRect().top - 2)
+    if (hu && el.dataset.unit === hu.id && Math.abs(top - hu.top) < 1) return
+    setHu({ id: el.dataset.unit!, top })
+    if (el.dataset.unit !== hu?.id) p.onHoverUnit(el.dataset.unit!)
   }
   const target = (hu && turn.units.find((u) => u.id === hu.id)) || null
   const comments = turn.units.flatMap((u) => model.commentEnds.get(u.id) || [])
@@ -236,7 +250,7 @@ const TurnRow = memo(function TurnRow(p: TurnProps) {
           <SpeakerChip turn={turn} participants={p.participants} onPick={(rect) => p.onPickSpeaker(turn.units.map((u) => u.id), rect, false)} />
         </div>
       )}
-      <div className="turn-body" ref={body} onMouseOver={onOver} onMouseLeave={() => { setHu(null); p.onHoverUnit(null) }}>
+      <div className="turn-body" ref={body} onMouseMove={onMove} onMouseLeave={() => { setHu(null); p.onHoverUnit(null) }}>
         <button className="u-time" onClick={() => seekTo(first.t0)} title={p.timeTitle(first.t0)}>
           {p.timeLabel(first.t0)}
         </button>

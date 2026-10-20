@@ -34,10 +34,17 @@ def repo_dir(repo: str) -> Path:
 
 def downloaded_bytes(repo: str) -> int:
     """받은 양: blobs(받는 중인 것 포함) + snapshots의 진짜 파일.
-    윈도우(개발자 모드가 아니면 심볼릭 링크를 못 만든다)에서는 다 받은 파일이 blobs에서 snapshots로 옮겨진다."""
+    - blobs의 링크는 따라가서 센다: 큰 파일은 여러 모델이 같이 쓰는 hub/blobs/xx/ 에 한 번만 두고 링크로 가리킨다
+    - snapshots의 링크는 blobs를 가리키므로 세지 않는다 (두 번 세지 않게)
+    - 윈도우(개발자 모드가 아니면 링크를 못 만든다)에서는 다 받은 파일이 snapshots에 진짜 파일로 있다"""
     root = repo_dir(repo)
     total = 0
-    for f in [*(root / "blobs").glob("*"), *(root / "snapshots").glob("*/**/*")]:
+    for f in (root / "blobs").glob("*"):
+        try:
+            total += f.stat().st_size  # 링크면 가리키는 파일의 크기
+        except OSError:
+            pass  # 끊어진 링크
+    for f in (root / "snapshots").glob("*/**/*"):
         try:
             if f.is_file() and not f.is_symlink():
                 total += f.stat().st_size

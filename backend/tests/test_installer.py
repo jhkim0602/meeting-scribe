@@ -39,7 +39,7 @@ def test_catalog_choices_sizes_and_recommendation():
             assert catalog.for_os(catalog.choice(role, rec[role]), os_name), (os_name, role)
     repos = catalog.repos_for("qwen3-0.6b-8bit", "qwen3-0.6b-8bit")
     assert repos == ["moona3k/mlx-qwen3-asr-0.6b-8bit", "Qwen/Qwen3-ForcedAligner-0.6B"]  # 같은 모델은 한 번만
-    assert catalog.total_gb(repos) == 2.64
+    assert catalog.total_gb(repos) == 2.51
     for role in ("live", "final"):
         for c in catalog.CATALOG[role]:
             assert all(r in catalog.CATALOG["sizes_gb"] for r in c["repos"]), c["id"]

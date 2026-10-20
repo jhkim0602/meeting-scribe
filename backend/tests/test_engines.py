@@ -69,6 +69,20 @@ def test_downloaded_bytes_counts_both_cache_layouts(tmp_path, monkeypatch):
     (root / "snapshots" / "rev" / "model.bin").symlink_to(root / "blobs" / "abc")
     assert download.downloaded_bytes("a/linked") == 100  # 링크는 두 번 세지 않는다
 
+    # 맥(지금 huggingface_hub): 큰 파일은 공용 창고 hub/blobs/xx/ 에 한 번만, 모델의 blobs는 그곳을 가리키는 링크
+    shared = tmp_path / "blobs" / "9d"
+    shared.mkdir(parents=True)
+    (shared / "9d65").write_bytes(b"x" * 1000)
+    root = tmp_path / "models--a--shared"
+    (root / "blobs").mkdir(parents=True)
+    (root / "snapshots" / "rev").mkdir(parents=True)
+    (root / "blobs" / "eba2").symlink_to(shared / "9d65")
+    (root / "blobs" / "cfg").write_bytes(b"x" * 10)
+    (root / "snapshots" / "rev" / "weights.safetensors").symlink_to(root / "blobs" / "eba2")
+    (root / "snapshots" / "rev" / "config.json").symlink_to(root / "blobs" / "cfg")
+    (root / "blobs" / "broken").symlink_to(tmp_path / "nowhere")
+    assert download.downloaded_bytes("a/shared") == 1010  # 링크를 따라가서 세고, 끊어진 링크는 넘어간다
+
     root = tmp_path / "models--a--copied"
     (root / "blobs").mkdir(parents=True)
     (root / "snapshots" / "rev" / "sub").mkdir(parents=True)
