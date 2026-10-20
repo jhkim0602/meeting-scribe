@@ -1,4 +1,4 @@
-import { CalendarDays, Clock3, Download, FileAudio, FileText, Mic, MoreHorizontal, PanelLeft, RefreshCw, ScrollText, Trash2 } from 'lucide-react'
+import { CalendarDays, Clock3, Download, FileAudio, FileText, FolderDown, Mic, MoreHorizontal, PanelLeft, RefreshCw, ScrollText, Trash2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api'
 import { deleteLater } from '../lib/annActions'
@@ -153,6 +153,9 @@ export function PageHeader() {
           <button className="menu-item" onClick={() => openDoc('minutes')}>
             <FileText size={15} />회의록 보기
           </button>
+          <a className="menu-item" href={`/api/meetings/${meeting.id}/export.zip`} onClick={() => setMenu(null)} title="날짜_제목 폴더: 전사 기록·회의록 HTML과 녹음. 회의 노트에서 다시 불러와 이어서 고칠 수 있어요">
+            <FolderDown size={15} />회의 내보내기 (HTML + 녹음)
+          </a>
           <a className="menu-item" href={`/api/meetings/${meeting.id}/export.md?download=1`} onClick={() => setMenu(null)}>
             <Download size={15} />Markdown으로 내보내기
           </a>

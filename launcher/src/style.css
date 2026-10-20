@@ -50,6 +50,7 @@ a:hover { text-decoration: underline; }
 .ext { width: 10px; height: 10px; margin-left: 2px; vertical-align: -1px; fill: none; stroke: currentColor; stroke-width: 1.4; }
 .muted { color: var(--text-2); }
 .small { font-size: 12.5px; }
+.link { background: none; border: 0; padding: 0; font: inherit; color: var(--text-2); text-decoration: underline; cursor: pointer; }
 .lead { color: var(--text-2); margin-top: 6px; }
 .loading { min-height: 100vh; }
 

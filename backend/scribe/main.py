@@ -117,6 +117,35 @@ def health() -> dict:
     }
 
 
+@app.get("/api/system/memory")
+def memory() -> dict:
+    """설정 → 고급: 이 컴퓨터와 회의 노트가 쓰는 메모리, 모델 상태, 녹음 중 밀린 소리"""
+    from . import live_speakers, memstat
+
+    return {
+        "system": memstat.system(),
+        "server": memstat.process_bytes(os.getpid()),
+        "jobs": [{"meeting_id": j["meeting_id"], "bytes": memstat.process_bytes(j["pid"])} for j in store.active_jobs() if j.get("pid")],
+        "live_model": holder.info(),
+        "speaker_model": live_speakers.status(),
+        "recording": [{"meeting_id": mid, "backlog_s": round(s.seg.pending_s, 1)} for mid, s in list(sessions.items())],
+    }
+
+
+@app.get("/api/logs/server")
+def server_log(lines: int = 300) -> dict:
+    """서버 로그 끝부분 (앱으로 설치했을 때 실행기가 SCRIBE_SERVER_LOG로 위치를 알려 준다)"""
+    path = os.environ.get("SCRIBE_SERVER_LOG")
+    if not path or not os.path.exists(path):
+        return {"path": path, "available": False, "lines": []}
+    with open(path, "rb") as f:
+        f.seek(max(0, os.path.getsize(path) - 256 * 1024))
+        text = f.read().decode("utf-8", errors="replace")
+    # 진행 막대(\r로 덮어쓰는 줄)는 마지막 모습만
+    out = [ln.rstrip("\r").split("\r")[-1] for ln in text.rstrip("\n").split("\n")]
+    return {"path": path, "available": True, "lines": out[-max(1, min(lines, 2000)):]}
+
+
 def _app_mcp_entry() -> Optional[dict]:
     if not os.environ.get("SCRIBE_CONFIG"):
         return None  # 터미널로 설치: scripts/mcp.sh
@@ -675,6 +704,29 @@ def backup() -> StreamingResponse:
 
     headers = {"Content-Disposition": _attachment(backup_name(), "meeting-scribe-backup.zip")}
     return StreamingResponse(iter_backup(store, views), media_type="application/zip", headers=headers)
+
+
+@app.get("/api/meetings/{meeting_id}/export.zip")
+def export_meeting(meeting_id: str) -> StreamingResponse:
+    """회의 하나를 '날짜_제목' 폴더(HTML + 녹음)로"""
+    from .meeting_file import base_name, iter_zip
+
+    name = base_name(_meeting_or_404(meeting_id))
+    day = name.split("_", 1)[0]
+    headers = {"Content-Disposition": _attachment(f"{name}.zip", f"{day}_meeting.zip")}
+    return StreamingResponse(iter_zip(store, views, meeting_id, name), media_type="application/zip", headers=headers)
+
+
+@app.post("/api/import")
+def import_meeting_file(files: list[UploadFile] = File(...)) -> dict:
+    """내보낸 회의(zip, 또는 HTML + 녹음)를 새 회의로 불러온다"""
+    from .meeting_file import MeetingFileError, import_meeting, read_files
+
+    try:
+        data, audio = read_files([(f.filename or "", f.file) for f in files])
+        return _meeting_detail(import_meeting(store, data, audio))
+    except MeetingFileError as exc:
+        raise HTTPException(400, str(exc))
 
 
 @app.get("/api/search")

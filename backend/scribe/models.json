@@ -7,7 +7,7 @@
     "Qwen/Qwen3-ASR-1.7B": 4.7,
     "Qwen/Qwen3-ForcedAligner-0.6B": 1.84,
     "mlx-community/whisper-large-v3-turbo": 1.6,
-    "Systran/faster-whisper-base": 0.14,
+    "Systran/faster-whisper-base": 0.13,
     "Systran/faster-whisper-small": 0.45,
     "mobiuslabsgmbh/faster-whisper-large-v3-turbo": 1.51,
     "pyannote/speaker-diarization-community-1": 0.03,

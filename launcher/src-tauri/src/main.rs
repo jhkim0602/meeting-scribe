@@ -13,6 +13,7 @@ mod install;
 mod paths;
 mod server;
 mod sys;
+mod update;
 
 use paths::Paths;
 use serde_json::{json, Value};
@@ -105,10 +106,12 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let window = MenuItem::with_id(app, "window", "설치·설정 창", true, None::<&str>)?;
     let folder = MenuItem::with_id(app, "folder", "녹음·기록 폴더 열기", true, None::<&str>)?;
     let restart = MenuItem::with_id(app, "restart", "서버 다시 켜기", true, None::<&str>)?;
+    let update = MenuItem::with_id(app, "update", "업데이트 확인", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "끝내기", true, None::<&str>)?;
+    app.manage(update::UpdateMenu(update.clone()));
     let menu = Menu::with_items(
         app,
-        &[&open, &window, &PredefinedMenuItem::separator(app)?, &folder, &restart, &PredefinedMenuItem::separator(app)?, &quit],
+        &[&open, &window, &PredefinedMenuItem::separator(app)?, &folder, &restart, &update, &PredefinedMenuItem::separator(app)?, &quit],
     )?;
     let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png"))?;
     TrayIconBuilder::with_id("main")
@@ -136,6 +139,11 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                 stop_server(app);
                 start_server(app.clone(), false);
             }
+            "update" => {
+                // 창에서 확인하고, 있으면 '지금 업데이트' 버튼을 보여 준다
+                show_main(app);
+                let _ = app.emit("update-check-now", ());
+            }
             "quit" => request_quit(app),
             _ => {}
         })
@@ -153,6 +161,7 @@ fn run_app(background: bool) {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec!["--background"])))
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(move |app| {
             let support = app.path().app_data_dir()?;
             let resources = std::env::var_os("MEETING_SCRIBE_RESOURCES").map(PathBuf::from).unwrap_or(app.path().resource_dir()?);
@@ -168,6 +177,7 @@ fn run_app(background: bool) {
                 installing: Mutex::new(false),
             });
             build_tray(app.handle())?;
+            update::watch(app.handle().clone());
             if needs {
                 show_main(app.handle()); // 설치 도우미
             } else {
@@ -205,6 +215,8 @@ fn run_app(background: bool) {
             autostart_set,
             quit,
             log_tail,
+            update_check,
+            update_install,
         ])
         .build(tauri::generate_context!())
         .expect("회의 노트를 시작하지 못했어요")
@@ -227,6 +239,22 @@ fn run_app(background: bool) {
 }
 
 // ---------------- 화면에서 부르는 명령 ----------------
+
+#[tauri::command]
+async fn update_check(app: AppHandle) -> Result<Option<Value>, String> {
+    update::check(&app).await
+}
+
+/// 녹음 중이면 거절한다 (바꾸려면 서버를 꺼야 하므로)
+#[tauri::command]
+async fn update_install(app: AppHandle) -> Result<(), String> {
+    let port = app.state::<AppState>().server.lock().unwrap().port;
+    if port != 0 && server::recording(port) {
+        return Err("녹음 중에는 업데이트할 수 없어요. 녹음을 마친 뒤 눌러 주세요.".into());
+    }
+    let (a, b) = (app.clone(), app.clone());
+    update::install(&app, move || stop_server(&a), move || start_server(b.clone(), false)).await
+}
 
 #[tauri::command]
 fn get_state(app: AppHandle, state: State<AppState>) -> Value {

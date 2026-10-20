@@ -71,7 +71,7 @@ def report_environment() -> None:
         print(f"  {'실시간' if role == 'live' else '원본 스크립트'}: {kind} · {model} · {state}")
     print(f"  정밀도: {settings.precision} · 화자 구분: {resolve_diarizer_kind()}")
     print(f"  저장 공간: 약 {disk_free_seconds(settings.data_dir) / 3600:.0f}시간 녹음 가능 ({settings.data_dir})")
-    print(f"  잠자기 방지: {'caffeinate' if KeepAwake.available() else '브라우저 화면 꺼짐 방지만'} · 전원: {power_source() or '알 수 없음'}")
+    print(f"  잠자기 방지: {'녹음 중 잠들지 않게 함' if KeepAwake.available() else '브라우저 화면 꺼짐 방지만'} · 전원: {power_source() or '알 수 없음'}")
 
 
 def synthesize(workdir: Path) -> Optional[tuple[Path, list[tuple[float, float]], str]]:

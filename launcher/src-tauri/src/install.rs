@@ -74,6 +74,8 @@ pub fn python_env(paths: &Paths) -> Vec<(String, String)> {
         // 앱 안(서명된 번들)에 .pyc를 쓰지 않는다
         ("PYTHONPYCACHEPREFIX".into(), paths.support.join("pycache").display().to_string()),
         ("PYTHONUNBUFFERED".into(), "1".into()),
+        // 회의 화면의 설정 → 서버 로그에서 읽는다
+        ("SCRIBE_SERVER_LOG".into(), paths.logs().join("server.log").display().to_string()),
         // 윈도우 기본 인코딩(cp1252·cp949)으로는 한국어 출력이 깨지거나 멈춘다
         ("PYTHONUTF8".into(), "1".into()),
         ("HF_HUB_DISABLE_TELEMETRY".into(), "1".into()),

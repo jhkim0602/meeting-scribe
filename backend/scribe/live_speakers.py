@@ -99,6 +99,9 @@ class PyannoteEmbedder(Embedder):
         inf = Inference(model, window="whole")
         if torch.backends.mps.is_available():
             inf.to(torch.device("mps"))
+        else:
+            # CPU뿐인 PC(윈도우): 같은 서버의 실시간 받아쓰기가 코어를 쓰도록 2개만 쓴다 (문장 하나라 충분하다)
+            torch.set_num_threads(min(2, os.cpu_count() or 2))
         return inf
 
     def embed(self, audio, t0, t1):
@@ -388,6 +391,13 @@ def tracker_for(store: Store, meeting_id: str) -> SpeakerTracker:
         if t is None or t.store is not store:
             t = _trackers[meeting_id] = SpeakerTracker(store, meeting_id, emb.space if emb else "none")
         return t
+
+
+def status() -> dict:
+    """설정 → 고급의 메모리 보기용: 화자 특징 모델이 올라와 있는지, 실패 횟수, 화자 정보를 들고 있는 회의 수"""
+    e = _embedder
+    return {"loaded": getattr(e, "_inf", None) is not None, "error": getattr(e, "error", None),
+            "failures": getattr(e, "failures", 0), "meetings": len(_trackers)}
 
 
 def forget_tracker(meeting_id: str) -> None:

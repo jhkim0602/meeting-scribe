@@ -201,11 +201,13 @@ class Store:
         with self.conn() as c:
             c.execute("DELETE FROM search_fts")
         for m in self.list_meetings():
-            mid = m["id"]
-            self._fts_replace(mid, "title", [(None, None, m.get("title") or "")])
-            self._fts_replace(mid, "live", [(s["id"], s["t0"], s["text"]) for s in self.list_live_segments(mid)])
-            full = self.get_meeting(mid, with_notes=True) or {}
-            self._fts_replace(mid, "notes", _note_rows(full.get("notes_md") or ""))
+            self.reindex_meeting(m["id"])
+
+    def reindex_meeting(self, meeting_id: str) -> None:
+        full = self.get_meeting(meeting_id, with_notes=True) or {}
+        self._fts_replace(meeting_id, "title", [(None, None, full.get("title") or "")])
+        self._fts_replace(meeting_id, "live", [(s["id"], s["t0"], s["text"]) for s in self.list_live_segments(meeting_id)])
+        self._fts_replace(meeting_id, "notes", _note_rows(full.get("notes_md") or ""))
 
     def _fts_replace(self, meeting_id: str, kind: str, rows: list[tuple]) -> None:
         if getattr(self, "fts", True) is False:

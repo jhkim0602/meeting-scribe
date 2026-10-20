@@ -33,13 +33,14 @@ def repo_dir(repo: str) -> Path:
 
 
 def downloaded_bytes(repo: str) -> int:
-    blobs = repo_dir(repo) / "blobs"
-    if not blobs.exists():
-        return 0
+    """받은 양: blobs(받는 중인 것 포함) + snapshots의 진짜 파일.
+    윈도우(개발자 모드가 아니면 심볼릭 링크를 못 만든다)에서는 다 받은 파일이 blobs에서 snapshots로 옮겨진다."""
+    root = repo_dir(repo)
     total = 0
-    for f in blobs.iterdir():
+    for f in [*(root / "blobs").glob("*"), *(root / "snapshots").glob("*/**/*")]:
         try:
-            total += f.stat().st_size
+            if f.is_file() and not f.is_symlink():
+                total += f.stat().st_size
         except OSError:
             pass
     return total

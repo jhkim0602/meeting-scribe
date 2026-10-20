@@ -6,6 +6,7 @@ import { ExtLink, Logo, ModelSelect, StatusIcon, shortPath } from './ui'
 const SERVER_LABEL: Record<ServerStatus['state'], string> = { running: '켜져 있어요', starting: '켜는 중', stopped: '꺼져 있어요', error: '문제가 있어요' }
 
 type Panel = null | 'models' | 'speaker' | 'doctor'
+type Update = { version: string; current: string; notes?: string | null }
 
 /** 설치 뒤의 창: 회의 노트 열기, 설정 바꾸기, 점검, 끄기 */
 export function Home({ state, refresh, onQuit }: { state: AppState; refresh: () => Promise<void>; onQuit: () => void }) {
@@ -22,19 +23,35 @@ export function Home({ state, refresh, onQuit }: { state: AppState; refresh: () 
   const [free, setFree] = useState<number | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  const [update, setUpdate] = useState<Update | null>(null)
+  const [updating, setUpdating] = useState<{ done: number; total: number | null } | null>(null)
   const open = (url: string) => void call('open_link', { url })
   const dataDir = state.config.data_dir || state.paths.default_data_dir
 
+  /** manual: 직접 눌렀을 때만 '최신이에요'·실패를 알린다 (켤 때 확인은 조용히) */
+  const checkUpdate = (manual = false) =>
+    call<Update | null>('update_check')
+      .then((u) => {
+        setUpdate(u)
+        if (manual && !u) setNotice('최신 버전이에요.')
+      })
+      .catch((e) => manual && setNotice(`업데이트를 확인하지 못했어요: ${e}`))
+
   useEffect(() => {
-    let off: (() => void) | undefined
+    const offs: (() => void)[] = []
     let gone = false
-    on<ServerStatus>('server', setServer).then((f) => (gone ? f() : (off = f)))
+    const keep = (f: () => void) => (gone ? f() : offs.push(f))
+    on<Update>('update-available', setUpdate).then(keep)
+    on<null>('update-check-now', () => void checkUpdate(true)).then(keep)
+    on<{ done: number; total: number | null }>('update-progress', setUpdating).then(keep)
+    checkUpdate()
+    on<ServerStatus>('server', setServer).then(keep)
     const t = setInterval(() => call<AppState>('get_state').then((s) => setServer(s.server)), 4000)
     call<Machine>('machine_info').then(setMachine)
     installer<ClaudeStatus>('claude', 'status').then(setClaude).catch(() => undefined)
     return () => {
       gone = true
-      off?.()
+      offs.forEach((f) => f())
       clearInterval(t)
     }
   }, [])
@@ -59,6 +76,15 @@ export function Home({ state, refresh, onQuit }: { state: AppState; refresh: () 
     }
     setServer((s) => ({ ...s, state: 'starting' }))
     await call('server_start')
+  }
+  /** 받고, 서버를 끄고, 바꾸고, 다시 켠다 (녹음 중이면 하지 않는다) */
+  const installUpdate = async () => {
+    if (!(await notRecording())) return
+    setUpdating({ done: 0, total: null })
+    call('update_install').catch((e) => {
+      setUpdating(null)
+      setNotice(String(e))
+    })
   }
   const afterInstall = async () => {
     setInstalling(null)
@@ -90,7 +116,7 @@ export function Home({ state, refresh, onQuit }: { state: AppState; refresh: () 
 
   return (
     <div className="home">
-      <Header server={server} version={state.version} />
+      <Header server={server} version={state.version} onCheck={() => void checkUpdate(true)} />
 
       <div className="hero">
         <button className="btn primary big wide" onClick={() => call('open_app')} disabled={server.state === 'starting'}>
@@ -99,6 +125,20 @@ export function Home({ state, refresh, onQuit }: { state: AppState; refresh: () 
         <p className="muted small">브라우저에서 열려요 · {server.url}</p>
         {server.state === 'error' && server.error && <pre className="callout err">{server.error}</pre>}
         {notice && <p className="callout warn">{notice}</p>}
+        {update && (
+          <div className="callout ok">
+            새 버전 v{update.version}이 나왔어요 (지금 v{update.current}). 회의 기록과 받은 모델은 그대로예요.
+            <div className="row">
+              {updating ? (
+                <span className="muted small">
+                  {updating.total ? `받는 중 ${Math.round((updating.done / updating.total) * 100)}%` : '받는 중'} · 끝나면 앱이 다시 켜져요
+                </span>
+              ) : (
+                <button className="btn primary" onClick={installUpdate}>지금 업데이트</button>
+              )}
+            </div>
+          </div>
+        )}
         {server.external && <p className="muted small">다른 곳에서 켠 서버를 쓰고 있어요 (예: scripts/launchagent.sh). 설정을 바꾸려면 그쪽을 먼저 꺼 주세요.</p>}
       </div>
 
@@ -228,13 +268,16 @@ export function Home({ state, refresh, onQuit }: { state: AppState; refresh: () 
   )
 }
 
-function Header({ server, version }: { server: ServerStatus; version: string }) {
+function Header({ server, version, onCheck }: { server: ServerStatus; version: string; onCheck?: () => void }) {
   return (
     <header className="home-head">
       <Logo size={36} />
       <div>
         <h1>회의 노트</h1>
-        <span className="muted small">버전 {version}</span>
+        <span className="muted small">
+          버전 {version}
+          {onCheck && <> · <button className="link small" onClick={onCheck}>업데이트 확인</button></>}
+        </span>
       </div>
       <span className={`pill s-${server.state}`}><i />{SERVER_LABEL[server.state]}</span>
     </header>

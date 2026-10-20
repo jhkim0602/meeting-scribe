@@ -740,3 +740,74 @@ def test_marks_and_edits_stay_on_the_record_after_postprocess(client):
     script = client.get(f"/api/meetings/{mid}/script.md?download=1")
     assert script.status_code == 200 and "%EC%9B%90%EB%B3%B8%20%EC%8A%A4%ED%81%AC%EB%A6%BD%ED%8A%B8.md" in script.headers["content-disposition"]
     assert "회의 중에 고친 문장" not in script.text  # 원본 스크립트와 기록은 섞지 않는다
+
+
+def test_server_log(client, tmp_path, monkeypatch):
+    monkeypatch.delenv("SCRIBE_SERVER_LOG", raising=False)
+    assert client.get("/api/logs/server").json()["available"] is False
+    log = tmp_path / "server.log"
+    log.write_bytes("Fetching:   0%\rFetching: 100%\n".encode() + "live_speakers: 화자 특징 모델 실패 #1\n".encode() * 5)
+    monkeypatch.setenv("SCRIBE_SERVER_LOG", str(log))
+    r = client.get("/api/logs/server?lines=3").json()
+    assert r["available"] and r["lines"] == ["live_speakers: 화자 특징 모델 실패 #1"] * 3
+    assert client.get("/api/logs/server").json()["lines"][0] == "Fetching: 100%"
+
+
+def test_meeting_export_import_roundtrip(client):
+    """회의 하나를 '날짜_제목' 폴더(HTML + 녹음)로 내보내고, 다시 불러오면 이어서 고칠 수 있는 회의가 된다."""
+    import io
+    import zipfile
+
+    from scribe import config
+    from scribe.main import store
+
+    m = store.create_meeting("주간 회의: 기획/개발")
+    a = store.add_live_segment(m["id"], 0.0, 2.0, "안녕하세요 시작할게요")
+    b = store.add_live_segment(m["id"], 2.5, 5.0, "다음 안건입니다")
+    store.set_live_text(b["id"], "다음 안건은 일정입니다")
+    store.update_meeting(m["id"], participants=[{"id": "p1", "name": "민지"}], summary_md="## 요약\n일정 확정")
+    store.update_live_speakers([{"id": a["id"], "speaker": "p1", "speaker_auto": "A", "speaker_src": "manual", "speaker_conf": 1.0}])
+    store.add_annotation(m["id"], kind="comment", anchor={"t0": 0.0, "t1": 2.0, "quote": "안녕하세요",
+                         "start": {"unit": a["id"], "offset": 0}, "end": {"unit": a["id"], "offset": 5}}, body="인사")
+    (config.settings.meeting_dir(m["id"]) / "audio.m4a").write_bytes(b"fake-m4a")
+
+    r = client.get(f"/api/meetings/{m['id']}/export.zip")
+    assert r.status_code == 200
+    day = time.strftime("%Y-%m-%d", time.localtime(m["created_at"]))
+    name = f"{day}_주간 회의 기획 개발"  # 파일 이름에 못 쓰는 글자는 빼고
+    zf = zipfile.ZipFile(io.BytesIO(r.content))
+    assert sorted(zf.namelist()) == [f"{name}/{name}.html", f"{name}/{name}.m4a"]
+    page = zf.read(f"{name}/{name}.html").decode()
+    assert "전사 기록" in page and "회의록" in page and f'{name}.m4a' in page
+
+    # zip 그대로 불러오기
+    r = client.post("/api/import", files=[("files", (f"{name}.zip", r.content, "application/zip"))])
+    assert r.status_code == 200, r.text
+    new = r.json()
+    assert new["id"] != m["id"] and new["title"] == m["title"] and new["has_audio"] and new["created_at"] == m["created_at"]
+    segs = store.list_live_segments(new["id"])
+    assert [s["text"] for s in segs] == ["안녕하세요 시작할게요", "다음 안건은 일정입니다"]
+    assert segs[1]["text_orig"] == "다음 안건입니다"  # 고친 기록도 그대로
+    assert {s["id"] for s in segs}.isdisjoint({a["id"], b["id"]})  # 문장 id는 새로
+    spk = {r["id"]: r for r in store.list_live_speakers(new["id"])}
+    assert spk[segs[0]["id"]]["speaker"] == "p1"
+    (ann,) = store.list_annotations(new["id"])
+    assert ann["body"] == "인사" and ann["anchor"]["start"]["unit"] == segs[0]["id"]  # 위치도 새 문장을 가리킨다
+    full = store.get_meeting(new["id"], with_notes=True)
+    assert full["summary_md"].startswith("## 요약") and full["participants"][0]["name"] == "민지"
+
+    # HTML만 올려도 된다 (녹음 없이), 다른 파일은 거절
+    r = client.post("/api/import", files=[("files", (f"{name}.html", page.encode(), "text/html"))])
+    assert r.status_code == 200 and not r.json()["has_audio"]
+    r = client.post("/api/import", files=[("files", ("x.html", b"<html></html>", "text/html"))])
+    assert r.status_code == 400 and "회의 노트" in r.json()["detail"]
+
+
+def test_memory_info(client):
+    """설정 → 고급의 메모리 보기: 컴퓨터 전체, 서버, 모델 상태"""
+    r = client.get("/api/system/memory").json()
+    assert r["server"] and r["server"] > 0
+    assert r["system"]["total"] and r["system"]["total"] >= r["system"]["available"] > 0
+    assert r["live_model"]["state"] in ("idle", "loading", "ready", "error")
+    assert set(r["speaker_model"]) == {"loaded", "error", "failures", "meetings"}
+    assert r["jobs"] == [] and r["recording"] == []

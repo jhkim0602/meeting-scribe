@@ -200,6 +200,8 @@ const mock = (() => {
           return state.autostart
         case 'quit':
           return { confirm: params.get('recording') === '1' && !args?.force }
+        case 'update_check':
+          return params.get('update') === '1' ? { version: '0.1.3', current: state.version, notes: null } : null
         case 'log_tail':
           return '$ uv pip install -r requirements-mac.txt\nResolved 85 packages in 1.20s\nerror: Failed to fetch: https://pypi.org/simple/torch/'
         default:

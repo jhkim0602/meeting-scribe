@@ -1,6 +1,6 @@
 import { ChevronRight, Copy, X } from 'lucide-react'
-import { useEffect, useState } from 'react'
-import { api, type StorageInfo } from '../lib/api'
+import { Fragment, useEffect, useRef, useState } from 'react'
+import { api, type MemoryInfo, type StorageInfo } from '../lib/api'
 import { useStore } from '../lib/store'
 
 function fmtBytes(n: number): string {
@@ -34,6 +34,14 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [onBattery, setOnBattery] = useState(settings?.auto_on_battery ?? false)
   const [breakMin, setBreakMin] = useState(settings?.break_prompt_minutes ?? 3)
   const [storage, setStorage] = useState<StorageInfo | null>(null)
+  const [log, setLog] = useState<string | null>(null)
+  const [mem, setMem] = useState<MemoryInfo | null>(null)
+  const logRef = useRef<HTMLPreElement>(null)
+
+  // 최근 줄이 보이게 맨 아래로
+  useEffect(() => {
+    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight
+  }, [log])
 
   useEffect(() => {
     api.storage().then(setStorage).catch(() => undefined)
@@ -44,6 +52,14 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
   }, [onClose])
+
+  const loadMem = () => api.memory().then(setMem).catch((e) => toast(`메모리를 읽지 못했어요: ${e.message}`, 'error'))
+  const gb = (n: number | null | undefined) => (n == null ? '?' : `${(n / 1024 ** 3).toFixed(1)}GB`)
+
+  const loadLog = () =>
+    api.serverLog()
+      .then((r) => setLog(r.available ? r.lines.join('\n') || '(비어 있어요)' : '앱으로 설치했을 때만 볼 수 있어요 (터미널로 켰으면 그 터미널에 나와요)'))
+      .catch((e) => setLog(`불러오지 못했어요: ${e.message}`))
 
   const save = async () => {
     await api.saveSettings({ vocabulary: vocab, auto_process: auto, auto_on_battery: onBattery, break_prompt_minutes: breakMin })
@@ -132,12 +148,39 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                 {health.app_install && <><dt /><dd className="muted">모델은 메뉴 막대의 회의 노트 → 설치·설정 창 → 받아쓰기 모델에서 바꿔요</dd></>}
                 <dt>화자 구분</dt><dd>{health.diarizer === 'none' ? '사용 안 함 (HF_TOKEN 설정 필요)' : health.diarizer}</dd>
                 <dt>데이터 위치</dt><dd><code>{health.data_dir}</code></dd>
-                <dt>잠자기 방지</dt><dd>{health.keep_awake ? '녹음 중 caffeinate' : '브라우저 화면 꺼짐 방지'}</dd>
+                <dt>잠자기 방지</dt><dd>{health.keep_awake ? '녹음 중 잠들지 않게 함' : '브라우저 화면 꺼짐 방지'}</dd>
               </dl>
             ) : (
               <p className="muted">서버에 연결되지 않았어요.</p>
             )}
             {health?.live.error && <p className="error-text">{health.live.error}</p>}
+            <p className="field-label">
+              메모리 <button className="btn btn-sm" onClick={loadMem}>{mem === null ? '불러오기' : '새로고침'}</button>
+            </p>
+            {mem && (
+              <dl className="kv">
+                <dt>이 컴퓨터</dt>
+                <dd>
+                  전체 {gb(mem.system.total)} · 남은 {gb(mem.system.available)}
+                  {mem.system.swap_used ? <span className={mem.system.swap_used > 4 * 1024 ** 3 ? 'error-text' : 'muted'}> · 디스크로 밀려남 {gb(mem.system.swap_used)}</span> : null}
+                </dd>
+                <dt>회의 노트 서버</dt><dd>{gb(mem.server)}</dd>
+                {mem.jobs.map((j) => <Fragment key={j.meeting_id}><dt>원본 스크립트 작업</dt><dd>{gb(j.bytes)}</dd></Fragment>)}
+                <dt>실시간 모델</dt><dd>{mem.live_model.model} <em className={`st-${mem.live_model.state}`}>{mem.live_model.state}</em></dd>
+                <dt>화자 모델</dt>
+                <dd>
+                  {mem.speaker_model.loaded ? '올라와 있음' : '안 올라옴'}
+                  {mem.speaker_model.failures > 0 && <span className="error-text"> · 실패 {mem.speaker_model.failures}회 (다시 시도 중)</span>}
+                </dd>
+                {mem.recording.map((r) => (
+                  <Fragment key={r.meeting_id}><dt>녹음 중 밀린 소리</dt><dd className={r.backlog_s > 30 ? 'error-text' : undefined}>{r.backlog_s}초</dd></Fragment>
+                ))}
+              </dl>
+            )}
+            <p className="field-label">
+              서버 로그 <button className="btn btn-sm" onClick={loadLog}>{log === null ? '불러오기' : '새로고침'}</button>
+            </p>
+            {log !== null && <pre className="log-view" ref={logRef}>{log}</pre>}
           </details>
         </div>
         <div className="modal-foot">

@@ -43,7 +43,10 @@ def model_for(role: str) -> tuple[str, str]:
 def repos_for(role: str) -> list[str]:
     """이 역할을 위해 내려받는 Hugging Face 저장소들 (진행률 표시용)"""
     kind, model = model_for(role)
-    if kind not in ("qwen3", "whisper") or not model or os.path.isdir(model):
+    if not model or os.path.isdir(model):
+        return []
+    # faster-whisper는 저장소 이름("Systran/faster-whisper-small")으로 줬을 때만 (짧은 이름은 엔진이 알아서 받는다)
+    if kind not in ("qwen3", "whisper") and not (kind == "faster-whisper" and "/" in model):
         return []
     return [model, ALIGNER_ID] if kind == "qwen3" and role == "final" else [model]
 

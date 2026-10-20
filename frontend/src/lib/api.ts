@@ -156,6 +156,16 @@ export interface AppSettings {
   break_prompt_minutes: number
 }
 
+/** 설정 → 고급의 메모리 보기 (바이트, 못 읽으면 null) */
+export interface MemoryInfo {
+  system: { total: number | null; available: number | null; swap_used: number | null }
+  server: number | null
+  jobs: { meeting_id: string; bytes: number | null }[]
+  live_model: Health['live']
+  speaker_model: { loaded: boolean; error: string | null; failures: number; meetings: number }
+  recording: { meeting_id: string; backlog_s: number }[]
+}
+
 export interface SearchHit {
   meeting_id: string
   title: string
@@ -186,6 +196,8 @@ async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
 
 export const api = {
   health: () => req<Health>('GET', '/api/health'),
+  memory: () => req<MemoryInfo>('GET', '/api/system/memory'),
+  serverLog: (lines = 300) => req<{ path: string | null; available: boolean; lines: string[] }>('GET', `/api/logs/server?lines=${lines}`),
   settings: () => req<AppSettings>('GET', '/api/settings'),
   saveSettings: (s: Partial<AppSettings>) => req<AppSettings>('PUT', '/api/settings', s),
   meetings: () => req<MeetingSummary[]>('GET', '/api/meetings'),
@@ -222,6 +234,14 @@ export const api = {
   warmup: () => req<Health['live']>('POST', '/api/warmup'),
   search: (q: string) => req<SearchHit[]>('GET', `/api/search?q=${encodeURIComponent(q)}`),
   exportMd: async (id: string) => (await fetch(`/api/meetings/${id}/export.md`)).text(),
+  /** 내보낸 회의(zip, 또는 HTML + 녹음)를 새 회의로 */
+  importMeeting: async (files: File[]): Promise<Meeting> => {
+    const fd = new FormData()
+    files.forEach((f) => fd.append('files', f))
+    const res = await fetch('/api/import', { method: 'POST', body: fd })
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || '불러오기 실패')
+    return res.json()
+  },
   upload: async (file: File, title = ''): Promise<Meeting> => {
     const fd = new FormData()
     fd.append('file', file)

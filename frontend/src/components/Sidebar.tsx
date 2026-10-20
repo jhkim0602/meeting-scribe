@@ -1,13 +1,32 @@
-import { FileAudio, FileUp, Loader2, Mic, Moon, PanelLeftClose, Plus, Search, Settings, Sun, Monitor, X } from 'lucide-react'
+import { FileAudio, FileUp, FolderInput, Loader2, Mic, Moon, PanelLeftClose, Plus, Search, Settings, Sun, Monitor, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createAndRecord } from '../hooks/recorder'
 import { api, type MeetingSummary, type SearchHit } from '../lib/api'
 import { useStore, type Theme } from '../lib/store'
 import { dateGroup, fmtDuration, fmtTime, fmtDownload } from '../lib/time'
 
+const stem = (name: string) => name.replace(/\.[^.]+$/, '')
+
+/** 내보낸 회의 파일은 불러오고(zip은 하나씩, HTML은 같은 이름의 녹음과 함께), 나머지는 녹음 파일로 올린다 */
 export async function uploadFiles(files: FileList | File[]) {
   const st = useStore.getState()
-  for (const f of Array.from(files)) {
+  const list = Array.from(files)
+  const used = new Set<File>()
+  for (const p of list.filter((f) => /\.(zip|html?)$/i.test(f.name))) {
+    const audio = /\.html?$/i.test(p.name) ? list.find((f) => /\.(m4a|wav)$/i.test(f.name) && stem(f.name) === stem(p.name)) : undefined
+    used.add(p)
+    if (audio) used.add(audio)
+    st.toast(`'${p.name}' 불러오는 중…`)
+    try {
+      const m = await api.importMeeting(audio ? [p, audio] : [p])
+      await st.loadMeetings()
+      location.hash = `#/m/${m.id}`
+      st.toast('회의를 불러왔어요. 이어서 고칠 수 있어요.', 'success')
+    } catch (e) {
+      st.toast(`불러오기 실패: ${(e as Error).message}`, 'error')
+    }
+  }
+  for (const f of list.filter((x) => !used.has(x))) {
     st.toast(`'${f.name}' 올리는 중…`)
     try {
       const m = await api.upload(f)
@@ -59,6 +78,7 @@ export function Sidebar({ onSettings }: { onSettings: () => void }) {
   const set = useStore((s) => s.set)
   const toast = useStore((s) => s.toast)
   const fileRef = useRef<HTMLInputElement>(null)
+  const importRef = useRef<HTMLInputElement>(null)
   const [q, setQ] = useState('')
   const [hits, setHits] = useState<SearchHit[] | null>(null)
 
@@ -116,6 +136,20 @@ export function Sidebar({ onSettings }: { onSettings: () => void }) {
         <button className="side-action" onClick={() => fileRef.current?.click()}>
           <FileUp size={15} />녹음 파일 올리기
         </button>
+        <button className="side-action" onClick={() => importRef.current?.click()} title="회의 노트에서 내보낸 zip, 또는 HTML과 녹음 파일">
+          <FolderInput size={15} />회의 불러오기
+        </button>
+        <input
+          ref={importRef}
+          type="file"
+          accept=".zip,.html,.htm,.m4a,.wav"
+          multiple
+          hidden
+          onChange={(e) => {
+            if (e.target.files?.length) uploadFiles(e.target.files)
+            e.target.value = ''
+          }}
+        />
         <input
           ref={fileRef}
           type="file"
