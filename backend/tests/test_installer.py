@@ -8,6 +8,8 @@ import sys
 import urllib.error
 from pathlib import Path
 
+import pytest
+
 from scribe import catalog, installer
 
 BACKEND = Path(__file__).resolve().parents[1]
@@ -152,3 +154,37 @@ def test_doctor_and_catalog_commands_print_json(tmp_path):
     d = json.loads(out)
     # 기기마다 추천이 다르다 (맥: Qwen3, 윈도우·리눅스: Whisper)
     assert d["machine"]["recommend"] == catalog.recommend(d["machine"]["ram_gb"]) and d["catalog"]["live"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="윈도우는 개발자 모드가 아니면 링크를 만들 수 없다")
+def test_storage_lists_and_removes_only_this_apps_models(tmp_path, monkeypatch):
+    from scribe.engines import download as dl
+
+    hub = tmp_path / "hub"
+    monkeypatch.setattr(dl, "hub_cache", lambda: hub)
+    shared = hub / "blobs" / "ab"
+    shared.mkdir(parents=True)
+
+    def fake_repo(repo: str, files: dict[str, bytes], link_to_shared: dict[str, str] = {}):
+        root = hub / ("models--" + repo.replace("/", "--"))
+        (root / "blobs").mkdir(parents=True)
+        for name, data in files.items():
+            (root / "blobs" / name).write_bytes(data)
+        for name, target in link_to_shared.items():
+            (shared / target).write_bytes(b"x" * 1000) if not (shared / target).exists() else None
+            (root / "blobs" / name).symlink_to(shared / target)
+        return root
+
+    live = fake_repo("moona3k/mlx-qwen3-asr-0.6b-8bit", {"a": b"1" * 100}, {"big": "w1"})
+    other = fake_repo("someone/other-model", {"o": b"2" * 50}, {"big": "w1"})  # 다른 프로그램이 받은 것, 같은 큰 파일을 같이 씀
+    final = fake_repo("Qwen/Qwen3-ForcedAligner-0.6B", {}, {"big": "w2"})
+
+    info = installer.storage()
+    repos = {m["repo"]: m for m in info["models"]}
+    assert set(repos) == {"moona3k/mlx-qwen3-asr-0.6b-8bit", "Qwen/Qwen3-ForcedAligner-0.6B"}  # 다른 프로그램 것은 보이지 않는다
+    assert repos["moona3k/mlx-qwen3-asr-0.6b-8bit"]["bytes"] == 1100 and repos["Qwen/Qwen3-ForcedAligner-0.6B"]["label"].startswith("단어 정렬")
+
+    r = installer.remove_models(["moona3k/mlx-qwen3-asr-0.6b-8bit", "Qwen/Qwen3-ForcedAligner-0.6B", "someone/other-model"])
+    assert r["freed"] == 2100 and r["skipped"] == ["someone/other-model"]
+    assert not live.exists() and not final.exists() and other.exists()
+    assert (shared / "w1").exists() and not (shared / "w2").exists()  # 다른 저장소가 같이 쓰는 큰 파일은 남긴다

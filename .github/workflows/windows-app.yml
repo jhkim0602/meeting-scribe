@@ -1,10 +1,21 @@
-# 윈도우 앱(설치 파일 .exe + 자동 업데이트 서명) 만들기: v로 시작하는 태그는 release.yml이 이 작업을 불러 릴리스에 붙인다.
+# 윈도우 앱(설치 파일 .exe + 자동 업데이트 서명) 만들기: 앱 코드가 바뀐 main에 올리면 만들어 시험하고,
+# v로 시작하는 태그는 release.yml이 이 작업을 불러 릴리스에 붙인다.
 # Actions 탭에서 직접 돌리면 Artifacts에만 올린다(30일). 서명 없이 만든다 (처음 열 때 SmartScreen 경고).
 name: 윈도우 앱
 
 on:
   workflow_dispatch:
   workflow_call:
+  push:
+    branches: [main]
+    paths:
+      - "backend/scribe/**"
+      - "backend/requirements*.txt"
+      - "frontend/src/**"
+      - "frontend/package*.json"
+      - "launcher/**"
+      - "claude/skills/**"
+      - ".github/workflows/windows-app.yml"
 
 permissions:
   contents: write

@@ -30,9 +30,9 @@
 |---|---|
 | ![전사 기록](docs/screenshots/transcript-doc.png) | ![참석자](docs/screenshots/people.png) |
 
-## 설치 (Apple Silicon 맥, macOS 13 이상)
+## 설치 (Apple Silicon 맥 · 윈도우 10/11)
 
-**앱으로 (권장)** 터미널이나 Homebrew 없이 됩니다.
+**맥 앱 (권장)** Apple Silicon(M1 이상), macOS 13 이상. 터미널이나 Homebrew 없이 됩니다.
 
 1. [Releases](https://github.com/jhkim0602/meeting-scribe/releases)에서 `MeetingScribe_…_mac-arm64.dmg`를 받아 열고, **회의 노트**를 응용 프로그램 폴더로 끌어다 놓습니다. (릴리스가 없으면 [Actions → 맥 앱](https://github.com/jhkim0602/meeting-scribe/actions/workflows/mac-app.yml)의 마지막 성공한 실행에서 Artifacts를 받습니다. GitHub 로그인이 필요합니다.)
 2. 응용 프로그램 폴더에서 엽니다. 서명하지 않은 앱이라 처음 한 번은 "열 수 없습니다"가 뜹니다. **시스템 설정 → 개인정보 보호 및 보안** 맨 아래에서 **그래도 열기**를 누르고 다시 엽니다.
@@ -42,6 +42,17 @@
 - 화자 구분 토큰은 [모델 페이지](https://huggingface.co/pyannote/speaker-diarization-community-1)에서 약관에 동의한 뒤 [토큰 페이지](https://huggingface.co/settings/tokens)에서 Read 토큰을 만들어 넣습니다. 없어도 받아쓰기는 되고, 화자만 나뉘지 않습니다.
 - 파이썬·패키지·설정은 `~/Library/Application Support/com.meetingscribe.app`, 모델은 `~/.cache/huggingface`, 회의는 고른 저장 위치(기본 `~/MeetingScribe`)에 있습니다. 앱을 지우고 새로 받아도 회의와 받은 모델은 그대로이고, 터미널로 설치하며 받은 모델도 그대로 씁니다.
 - "그래도 열기"가 보이지 않으면 터미널에서 `xattr -dr com.apple.quarantine "/Applications/회의 노트.app"`를 한 번 실행해도 됩니다.
+
+**윈도우 앱** 윈도우 10/11 64비트. 받아쓰기는 CPU로 돌아가서 맥보다 조금 느립니다 (실시간 Whisper small, 녹음 후 정리 Whisper large-v3 turbo).
+
+1. [Releases](https://github.com/jhkim0602/meeting-scribe/releases/latest)에서 `MeetingScribe_…_windows-x64-setup.exe`를 받아 실행합니다.
+2. 서명하지 않은 앱이라 "Windows의 PC 보호" 창이 뜨면 **추가 정보 → 실행**을 누릅니다 (처음 한 번). 백신이 설치를 막으면 Windows 보안에서 허용합니다.
+3. 맥과 같은 설치 도우미가 이어집니다. 회의 화면은 브라우저에서 열리고, 앱은 작업 표시줄 오른쪽 아래 아이콘에 남습니다.
+
+**업데이트와 지우기 (맥·윈도우 같음)**
+
+- 앱을 켤 때마다 새 버전을 확인합니다. 있으면 바뀐 점을 보여 주고 **나중에** / **지금 업데이트**를 묻습니다. 지금 업데이트를 누르면 받고, 바꾸고, 다시 켭니다(녹음 중에는 하지 않음). 회의 기록과 받은 모델은 그대로라 릴리스 페이지에서 다시 받을 필요가 없습니다.
+- 설치·설정 창 → **저장 공간·지우기**: 받은 모델마다 크기를 보고 하나씩 지우거나 설치 캐시를 비웁니다. **회의 노트 완전히 지우기**는 앱·모델·파이썬·설정을 한 번에 지우고, 회의 기록은 남기거나 휴지통으로 옮길지 고릅니다. 다른 프로그램이 받은 Hugging Face 모델은 건드리지 않습니다.
 
 **터미널로 (개발용)**
 

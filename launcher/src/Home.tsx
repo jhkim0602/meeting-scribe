@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react'
 import { call, catalog, installer, on, recommend, type AppState, type ClaudeStatus, type DoctorItem, type HfCheck, type Machine, type ServerStatus } from './api'
 import { Install } from './Install'
+import { StoragePanel } from './Storage'
 import { ExtLink, Logo, ModelSelect, StatusIcon, shortPath } from './ui'
 
 const SERVER_LABEL: Record<ServerStatus['state'], string> = { running: '켜져 있어요', starting: '켜는 중', stopped: '꺼져 있어요', error: '문제가 있어요' }
 
-type Panel = null | 'models' | 'speaker' | 'doctor'
-type Update = { version: string; current: string; notes?: string | null }
+type Panel = null | 'models' | 'speaker' | 'doctor' | 'storage'
+/** ask: 켤 때 찾은 새 버전이면 창을 띄워 묻는다 */
+type Update = { version: string; current: string; notes?: string | null; ask?: boolean }
 
 /** 설치 뒤의 창: 회의 노트 열기, 설정 바꾸기, 점검, 끄기 */
 export function Home({ state, refresh, onQuit }: { state: AppState; refresh: () => Promise<void>; onQuit: () => void }) {
@@ -25,6 +27,7 @@ export function Home({ state, refresh, onQuit }: { state: AppState; refresh: () 
   const [notice, setNotice] = useState<string | null>(null)
   const [update, setUpdate] = useState<Update | null>(null)
   const [updating, setUpdating] = useState<{ done: number; total: number | null } | null>(null)
+  const [asking, setAsking] = useState(false)
   const open = (url: string) => void call('open_link', { url })
   const dataDir = state.config.data_dir || state.paths.default_data_dir
 
@@ -41,7 +44,10 @@ export function Home({ state, refresh, onQuit }: { state: AppState; refresh: () 
     const offs: (() => void)[] = []
     let gone = false
     const keep = (f: () => void) => (gone ? f() : offs.push(f))
-    on<Update>('update-available', setUpdate).then(keep)
+    on<Update>('update-available', (u) => {
+      setUpdate(u)
+      if (u.ask) setAsking(true)
+    }).then(keep)
     on<null>('update-check-now', () => void checkUpdate(true)).then(keep)
     on<{ done: number; total: number | null }>('update-progress', setUpdating).then(keep)
     checkUpdate()
@@ -134,13 +140,39 @@ export function Home({ state, refresh, onQuit }: { state: AppState; refresh: () 
                   {updating.total ? `받는 중 ${Math.round((updating.done / updating.total) * 100)}%` : '받는 중'} · 끝나면 앱이 다시 켜져요
                 </span>
               ) : (
-                <button className="btn primary" onClick={installUpdate}>지금 업데이트</button>
+                <>
+                  {update.notes && <button className="btn quiet" onClick={() => setAsking(true)}>바뀐 점</button>}
+                  <button className="btn primary" onClick={installUpdate}>지금 업데이트</button>
+                </>
               )}
             </div>
           </div>
         )}
         {server.external && <p className="muted small">다른 곳에서 켠 서버를 쓰고 있어요 (예: scripts/launchagent.sh). 설정을 바꾸려면 그쪽을 먼저 꺼 주세요.</p>}
       </div>
+
+      {update && asking && (
+        <div className="modal-bg" role="dialog" aria-labelledby="up-title">
+          <div className="modal wide">
+            <h3 id="up-title">새 버전 v{update.version}이 나왔어요</h3>
+            <p className="muted small">지금 v{update.current} · 회의 기록과 받은 모델은 그대로예요. 몇 분이면 끝나고 앱이 다시 켜져요.</p>
+            {update.notes && <div className="notes">{update.notes}</div>}
+            {notice && <p className="callout warn">{notice}</p>}
+            <div className="row end">
+              {updating ? (
+                <span className="muted small">
+                  {updating.total ? `받는 중 ${Math.round((updating.done / updating.total) * 100)}%` : '받는 중'} · 끝나면 앱이 다시 켜져요
+                </span>
+              ) : (
+                <>
+                  <button className="btn" onClick={() => setAsking(false)}>나중에</button>
+                  <button className="btn primary" autoFocus onClick={installUpdate}>지금 업데이트</button>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       <ul className="settings">
         <li>
@@ -237,6 +269,15 @@ export function Home({ state, refresh, onQuit }: { state: AppState; refresh: () 
             <input type="checkbox" checked={state.autostart} onChange={async (e) => { await call('autostart_set', { enabled: e.target.checked }); await refresh() }} />
             <span />
           </label>
+        </li>
+
+        <li>
+          <div className="s-main">
+            <div className="s-label">저장 공간·지우기</div>
+            <div className="s-value">받은 모델마다 크기를 보고 지우거나, 회의 노트를 깨끗이 지워요</div>
+          </div>
+          <button className="btn small" onClick={() => setPanel(panel === 'storage' ? null : 'storage')}>{panel === 'storage' ? '닫기' : '보기'}</button>
+          {panel === 'storage' && <StoragePanel notRecording={notRecording} />}
         </li>
 
         <li>

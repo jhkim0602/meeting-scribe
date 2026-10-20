@@ -22,6 +22,29 @@ jobs:
     needs: [mac, windows]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0  # 바뀐 점: CHANGELOG.md에 없으면 지난 태그부터의 커밋 제목으로
+
+      - name: 바뀐 점 (CHANGELOG.md의 이 버전 부분)
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          python3 - <<'EOF'
+          import os, re, subprocess, pathlib
+          tag = os.environ["TAG"]
+          text = pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8") if pathlib.Path("CHANGELOG.md").exists() else ""
+          m = re.search(rf"^## {re.escape(tag)}\b[^\n]*\n(.*?)(?=^## |\Z)", text, re.M | re.S)
+          notes = m.group(1).strip() if m else ""
+          if not notes:
+              prev = subprocess.run(["git", "describe", "--tags", "--abbrev=0", f"{tag}^"], capture_output=True, text=True).stdout.strip()
+              rng = f"{prev}..{tag}" if prev else tag
+              subjects = subprocess.run(["git", "log", "--no-merges", "--format=- %s", rng], capture_output=True, text=True).stdout.strip()
+              notes = subjects or f"회의 노트 {tag}"
+          pathlib.Path("changes.md").write_text(notes + "\n", encoding="utf-8")
+          print(notes)
+          EOF
+
       - uses: actions/download-artifact@v6
         with:
           path: out
@@ -43,7 +66,7 @@ jobs:
           }
           doc = {
               "version": tag.lstrip("v"),
-              "notes": f"회의 노트 {tag}",
+              "notes": pathlib.Path("changes.md").read_text(encoding="utf-8").strip(),  # 앱의 업데이트 창에 보인다
               "pub_date": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
               "platforms": {
                   key: {"signature": pathlib.Path(f"{f}.sig").read_text().strip(), "url": f"{base}/{f.name}"}
@@ -64,11 +87,14 @@ jobs:
           cat > notes.md <<EOF
           노트북 안에서만 돌아가는 회의 기록 앱이에요. 녹음과 받아쓰기는 모두 내 컴퓨터 안에서만 돌아가요.
 
+          ## 이번에 바뀐 것
+          $(cat changes.md)
+
           ## 내려받기
           | 기기 | 파일 |
           |---|---|
           | 맥 (Apple Silicon M1 이상, macOS 13 이상) | \`MeetingScribe_${v}_mac-arm64.dmg\` |
-          | 윈도우 10/11 (64비트) · 테스트 중 | \`MeetingScribe_${v}_windows-x64-setup.exe\` |
+          | 윈도우 10/11 (64비트) | \`MeetingScribe_${v}_windows-x64-setup.exe\` |
 
           이미 설치했다면 앱이 새 버전을 알려 줘요 (v0.1.2부터). **지금 업데이트**를 누르면 받고, 바꾸고, 다시 켜요. 회의 기록과 받은 모델은 그대로예요.
           \`.app.tar.gz\`, \`.sig\`, \`latest.json\`은 자동 업데이트용이라 받지 않아도 돼요.

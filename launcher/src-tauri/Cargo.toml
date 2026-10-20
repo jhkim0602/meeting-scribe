@@ -1,6 +1,6 @@
 [package]
 name = "meeting-scribe"
-version = "0.1.6"
+version = "0.1.7"
 description = "회의 노트 설치·실행 도우미"
 edition = "2021"
 publish = false
@@ -15,6 +15,7 @@ tauri-plugin-dialog = "=2.8.1"
 tauri-plugin-autostart = "=2.7.0"
 tauri-plugin-single-instance = "=2.5.1"
 tauri-plugin-updater = "=2.13.1"
+trash = "=5.2.9"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

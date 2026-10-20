@@ -279,6 +279,91 @@ def doctor() -> list[dict]:
     return items
 
 
+# ---------------- 저장 공간 · 지우기 ----------------
+
+def known_models() -> dict[str, str]:
+    """이 앱이 받는 모델 저장소 → 보여 줄 이름. Hugging Face 캐시는 다른 프로그램과 같이 쓰므로 이것만 다룬다."""
+    names: dict[str, str] = {}
+    for role in ("live", "final"):
+        for c in catalog.CATALOG[role]:
+            for i, repo in enumerate(c["repos"]):
+                names.setdefault(repo, c["label"] if i == 0 else "단어 정렬 (원본 스크립트)")
+    for repo in catalog.CATALOG["speaker"]["repos"]:
+        names.setdefault(repo, "화자 구분")
+    return names
+
+
+def _blob_targets(repo_root: Path) -> set[Path]:
+    """저장소의 blobs가 가리키는 진짜 파일 (큰 파일은 공용 창고에 한 번만 두고 링크로 가리킨다)"""
+    out: set[Path] = set()
+    for f in (repo_root / "blobs").glob("*"):
+        if f.is_symlink():
+            try:
+                out.add(f.resolve())
+            except OSError:
+                pass
+    return out
+
+
+def _cached_repos() -> dict[str, Path]:
+    from .engines.download import hub_cache
+
+    out = {}
+    for d in hub_cache().glob("models--*"):
+        if d.is_dir():
+            out[d.name[len("models--"):].replace("--", "/", 1)] = d
+    return out
+
+
+def storage() -> dict:
+    """받아 둔 모델(이 앱 것만)과 크기, 지금 설정에서 쓰는지"""
+    from .engines import repos_for
+    from .engines.download import downloaded_bytes, hub_cache
+
+    names = known_models()
+    in_use = set(repos_for("live")) | set(repos_for("final"))
+    if settings.hf_token:
+        in_use |= set(catalog.CATALOG["speaker"]["repos"])
+    models = [
+        {"repo": repo, "label": names[repo], "bytes": downloaded_bytes(repo), "in_use": repo in in_use}
+        for repo in sorted(_cached_repos()) if repo in names
+    ]
+    meetings = settings.meetings_dir
+    return {
+        "ok": True,
+        "hub": str(hub_cache()),
+        "models": models,
+        "models_bytes": sum(m["bytes"] for m in models),
+        "data_dir": str(settings.data_dir),
+        "meetings": sum(1 for d in meetings.iterdir() if d.is_dir()) if meetings.exists() else 0,
+    }
+
+
+def remove_models(repos: list[str]) -> dict:
+    """이 앱이 받은 모델만 지운다. 다른 저장소와 같이 쓰는 큰 파일은 남긴다."""
+    from .engines.download import downloaded_bytes
+
+    names = known_models()
+    cached = _cached_repos()
+    targets = [r for r in repos if r in names and r in cached]
+    keep: set[Path] = set()
+    for repo, root in cached.items():
+        if repo not in targets:
+            keep |= _blob_targets(root)
+    freed = 0
+    for repo in targets:
+        root = cached[repo]
+        freed += downloaded_bytes(repo)
+        for blob in _blob_targets(root) - keep:
+            try:
+                blob.unlink()
+            except OSError:
+                pass
+        shutil.rmtree(root, ignore_errors=True)
+    skipped = [r for r in repos if r not in targets]
+    return {"ok": True, "removed": targets, "skipped": skipped, "freed": freed}
+
+
 # ---------------- 명령 ----------------
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -291,6 +376,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     cl = sub.add_parser("claude")
     cl.add_argument("action", nargs="?", default="status", choices=["status", "connect", "disconnect"])
     sub.add_parser("doctor")
+    sub.add_parser("storage")
+    rm = sub.add_parser("remove-models")
+    rm.add_argument("repos", nargs="*")
+    rm.add_argument("--all", action="store_true", help="이 앱이 받은 모델 모두")
     args = ap.parse_args(argv)
     if args.cmd == "catalog":
         emit_json({"machine": machine(), "catalog": catalog.CATALOG})
@@ -305,6 +394,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         r = claude(args.action)
         emit_json(r)
         return 0 if r["ok"] else 1
+    if args.cmd == "storage":
+        emit_json(storage())
+        return 0
+    if args.cmd == "remove-models":
+        emit_json(remove_models(list(known_models()) if args.all else args.repos))
+        return 0
     if args.cmd == "doctor":
         items = doctor()
         emit_json({"items": items, "ok": all(i["ok"] is not False for i in items), "at": time.time()})

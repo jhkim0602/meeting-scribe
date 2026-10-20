@@ -86,7 +86,7 @@ export function Wizard({ state, onFinish }: { state: AppState; onFinish: () => v
               <div><dt>남은 공간</dt><dd>{machine.free_gb ?? '?'}GB</dd></div>
             </dl>
           )}
-          {machine && thisOs === 'windows' && <p className="callout warn">윈도우 버전은 테스트 중이에요. 받아쓰기는 CPU로 돌아가서 맥보다 느려요. 회의 중에는 전원을 연결해 주세요.</p>}
+          {machine && thisOs === 'windows' && <p className="callout">윈도우에서는 받아쓰기가 CPU로 돌아가서 맥보다 조금 느려요 (실시간 Whisper small, 녹음 후 정리 Whisper large-v3 turbo). 회의 중에는 전원을 연결해 두면 좋아요.</p>}
           {machine && thisOs === 'macos' && !machine.apple_silicon && <p className="callout warn">이 앱은 Apple Silicon(M1 이상) 맥에 맞춰져 있어요. 이 기기에서는 받아쓰기가 느리거나 동작하지 않을 수 있어요.</p>}
           <p className="muted small">설치는 처음 한 번, 10분 안팎이에요 (인터넷 속도에 따라).<br />필요한 것은 앱 전용 폴더에만 설치해요.</p>
           <div className="row end">

@@ -11,6 +11,7 @@
 mod config;
 mod install;
 mod paths;
+mod remove;
 mod server;
 mod sys;
 mod update;
@@ -245,6 +246,11 @@ fn run_app(background: bool) {
             log_tail,
             update_check,
             update_install,
+            storage_info,
+            remove_models,
+            clear_cache,
+            uninstall_all,
+            finish_uninstall,
         ])
         .build(tauri::generate_context!())
         .expect("회의 노트를 시작하지 못했어요")
@@ -474,6 +480,95 @@ fn quit(app: AppHandle, force: bool) -> Value {
     stop_server(&app);
     app.exit(0);
     json!({"confirm": false})
+}
+
+// ---------------- 지우기 도우미 ----------------
+
+/// 무엇이 얼마나 차지하는지: 받은 모델(서버 쪽에서 센다), 파이썬·패키지, 설치 캐시, 회의 기록, 앱
+#[tauri::command]
+async fn storage_info(state: State<'_, AppState>) -> Result<Value, String> {
+    let paths = state.paths.clone();
+    let data = data_dir(&state);
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut v = remove::info(&paths, &data);
+        v["models"] = if paths.python().exists() { install::run_installer(&paths, &["storage"]).unwrap_or(Value::Null) } else { Value::Null };
+        v
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// 고른 모델만 지운다 (다시 쓰면 그때 다시 받는다)
+#[tauri::command]
+async fn remove_models(state: State<'_, AppState>, repos: Vec<String>) -> Result<Value, String> {
+    if recording_now(&state) {
+        return Err("녹음 중이라 지금은 지울 수 없어요. 녹음을 마친 뒤 다시 해 주세요.".into());
+    }
+    let paths = state.paths.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut args = vec!["remove-models"];
+        args.extend(repos.iter().map(String::as_str));
+        install::run_installer(&paths, &args)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn clear_cache(state: State<'_, AppState>) -> Result<u64, String> {
+    let paths = state.paths.clone();
+    tauri::async_runtime::spawn_blocking(move || remove::clear_cache(&paths)).await.map_err(|e| e.to_string())
+}
+
+/// 완전히 지우기: Claude 연결 끊기 → (고르면) 모델 → 서버 끄기·로그인 항목 끄기 → (고르면) 회의 기록을 휴지통으로
+/// → 앱 전용 폴더. 앱 자체는 finish_uninstall에서 (창이 결과를 보여 준 뒤)
+#[tauri::command]
+async fn uninstall_all(app: AppHandle, models: bool, meetings: bool) -> Result<Value, String> {
+    let state = app.state::<AppState>();
+    if recording_now(&state) {
+        return Err("녹음 중이라 지금은 지울 수 없어요. 녹음을 마친 뒤 다시 해 주세요.".into());
+    }
+    let paths = state.paths.clone();
+    let data = data_dir(&state);
+    let app2 = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _ = install::run_installer(&paths, &["claude", "disconnect"]);
+        let models_freed = if models && paths.python().exists() {
+            install::run_installer(&paths, &["remove-models", "--all"]).ok().and_then(|v| v["freed"].as_u64()).unwrap_or(0)
+        } else {
+            0
+        };
+        stop_server(&app2);
+        let _ = app2.autolaunch().disable();
+        let meetings_result = if meetings { remove::trash_meetings(&data) } else { Ok(false) };
+        let support_freed = remove::remove_support(&paths);
+        json!({
+            "models_freed": models_freed,
+            "support_freed": support_freed,
+            "meetings_trashed": meetings_result.as_ref().map(|b| *b).unwrap_or(false),
+            "meetings_error": meetings_result.err(),
+            "data_dir": data,
+            "app": remove::app_location().map(|p| p.display().to_string()),
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// 마지막: 앱을 지우고(맥: 휴지통, 윈도우: 제거 도구) 끝낸다
+#[tauri::command]
+fn finish_uninstall(app: AppHandle, remove_app: bool) -> Result<(), String> {
+    if remove_app {
+        if let Some(loc) = remove::app_location() {
+            if cfg!(windows) {
+                std::process::Command::new(loc.join("uninstall.exe")).spawn().map_err(|e| format!("제거 도구를 열지 못했어요: {e}"))?;
+            } else {
+                remove::to_trash(&loc).map_err(|e| format!("앱을 휴지통으로 옮기지 못했어요. 응용 프로그램 폴더에서 직접 지워 주세요.\n{e}"))?;
+            }
+        }
+    }
+    app.exit(0);
+    Ok(())
 }
 
 #[tauri::command]

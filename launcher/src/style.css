@@ -205,3 +205,18 @@ footer.row { margin-top: 16px; }
 .modal-bg { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.35); display: grid; place-items: center; padding: 20px; }
 .modal { background: var(--bg); border-radius: 12px; padding: 20px 22px; max-width: 380px; box-shadow: 0 16px 48px rgba(0, 0, 0, 0.25); }
 .modal p { margin-top: 8px; color: var(--text-2); }
+
+/* 업데이트 창, 저장 공간·지우기 */
+.modal.wide { max-width: 460px; width: 100%; }
+.modal .notes { margin-top: 12px; padding: 10px 12px; max-height: 220px; overflow: auto; border-radius: 8px; background: var(--bg-soft); font-size: 13px; line-height: 1.6; white-space: pre-wrap; word-break: keep-all; }
+.modal .check { display: block; margin-top: 10px; line-height: 1.5; }
+.modal .check input { margin: 0 6px 0 0; vertical-align: -2px; }
+.modal .sum { margin-top: 14px; }
+.disk-list { list-style: none; margin: 4px 0 10px; padding: 0; }
+.disk-list li { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: center; padding: 7px 0; border-top: 1px solid var(--line); }
+.disk-list li:first-child { border-top: 0; }
+.disk-list .d-main { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; min-width: 0; }
+.disk-list .d-main .small { flex-basis: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.disk-list .d-size { font-variant-numeric: tabular-nums; font-size: 13px; color: var(--text-2); }
+.danger-zone { margin-top: 6px; padding-top: 10px; border-top: 1px solid var(--line); gap: 10px; }
+.btn.danger-outline { color: var(--err); border-color: color-mix(in srgb, var(--err) 40%, transparent); background: transparent; }

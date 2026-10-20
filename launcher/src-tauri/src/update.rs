@@ -1,4 +1,5 @@
 //! 자동 업데이트: GitHub 릴리스의 latest.json을 보고 새 버전이 있으면 창과 메뉴 막대에 알린다.
+//! latest.json의 notes는 릴리스 때 CHANGELOG.md의 그 버전 부분으로 채운다 (release.yml).
 //! 누르면 받고(진행률을 창에 보낸다), 서버를 끄고, 바꾸고, 다시 켠다. 녹음 중에는 바꾸지 않는다.
 //! 받은 파일은 릴리스에 함께 올린 서명(.sig)으로 확인한다 (tauri.conf.json의 pubkey).
 
@@ -50,13 +51,22 @@ pub async fn install(app: &AppHandle, stop_server: impl Fn(), start_server: impl
     app.restart();
 }
 
-/// 켤 때 한 번, 그 뒤 6시간마다 확인한다 (인터넷이 없으면 조용히 넘어간다)
+/// 켤 때마다 확인해서 새 버전이 있으면 창을 띄워 바뀐 점과 [나중에]·[지금 업데이트]를 보여 준다.
+/// 그 뒤로는 6시간마다 조용히 확인한다 (창의 알림 줄과 메뉴 막대 글자만 바뀐다). 인터넷이 없으면 넘어간다.
 pub fn watch(app: AppHandle) {
-    thread::spawn(move || loop {
-        thread::sleep(Duration::from_secs(20)); // 켜자마자 서버·설치와 겹치지 않게
-        if let Ok(Some(v)) = tauri::async_runtime::block_on(check(&app)) {
-            let _ = app.emit("update-available", v);
+    thread::spawn(move || {
+        thread::sleep(Duration::from_secs(8)); // 켜자마자 서버·설치와 겹치지 않게
+        let mut first = true;
+        loop {
+            if let Ok(Some(mut v)) = tauri::async_runtime::block_on(check(&app)) {
+                v["ask"] = json!(first);
+                if first {
+                    crate::show_main(&app);
+                }
+                let _ = app.emit("update-available", v);
+            }
+            first = false;
+            thread::sleep(Duration::from_secs(6 * 60 * 60));
         }
-        thread::sleep(Duration::from_secs(6 * 60 * 60));
     });
 }

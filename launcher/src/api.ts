@@ -91,6 +91,8 @@ const params = new URLSearchParams(typeof location !== 'undefined' ? location.se
 const mock = (() => {
   const listeners = new Map<string, Set<(p: unknown) => void>>()
   const emit = (event: string, payload: unknown) => listeners.get(event)?.forEach((f) => f(payload))
+  const sampleUpdate = { version: '0.1.7', current: '0.1.6', notes: '- 실행기에 저장 공간·지우기: 모델마다 크기를 보고 지우기, 완전히 지우기\n- 켤 때 새 버전이 있으면 바뀐 점을 보여 주고 묻기\n- 윈도우 정식 지원' }
+  if (params.get('update') === '1') setTimeout(() => emit('update-available', { ...sampleUpdate, ask: true }), 900)
   const installed = params.get('installed') === '1'
   const state: AppState = {
     config: installed
@@ -198,10 +200,35 @@ const mock = (() => {
         case 'autostart_set':
           state.autostart = !!args?.enabled
           return state.autostart
+        case 'storage_info':
+          await sleep(300)
+          return {
+            packages: 1.31 * 1024 ** 3, cache: 0.62 * 1024 ** 3, other: 4.2 * 1024 ** 2,
+            support: state.paths.support, data_dir: state.config.data_dir || state.paths.default_data_dir, data: 0.41 * 1024 ** 3,
+            app: '/Applications/회의 노트.app', app_bytes: 58 * 1024 ** 2,
+            models: {
+              hub: '~/.cache/huggingface/hub', meetings: 12, models_bytes: (0.8 + 2.0 + 1.71) * 1024 ** 3,
+              models: [
+                { repo: 'Qwen/Qwen3-ForcedAligner-0.6B', label: '단어 정렬 (원본 스크립트)', bytes: 1.71 * 1024 ** 3, in_use: true },
+                { repo: 'moona3k/mlx-qwen3-asr-0.6b-8bit', label: 'Qwen3-ASR 0.6B', bytes: 0.8 * 1024 ** 3, in_use: true },
+                { repo: 'moona3k/mlx-qwen3-asr-1.7b-8bit', label: 'Qwen3-ASR 1.7B', bytes: 2.0 * 1024 ** 3, in_use: false },
+              ],
+            },
+          }
+        case 'remove_models':
+          await sleep(400)
+          return { ok: true, removed: args?.repos, freed: 2.0 * 1024 ** 3 }
+        case 'clear_cache':
+          return 0.62 * 1024 ** 3
+        case 'uninstall_all':
+          await sleep(1200)
+          return { models_freed: 4.5 * 1024 ** 3, support_freed: 1.9 * 1024 ** 3, meetings_trashed: !!args?.meetings, meetings_error: null, data_dir: state.paths.default_data_dir, app: '/Applications/회의 노트.app' }
+        case 'finish_uninstall':
+          return null
         case 'quit':
           return { confirm: params.get('recording') === '1' && !args?.force }
         case 'update_check':
-          return params.get('update') === '1' ? { version: '0.1.3', current: state.version, notes: null } : null
+          return params.get('update') === '1' ? sampleUpdate : null
         case 'log_tail':
           return '$ uv pip install -r requirements-mac.txt\nResolved 85 packages in 1.20s\nerror: Failed to fetch: https://pypi.org/simple/torch/'
         default:
