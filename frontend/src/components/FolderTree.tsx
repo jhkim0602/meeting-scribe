@@ -18,18 +18,12 @@ function loadOpen(): string[] {
   }
 }
 
-/** 폴더 작업 뒤: 목록을 새로 읽고, 디스크에서 아직 못 옮긴 회의가 있으면 알린다 */
+/** 폴더 작업 뒤: 목록을 새로 읽는다 (폴더는 앱 안에서만 쓰고 디스크의 회의 파일은 옮기지 않는다) */
 async function after(r: Promise<GroupsOut>) {
   const st = useStore.getState()
   try {
     const out = await r
     await st.loadMeetings()
-    if (out.pending.length)
-      st.toast(
-        MAC
-          ? '목록은 바꿨어요. 녹음·작업 중인 회의는 끝난 뒤 저장 폴더에서도 옮겨요.'
-          : '목록은 바꿨어요. 녹음·작업 중이거나 다른 프로그램(탐색기 등)이 파일을 열고 있는 회의는 잠시 뒤 저장 폴더에서도 옮겨요.',
-      )
     return out
   } catch (e) {
     st.toast((e as Error).message, 'error')
@@ -99,7 +93,6 @@ export function FolderTree({ meetings, renderItem, rest }: { meetings: MeetingSu
     const msg = `'${g.name}' 폴더를 지울까요?\n${n ? `안의 회의 ${n}개는 지우지 않고 한 칸 위로 옮겨요.` : '빈 폴더예요.'}`
     if (window.confirm(msg)) await after(api.deleteGroup(g.id))
   }
-  const reveal = (g: Group) => api.revealGroup(g.id).catch((e) => useStore.getState().toast((e as Error).message, 'error'))
 
   // ---- 끌어다 놓기 ----
   const dragProps = (kind: string, id: string) => ({
@@ -229,7 +222,6 @@ export function FolderTree({ meetings, renderItem, rest }: { meetings: MeetingSu
                 <button className="menu-item" onClick={() => { toggle(menu.group.id, true); setEditing(`new:${menu.group.id}`); setMenu(null) }}>안에 새 폴더</button>
               )}
               <button className="menu-item" onClick={() => { setEditing(menu.group.id); setMenu(null) }}>이름 바꾸기</button>
-              <button className="menu-item" onClick={() => { reveal(menu.group); setMenu(null) }}>{MAC ? 'Finder에서 열기' : '파일 탐색기에서 열기'}</button>
               {menu.group.parent_id && (
                 <button className="menu-item" onClick={() => { after(api.patchGroup(menu.group.id, { parent_id: '' })); setMenu(null) }}>맨 바깥으로 꺼내기</button>
               )}
@@ -268,16 +260,8 @@ export function FolderTree({ meetings, renderItem, rest }: { meetings: MeetingSu
             <li>회의를 폴더로 <b>끌어다 놓거나</b>, 회의를 <b>{MAC ? '두 손가락으로 클릭(또는 control+클릭)' : '오른쪽 클릭'}</b>해서 옮겨요.</li>
             <li>폴더 이름은 <b>두 번 눌러</b> 바꿔요. 폴더를 다른 폴더로 끌어 넣을 수 있어요 ({MAX_DEPTH}단계까지).</li>
             <li>폴더를 지워도 <b>회의는 지워지지 않고</b> 한 칸 위로 나와요.</li>
-            <li>저장 폴더({MAC ? 'Finder' : '파일 탐색기'})에서도 같은 폴더로 정리돼요: <code>meetings/폴더/날짜_제목</code>. 녹음·원본 스크립트 작업 중인 회의는 끝난 뒤 옮겨요.</li>
-            {MAC ? (
-              <li>저장 폴더가 iCloud Drive 안이면 옮기는 동안 동기화가 늦을 수 있어요.</li>
-            ) : (
-              <>
-                <li>파일 탐색기나 다른 프로그램이 회의 파일을 열고 있으면 그 회의는 1분쯤 뒤 다시 옮겨요.</li>
-                <li>윈도우는 경로가 260자를 넘으면 파일을 다루지 못해서, 너무 길면 옮기지 않아요. 폴더 이름을 짧게 해 주세요.</li>
-              </>
-            )}
-            <li>폴더 이름의 <code>\ / : * ? " &lt; &gt; |</code>는 저장 폴더에서 빠지고, CON·NUL 같은 이름에는 _가 붙어요. 같은 곳에 대소문자만 다른 이름은 만들 수 없어요.</li>
+            <li>폴더는 <b>앱 안에서만</b> 정리돼요. {MAC ? 'Finder' : '파일 탐색기'}의 저장 폴더는 그대로라(<code>meetings/날짜_제목</code>) 파일이 옮겨지지 않아요. 회의 파일은 회의 화면의 '폴더 열기'로 바로 열 수 있어요.</li>
+            <li>같은 곳에 같은 이름(대소문자만 다른 이름 포함)의 폴더는 만들 수 없어요.</li>
           </ul>
         </Floating>
       )}

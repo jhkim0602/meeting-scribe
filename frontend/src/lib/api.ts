@@ -32,7 +32,7 @@ export interface MeetingSummary {
   group_id?: string | null
 }
 
-/** 왼쪽 목록에서 회의를 정리하는 폴더 (저장 폴더/meetings 안의 실제 폴더로도 맞춰진다) */
+/** 왼쪽 목록에서 회의를 정리하는 폴더 (앱 안에서만, 디스크의 회의 파일은 옮기지 않는다) */
 export interface Group {
   id: string
   name: string
@@ -41,10 +41,8 @@ export interface Group {
   count: number
 }
 
-/** pending: 목록은 바꿨지만 디스크에서는 아직 못 옮긴 회의 (녹음·작업 중, 윈도우에서 파일이 열려 있음) */
 export interface GroupsOut {
   groups: Group[]
-  pending: string[]
   group?: Group
 }
 
@@ -244,7 +242,6 @@ export const api = {
   /** parent_id: ''이면 맨 바깥으로 */
   patchGroup: (id: string, patch: { name?: string; parent_id?: string }) => req<GroupsOut>('PATCH', `/api/groups/${id}`, patch),
   deleteGroup: (id: string) => req<GroupsOut>('DELETE', `/api/groups/${id}`),
-  revealGroup: (id: string) => req<{ path: string }>('POST', `/api/groups/${id}/reveal`),
   moveMeeting: (id: string, group_id: string | null) => req<GroupsOut>('PUT', `/api/meetings/${id}/group`, { group_id }),
   live: (id: string) => req<LiveView>('GET', `/api/meetings/${id}/live`),
   editSegment: (id: string, segmentId: string, text: string) => req<SegmentEdit>('PATCH', `/api/meetings/${id}/segments/${segmentId}`, { text }),

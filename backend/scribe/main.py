@@ -90,7 +90,7 @@ async def _unload_idle_model() -> None:
         holder.unload_if_idle(busy=bool(sessions))
         if not sessions:
             await asyncio.to_thread(backup_daily, settings.db_path)
-            # 그때 못 옮긴 회의 폴더(윈도우: 파일이 열려 있었음)를 다시 맞춘다
+            # 그때 이름을 못 바꾼 회의 폴더(윈도우: 파일이 열려 있었음)를 다시 맞춘다
             busy = {j["meeting_id"] for j in store.active_jobs()}
             await asyncio.to_thread(folders.migrate_all, store, busy)
 
@@ -311,8 +311,8 @@ def list_meetings(q: Optional[str] = None) -> list[dict]:
 
 
 # ---------------- 폴더 (왼쪽 목록 정리) ----------------
-# 앱의 목록은 DB를 따르고, 디스크(저장 폴더/meetings/폴더/날짜_제목)는 그 뒤에 맞춘다.
-# 녹음·원본 스크립트 작업 중이거나 옮기지 못하면(윈도우: 다른 프로그램이 파일을 열고 있음) 나중에 다시 맞춘다.
+# 앱 안에서만 쓰는 정리용 폴더 (DB의 meeting_groups, meetings.group_id).
+# 디스크의 회의 폴더는 옮기지 않는다 (meetings/날짜_제목 그대로): 파일을 옮기다 생기는 문제(윈도우 파일 잠금 등)가 없다.
 
 GROUP_MAX_DEPTH = 3
 
@@ -367,27 +367,22 @@ def _subtree(children: dict[Optional[str], list[str]], gid: str) -> list[str]:
     return out
 
 
+def _name_key(name: str) -> str:
+    import unicodedata
+
+    return unicodedata.normalize("NFC", name).casefold()
+
+
 def _check_unique(name: str, parent_id: Optional[str], exclude: Optional[str] = None) -> None:
-    """같은 곳에 같은 이름(대소문자·디스크 이름 기준)의 폴더는 둘 수 없다. 윈도우·맥은 대소문자를 구분하지 않는다."""
-    key = folders.dir_name(name).casefold()
+    """같은 곳에 같은 이름(대소문자만 다른 것 포함)의 폴더는 둘 수 없다 (헷갈리지 않게)"""
+    key = _name_key(name)
     for g in store.list_groups():
-        if g["id"] != exclude and g["parent_id"] == parent_id and folders.dir_name(g["name"]).casefold() == key:
+        if g["id"] != exclude and g["parent_id"] == parent_id and _name_key(g["name"]) == key:
             raise HTTPException(409, f"'{g['name']}' 폴더가 이미 있어요. 다른 이름으로 지어 주세요.")
 
 
-def _resync(meeting_ids: list[str]) -> list[str]:
-    """회의 폴더를 디스크에서도 맞춘다. 아직 못 옮긴(녹음·작업 중이거나 실패한) 회의 id."""
-    pending = []
-    for mid in meeting_ids:
-        _sync_folder(mid)
-        m = store.get_meeting(mid)
-        if m and folders.needs_sync(store, m):
-            pending.append(mid)
-    return pending
-
-
-def _groups_out(pending: Optional[list[str]] = None) -> dict:
-    return {"groups": store.list_groups(), "pending": pending or []}
+def _groups_out() -> dict:
+    return {"groups": store.list_groups()}
 
 
 @app.get("/api/groups")
@@ -432,30 +427,15 @@ def update_group(group_id: str, body: GroupIn) -> dict:
     if (name, parent) != (g["name"], g["parent_id"]):
         _check_unique(name, parent, exclude=group_id)
     store.update_group(group_id, **fields)
-    _, children = _group_tree()
-    inside = set(_subtree(children, group_id))
-    return _groups_out(_resync([m["id"] for m in store.list_meetings() if m.get("group_id") in inside]))
+    return _groups_out()
 
 
 @app.delete("/api/groups/{group_id}")
 def delete_group(group_id: str) -> dict:
     """폴더만 지운다. 안의 회의와 폴더는 한 칸 위로 나온다 (회의는 지우지 않는다)."""
     _group_or_404(group_id)
-    _, children = _group_tree()
-    inside = set(_subtree(children, group_id))
-    affected = [m["id"] for m in store.list_meetings() if m.get("group_id") in inside]
     store.delete_group(group_id)
-    return _groups_out(_resync(affected))
-
-
-@app.post("/api/groups/{group_id}/reveal")
-def reveal_group(group_id: str) -> dict:
-    """폴더를 Finder·파일 탐색기로 연다 (아직 회의가 없으면 빈 폴더를 만든다)"""
-    _group_or_404(group_id)
-    path = settings.meetings_dir / folders.group_rel(store, group_id)
-    path.mkdir(parents=True, exist_ok=True)
-    _open_in_files(path)
-    return {"path": str(path)}
+    return _groups_out()
 
 
 @app.put("/api/meetings/{meeting_id}/group")
@@ -466,7 +446,7 @@ def move_meeting(meeting_id: str, body: MeetingGroupIn) -> dict:
     if gid:
         _group_or_404(gid)
     store.set_meeting_group(meeting_id, gid)
-    return _groups_out(_resync([meeting_id]))
+    return _groups_out()
 
 
 @app.post("/api/meetings")
