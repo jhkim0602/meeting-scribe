@@ -203,3 +203,4 @@ mkdir -p ~/.claude/skills && cp -r claude/skills/meeting-minutes ~/.claude/skill
 - [사용자 시나리오](docs/USER_SCENARIOS.md): 무엇을 왜 만들었는지
 - [개발 문서](docs/DEVELOPMENT.md): 구조, 성능, 설정, 테스트
 - [맥 점검표](docs/MAC_CHECKLIST.md): 처음 맥에서 확인할 것
+- [릴리스하는 법](docs/RELEASE.md): 새 버전을 내는 순서 (태그 하나로 맥·윈도우 앱과 자동 업데이트)
