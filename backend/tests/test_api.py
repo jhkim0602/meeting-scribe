@@ -833,8 +833,11 @@ def test_reveal_writes_documents_into_the_meeting_folder(client, monkeypatch):
 
     from scribe import config
 
+    import os
+
     opened = []
-    monkeypatch.setattr(subprocess, "Popen", lambda args, **k: opened.append(args))
+    monkeypatch.setattr(subprocess, "Popen", lambda args, **k: opened.append(args))  # 맥·리눅스
+    monkeypatch.setattr(os, "startfile", lambda path: opened.append([path]), raising=False)  # 윈도우
     mid = client.post("/api/meetings", json={"title": "폴더 열기"}).json()["id"]
     r = client.post(f"/api/meetings/{mid}/reveal").json()
     mdir = config.settings.meeting_path(mid)

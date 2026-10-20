@@ -5,6 +5,7 @@ import sqlite3
 import sys
 import time
 import types
+from contextlib import closing
 from pathlib import Path
 
 import numpy as np
@@ -13,7 +14,8 @@ from scribe import live_speakers, notices, recording, safety
 
 
 def _db(path: Path, rows: int = 3) -> None:
-    with sqlite3.connect(path) as c:
+    # 꼭 닫는다 (윈도우는 열린 파일을 옮기지 못한다)
+    with closing(sqlite3.connect(path)) as c, c:
         c.execute("CREATE TABLE t(x)")
         c.executemany("INSERT INTO t VALUES(?)", [(i,) for i in range(rows)])
 
@@ -27,7 +29,7 @@ def test_broken_db_is_kept_aside_and_restored_from_latest_copy(tmp_path):
     msg = safety.check_and_recover(db)
     assert msg and "사본으로 되돌렸어요" in msg
     assert list(tmp_path.glob("scribe.broken-*.db"))  # 깨진 파일은 남긴다
-    with sqlite3.connect(db) as c:
+    with closing(sqlite3.connect(db)) as c:
         assert c.execute("SELECT count(*) FROM t").fetchone()[0] == 3
 
     # 사본이 없으면 새로 시작 (깨진 파일은 남긴다)
