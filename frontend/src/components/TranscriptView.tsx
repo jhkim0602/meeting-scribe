@@ -584,7 +584,7 @@ export const TranscriptView = memo(function TranscriptView({ meetingId, units, a
     [],
   )
 
-  // 글자를 선택한 상태에서 C 또는 ⌘⌥M → 댓글
+  // 글자를 선택한 상태에서 C 또는 ⌘⌥M → 댓글, Enter → 그 자리에서 고치기
   useEffect(() => {
     if (!sel || composer) return
     const onKey = (e: KeyboardEvent) => {
@@ -595,6 +595,9 @@ export const TranscriptView = memo(function TranscriptView({ meetingId, units, a
       if (plainC || docsShortcut) {
         e.preventDefault()
         act('comment')
+      } else if (e.key === 'Enter' && !e.isComposing && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
+        e.preventDefault()
+        act('edit')
       }
     }
     document.addEventListener('keydown', onKey)
@@ -690,7 +693,7 @@ export const TranscriptView = memo(function TranscriptView({ meetingId, units, a
         <Floating rect={sel.rect} placement="above" className="sel-toolbar">
           <button className="primary" onMouseDown={(e) => e.preventDefault()} onClick={() => act('comment')} title="댓글 (C)"><MessageSquarePlus size={15} />댓글<kbd>C</kbd></button>
           <button onMouseDown={(e) => e.preventDefault()} onClick={() => act('highlight')}><Highlighter size={15} />강조</button>
-          <button onMouseDown={(e) => e.preventDefault()} onClick={() => act('edit')} title="이 문장을 그 자리에서 고치기 (E)"><PenLine size={15} />고치기</button>
+          <button onMouseDown={(e) => e.preventDefault()} onClick={() => act('edit')} title="이 문장을 그 자리에서 고치기 (Enter)"><PenLine size={15} />고치기<kbd>↵</kbd></button>
           <span className="sep" />
           <button onMouseDown={(e) => e.preventDefault()} onClick={() => act('note')}><NotebookPen size={15} />노트로</button>
         </Floating>

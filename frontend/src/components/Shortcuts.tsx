@@ -9,6 +9,7 @@ const MOD = isMac ? '⌘' : 'Ctrl'
 const LIST: { keys: string[]; label: string }[] = [
   { keys: [MOD, '⇧', 'P'], label: '녹음 일시정지 / 이어하기' },
   { keys: ['E'], label: '문장 그 자리에서 고치기 (마우스를 올린 문장, 녹음 중이면 방금 문장 · Enter 저장, Esc 취소)' },
+  { keys: ['Enter'], label: '글자를 고른 채로: 그 문장을 고치기 (고른 부분이 선택된 채로)' },
   { keys: ['C'], label: '고른 글자에 댓글 (녹음 중 선택이 없으면 방금 문장에)' },
   { keys: ['M'], label: '지금 시각에 메모' },
   { keys: ['1', '…', '9'], label: '문장의 화자를 참석자로 (마우스를 올린 문장, 녹음 중이면 방금 문장 · 같은 목소리도 함께)' },

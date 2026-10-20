@@ -167,6 +167,8 @@ export function TranscriptPane() {
   const memoInput = useRef<HTMLInputElement>(null)
   const seenCount = useRef(0)
   const userScrollAt = useRef(0)
+  const dragging = useRef(false)
+  const lastTop = useRef(0)
   const [memo, setMemo] = useState('')
   const [barMode, setBarMode] = useState<'comment' | 'memo'>('comment')
   const [toNotes] = usePref(COMMENT_TO_NOTES, false)
@@ -177,14 +179,23 @@ export function TranscriptPane() {
   const hasDividers = anns.some((a) => a.kind === 'divider' && a.pos)
 
   // 따라가기: 녹음 중에는 맨 아래(새 문장), 재생 중에는 재생 위치를 따라간다.
-  // 사용자가 직접 스크롤해 다른 곳을 보면 멈추고 "새 문장 n개" / "재생 위치로" 버튼을 띄운다.
+  // 사용자가 위로 조금이라도 올리거나, 글자를 고르거나 고치는 중이면 멈추고 "새 문장 n개" / "재생 위치로" 버튼만 띄운다.
+  // 다시 따라가는 것은 맨 아래까지 직접 내리거나 버튼을 눌렀을 때뿐이다.
   const liveCount = live?.units.length || 0
   useEffect(() => {
     const el = scrollRef.current
     if (!el || tab !== 'live' || !recordingHere || !follow) return
+    const sel = window.getSelection()
+    const selecting = !!sel && !sel.isCollapsed && el.contains(sel.anchorNode)
+    const active = document.activeElement as HTMLElement | null
+    const editing = !!active?.isContentEditable && el.contains(active)
+    if (selecting || editing) {
+      set({ follow: false })
+      return
+    }
     el.scrollTo({ top: el.scrollHeight })
     seenCount.current = liveCount
-  }, [liveCount, partial?.text, tab, follow, recordingHere])
+  }, [liveCount, partial?.text, tab, follow, recordingHere, set])
 
   useEffect(() => {
     set({ follow: true })
@@ -196,24 +207,39 @@ export function TranscriptPane() {
     const mark = () => {
       userScrollAt.current = Date.now()
     }
+    // 스크롤 막대를 끌거나 글자를 골라 위로 끄는 동안은 오래 걸려도 사용자가 움직이는 것
+    const down = () => {
+      mark()
+      dragging.current = true
+    }
+    const up = () => {
+      dragging.current = false
+    }
     const onScroll = () => {
-      if (Date.now() - userScrollAt.current > 800) return // 프로그램이 움직인 스크롤
-      const near = el.scrollHeight - el.scrollTop - el.clientHeight < 120
+      const movedUp = el.scrollTop < lastTop.current - 2
+      lastTop.current = el.scrollTop
+      if (!dragging.current && Date.now() - userScrollAt.current > 800) return // 프로그램이 움직인 스크롤
+      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 8
       const st = useStore.getState()
       if (st.tab === 'live' && recordingHere) {
-        if (near !== st.follow) set({ follow: near })
-        if (near) seenCount.current = useStore.getState().live?.units.length || 0
+        if (movedUp && st.follow) set({ follow: false })
+        else if (atBottom && !st.follow) {
+          set({ follow: true })
+          seenCount.current = st.live?.units.length || 0
+        }
       } else if (st.playing && st.follow) set({ follow: false })
     }
     el.addEventListener('wheel', mark, { passive: true })
     el.addEventListener('touchmove', mark, { passive: true })
-    el.addEventListener('pointerdown', mark)
+    el.addEventListener('pointerdown', down)
+    window.addEventListener('pointerup', up)
     el.addEventListener('keydown', mark)
     el.addEventListener('scroll', onScroll, { passive: true })
     return () => {
       el.removeEventListener('wheel', mark)
       el.removeEventListener('touchmove', mark)
-      el.removeEventListener('pointerdown', mark)
+      el.removeEventListener('pointerdown', down)
+      window.removeEventListener('pointerup', up)
       el.removeEventListener('keydown', mark)
       el.removeEventListener('scroll', onScroll)
     }
