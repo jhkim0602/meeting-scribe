@@ -14,6 +14,7 @@ on:
       - "frontend/src/**"
       - "frontend/package*.json"
       - "launcher/**"
+      - "claude/skills/**"
       - ".github/workflows/mac-app.yml"
 
 permissions:

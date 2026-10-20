@@ -20,11 +20,15 @@ case "${1:-auto}" in
 esac
 
 echo "· 서버 코드"
-rm -rf "$RES/app/backend" "$RES/app/frontend"
+rm -rf "$RES/app/backend" "$RES/app/frontend" "$RES/app/claude"
 mkdir -p "$RES/app/backend" "$RES/bin"
 cp "$ROOT"/backend/requirements*.txt "$RES/app/backend/"
 cp -R "$ROOT/backend/scribe" "$RES/app/backend/scribe"
 find "$RES/app/backend" -name "__pycache__" -type d -prune -exec rm -rf {} +
+
+echo "· 회의록 스킬 (Claude Code에 복사해 쓰는 것)"
+mkdir -p "$RES/app/claude"
+cp -R "$ROOT/claude/skills" "$RES/app/claude/skills"
 
 echo "· 회의 노트 화면"
 if [[ ! -f "$ROOT/frontend/dist/index.html" ]]; then

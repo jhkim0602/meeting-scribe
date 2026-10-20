@@ -52,8 +52,12 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
     onClose()
   }
 
-  const mcpPath = `${health?.project_root || '<프로젝트 폴더>'}/scripts/mcp.sh`
-  const desktop = JSON.stringify({ mcpServers: { 'meeting-scribe': { command: mcpPath } } }, null, 2)
+  // 터미널로 설치했으면 scripts/mcp.sh, 앱으로 설치했으면 앱의 파이썬으로 바로 띄운다 (경로에 띄어쓰기가 있어 따옴표로 감싼다)
+  const root = health?.project_root || '<프로젝트 폴더>'
+  const mcp = health?.mcp ?? { command: `${root}/scripts/mcp.sh`, args: [], env: {} }
+  const q = (s: string) => (/^[\w./:=@%+-]+$/.test(s) ? s : `"${s.replace(/(["\\$`])/g, '\\$1')}"`)
+  const codeCmd = ['claude mcp add meeting-scribe', ...Object.entries(mcp.env).map(([k, v]) => `-e ${q(`${k}=${v}`)}`), '--', q(mcp.command), ...mcp.args.map(q)].join(' ')
+  const desktop = JSON.stringify({ mcpServers: { 'meeting-scribe': health?.mcp ?? { command: mcp.command } } }, null, 2)
 
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
@@ -112,11 +116,12 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             <h3>Claude 연결 (MCP)</h3>
             <p className="muted">내가 구독한 Claude가 회의 기록·노트·메모·댓글을 읽고 요약을 이 앱에 저장할 수 있어요.</p>
             <p className="field-label">Claude Code</p>
-            <CopyBlock text={`claude mcp add meeting-scribe -- ${mcpPath}`} />
+            <CopyBlock text={codeCmd} />
             <p className="field-label">Claude Desktop · 설정 → 개발자 → 구성 편집</p>
+            {health?.app_install && <p className="muted mcp-hint">메뉴 막대의 회의 노트 → 설치·설정 창 → Claude 데스크톱 "연결"을 누르면 저절로 넣어 줘요.</p>}
             <CopyBlock text={desktop} />
             <p className="field-label">회의록 스킬 (Claude Code)</p>
-            <CopyBlock text={`mkdir -p ~/.claude/skills && cp -r "${health?.project_root || '<프로젝트 폴더>'}/claude/skills/meeting-minutes" ~/.claude/skills/`} />
+            <CopyBlock text={`mkdir -p ~/.claude/skills && cp -r ${q(`${root}/claude/skills/meeting-minutes`)} ~/.claude/skills/`} />
           </section>
           <details className="advanced">
             <summary><ChevronRight size={14} />고급</summary>
@@ -124,6 +129,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
               <dl className="kv">
                 <dt>실시간</dt><dd>{health.live.kind} · {health.live.model} <em className={`st-${health.live.state}`}>{health.live.state}</em></dd>
                 <dt>원본 스크립트</dt><dd>{health.final.kind} · {health.final.model}</dd>
+                {health.app_install && <><dt /><dd className="muted">모델은 메뉴 막대의 회의 노트 → 설치·설정 창 → 받아쓰기 모델에서 바꿔요</dd></>}
                 <dt>화자 구분</dt><dd>{health.diarizer === 'none' ? '사용 안 함 (HF_TOKEN 설정 필요)' : health.diarizer}</dd>
                 <dt>데이터 위치</dt><dd><code>{health.data_dir}</code></dd>
                 <dt>잠자기 방지</dt><dd>{health.keep_awake ? '녹음 중 caffeinate' : '브라우저 화면 꺼짐 방지'}</dd>

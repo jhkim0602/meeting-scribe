@@ -2,6 +2,7 @@
 
 import json
 import os
+import sys
 import subprocess
 import time
 
@@ -59,6 +60,7 @@ def _wait_job(client, mid, timeout=60):
 def test_full_flow(client):
     h = client.get("/api/health").json()
     assert h["ok"] and h["live"]["kind"] == "mock"
+    assert h["app_install"] is False and h["mcp"] is None  # 터미널로 설치: scripts/mcp.sh
 
     m = client.post("/api/meetings", json={"title": "주간 회의"}).json()
     mid = m["id"]
@@ -297,6 +299,15 @@ def test_manual_divider_and_settings(client):
     assert s["break_prompt_minutes"] == 5 and s["auto_on_battery"] is False
     assert client.put("/api/settings", json={"auto_on_battery": True}).json()["auto_on_battery"] is True
     client.post(f"/api/meetings/{mid}/cancel")
+
+
+def test_app_install_shows_mcp_command_with_app_python(client, tmp_path, monkeypatch):
+    cfg = tmp_path / "설정 폴더" / "config.json"
+    monkeypatch.setenv("SCRIBE_CONFIG", str(cfg))
+    h = client.get("/api/health").json()
+    assert h["app_install"] is True
+    assert h["mcp"]["command"] == sys.executable and h["mcp"]["args"] == ["-m", "scribe.mcp_server"]
+    assert h["mcp"]["env"]["SCRIBE_CONFIG"] == str(cfg) and h["mcp"]["env"]["PYTHONDONTWRITEBYTECODE"] == "1"
 
 
 def test_local_only_blocks_other_sites(client):

@@ -143,6 +143,10 @@ export interface Health {
   keep_awake: boolean
   project_root: string
   language: string
+  /** 맥 앱(실행기)으로 설치했다 */
+  app_install?: boolean
+  /** 앱으로 설치했을 때 Claude가 MCP 서버를 띄우는 방법 (앱의 파이썬) */
+  mcp?: { command: string; args: string[]; env: Record<string, string> } | null
 }
 
 export interface AppSettings {

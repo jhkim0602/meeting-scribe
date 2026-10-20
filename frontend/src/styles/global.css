@@ -664,7 +664,7 @@ code { font-family: var(--font-mono); font-size: 0.88em; background: var(--bg-ho
 .menu-item:hover:not(:disabled) { background: var(--bg-hover); }
 .menu-item.danger { color: var(--rec); }
 .menu-sep { height: 1px; background: var(--border); margin: 4px 2px; }
-.modal-backdrop { position: fixed; inset: 0; z-index: 60; background: rgba(15, 15, 15, 0.38); display: grid; place-items: center; padding: 24px; }
+.modal-backdrop { position: fixed; inset: 0; z-index: 60; background: rgba(15, 15, 15, 0.38); display: grid; grid-template-columns: minmax(0, 1fr); place-items: center; padding: 24px; }
 .modal { width: min(620px, 100%); max-height: calc(100vh - 48px); display: flex; flex-direction: column; background: var(--bg-raised); border-radius: 12px; box-shadow: var(--shadow); }
 .modal.confirm { width: min(460px, 100%); }
 .confirm-body { padding: 22px 22px 6px; }
@@ -689,10 +689,12 @@ code { font-family: var(--font-mono); font-size: 0.88em; background: var(--bg-ho
 .kv { display: grid; grid-template-columns: 90px 1fr; gap: 6px 12px; margin: 0; font-size: 13px; }
 .kv dt { color: var(--text-3); }
 .kv dd { margin: 0; word-break: break-all; }
+.kv dd.muted { word-break: keep-all; font-size: 12.5px; }
+.mcp-hint { margin: -2px 0 8px; font-size: 12.5px; }
 .kv em { font-style: normal; margin-left: 6px; font-size: 12px; }
 .st-ready { color: var(--ok); } .st-loading { color: var(--warn); } .st-error { color: var(--rec); }
 .copy-block { position: relative; }
-.copy-block pre { margin: 0; padding: 10px 40px 10px 12px; border-radius: 6px; background: var(--bg-soft); border: 1px solid var(--border); font-family: var(--font-mono); font-size: 12px; overflow-x: auto; white-space: pre; }
+.copy-block pre { margin: 0; padding: 10px 40px 10px 12px; border-radius: 6px; background: var(--bg-soft); border: 1px solid var(--border); font-family: var(--font-mono); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .copy-block .icon-btn { position: absolute; top: 6px; right: 6px; }
 .error-text { color: var(--rec); font-size: 12.5px; }
 .toasts { position: fixed; right: 18px; bottom: 76px; z-index: 70; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }

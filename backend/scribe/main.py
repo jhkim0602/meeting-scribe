@@ -111,7 +111,18 @@ def health() -> dict:
         "power": power_source(),
         "project_root": str(Path(__file__).resolve().parents[2]),
         "language": settings.language,
+        # 맥 앱(실행기)으로 설치했으면 모델은 메뉴 막대 앱에서 바꾸고, Claude는 앱의 파이썬으로 MCP 서버를 띄운다
+        "app_install": bool(os.environ.get("SCRIBE_CONFIG")),
+        "mcp": _app_mcp_entry(),
     }
+
+
+def _app_mcp_entry() -> Optional[dict]:
+    if not os.environ.get("SCRIBE_CONFIG"):
+        return None  # 터미널로 설치: scripts/mcp.sh
+    from .installer import mcp_entry
+
+    return mcp_entry()
 
 
 @app.post("/api/warmup")
