@@ -1,0 +1,49 @@
+# 서버 시험: 맥·윈도우·리눅스에서 backend/tests 전체를 돌린다 (시연용 엔진, 모델은 받지 않음).
+# 어느 가지에 올려도 돈다. 윈도우만 드러나는 문제(파일 잠금, 경로, 인코딩)를 릴리스 전에 잡는다.
+name: 서버 시험
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "backend/**"
+      - ".github/workflows/tests.yml"
+
+jobs:
+  pytest:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-14, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+        working-directory: backend
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements*.txt
+
+      - name: ffmpeg (파일 올리기 시험)
+        working-directory: .
+        run: |
+          case "$RUNNER_OS" in
+            Windows) choco install ffmpeg -y --no-progress >/dev/null ;;
+            macOS) brew install ffmpeg >/dev/null ;;
+            Linux) sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg >/dev/null ;;
+          esac
+          ffmpeg -version | head -1
+
+      - name: 패키지
+        run: pip install -r requirements-dev.txt
+
+      - name: 시험
+        run: python -m pytest -q

@@ -150,4 +150,5 @@ def test_doctor_and_catalog_commands_print_json(tmp_path):
     assert items["python"]["ok"] and items["data"]["ok"] and items["claude"]["ok"] is None
     out = subprocess.run([sys.executable, "-m", "scribe.installer", "catalog"], env=env, capture_output=True, text=True, check=True).stdout
     d = json.loads(out)
-    assert d["machine"]["recommend"]["live"] == "qwen3-0.6b-8bit" and d["catalog"]["live"]
+    # 기기마다 추천이 다르다 (맥: Qwen3, 윈도우·리눅스: Whisper)
+    assert d["machine"]["recommend"] == catalog.recommend(d["machine"]["ram_gb"]) and d["catalog"]["live"]

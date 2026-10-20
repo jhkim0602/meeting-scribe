@@ -28,6 +28,7 @@ from .config import SAMPLE_RATE, settings
 from .db import Store
 from .engines import make_diarizer, make_engine, repos_for, resolve_diarizer_kind
 from .engines import diarizers
+from .folders import WORK
 from .engines.download import DownloadWatch
 from .engines.base import split_windows
 from .jobs import pause_path
@@ -110,7 +111,7 @@ class Checkpoints:
     모델·언어·용어집이 바뀌면 key가 달라져 모두 지운다."""
 
     def __init__(self, mdir: Path, key: str):
-        self.dir = mdir / "ckpt"
+        self.dir = mdir / WORK / "ckpt"
         self.dir.mkdir(parents=True, exist_ok=True)
         meta = self.dir / "meta.json"
         try:

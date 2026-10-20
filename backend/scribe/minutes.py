@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import html
+import json
 import re
 from typing import Any, Optional
 
@@ -307,7 +308,7 @@ def collect(store: Store, views: Views, meeting_id: str) -> Optional[dict]:
         pos = a.get("pos") or {}
         quote = pos.get("text") if isinstance(pos, dict) and "text" in pos else a["anchor"].get("quote")
         marks.append({
-            "kind": a["kind"], "t": float(a["anchor"].get("t0", a["anchor"].get("t", 0)) or 0),
+            "id": a["id"], "kind": a["kind"], "t": float(a["anchor"].get("t0", a["anchor"].get("t", 0)) or 0),
             "body": a["body"], "quote": quote if a["kind"] == "comment" else None,
             "replies": [r["text"] for r in a.get("replies") or []], "resolved": a.get("status") == "resolved",
         })
@@ -474,7 +475,7 @@ def render(data: dict, audio_src: Optional[str] = None, generated: Optional[floa
             quote = f'<p class="q">{_esc(mk["quote"])}</p>' if mk.get("quote") else ""
             replies = "".join(f'<p class="reply">{_esc(r)}</p>' for r in mk["replies"])
             tag = '<span class="tag memo">메모</span>' if mk["kind"] == "memo" else ('<span class="tag ok">해결</span>' if mk["resolved"] else '<span class="tag">댓글</span>')
-            items.append(f'<li><span class="at">{_chip(mk["t"])}</span><div class="mk">{quote}<p class="c">{_esc(mk["body"])}{tag}</p>{replies}</div></li>')
+            items.append(f'<li data-ann="{_esc(mk.get("id", ""))}"><span class="at">{_chip(mk["t"])}</span><div class="mk">{quote}<p class="c"><span class="ann-body">{_esc(mk["body"])}</span>{tag}</p>{replies}</div></li>')
         if shown is data["marks"]:
             section("회의 중 메모·댓글", f'<ul class="marks">{"".join(items)}</ul>', f"{len(shown):,}건")
         else:
@@ -522,11 +523,19 @@ def attendees_html(people: list[dict], label: str = "참석자") -> str:
             f'<thead><tr><th>이름</th><th>소속</th><th>직무</th><th>메모</th></tr></thead><tbody>{rows}</tbody></table></div>')
 
 
+def _edit_scripts(data: dict) -> str:
+    """앱에서 열었을 때만: [고치기]를 켜면 문장·메모·댓글·참석자를 그 자리에서 고쳐 앱에 바로 저장한다"""
+    people = json.dumps(data.get("people") or [], ensure_ascii=False).replace("</", "<\\/")
+    return f'<script type="application/json" id="people-data">{people}</script><script>{EDIT_JS}</script>'
+
+
 def tools_html(meeting_id: str, active: str) -> str:
     """앱에서 열었을 때만 보이는 위쪽 줄: 전사 기록 ↔ 회의록, 인쇄, 파일로 받기 (받은 파일·인쇄에는 없음)"""
     tabs = [("transcript", "전사 기록"), ("minutes", "회의록")]
     seg = "".join(f'<a href="/api/meetings/{_esc(meeting_id)}/{k}.html" class="{"on" if k == active else ""}">{v}</a>' for k, v in tabs)
     return (f'<nav class="apptools"><div class="seg">{seg}</div><span class="sp"></span>'
+            f'<span class="edit-hint">문장·메모·댓글·참석자를 눌러 고치고 Enter (메모·댓글은 다 지우고 Enter면 삭제)</span>'
+            f'<button type="button" id="edit-toggle" aria-pressed="false">고치기</button>'
             f'<button type="button" onclick="window.print()">인쇄 · PDF</button>'
             f'<a class="btn" href="/api/meetings/{_esc(meeting_id)}/{active}.html?download=1">파일로 받기</a></nav>')
 
@@ -552,9 +561,9 @@ def page(data: dict, *, brand: tuple[str, str, str], facts: str, body: str, audi
 <title>{_esc(data["title"])} · {ko}</title>
 <link rel="stylesheet" media="print" onload="this.media='all'" href="{FONT_CSS}">
 <noscript><link rel="stylesheet" href="{FONT_CSS}"></noscript>
-<style>{CSS}{extra_css}</style>
+<style>{CSS}{extra_css}{EDIT_CSS if tools else ""}</style>
 </head>
-<body{' class="in-app"' if tools else ""}>
+<body{f' class="in-app" data-meeting="{_esc(data["id"])}"' if tools else ""}>
 {tools}
 <main class="{cls}">
   <div class="doc-top"><span class="brand">{ko}<span class="en">{en}</span></span><span class="doc-no">{doc_no}</span></div>
@@ -568,6 +577,7 @@ def page(data: dict, *, brand: tuple[str, str, str], facts: str, body: str, audi
   {player}
 </main>
 <script>{JS}{extra_js}</script>
+{_edit_scripts(data) if tools else ""}
 </body>
 </html>
 """
@@ -798,3 +808,121 @@ JS = r"""
   });
 })();
 """
+
+
+# 앱에서 연 문서의 [고치기]: 문장·메모·댓글은 그 자리에서, 참석자는 표에서 고쳐 앱에 저장하고 문서를 새로 그린다
+EDIT_CSS = r"""
+.apptools .edit-hint { display: none; font-size: 12px; color: var(--muted); }
+body.editing .apptools .edit-hint { display: inline; }
+#edit-toggle[aria-pressed="true"] { background: var(--ink); color: #fff; border-color: var(--ink); }
+body.editing .ed { outline: 1px dashed #b8c2d1; outline-offset: 2px; border-radius: 3px; cursor: text; }
+body.editing .ed:focus { outline: 2px solid #2383e2; background: #f3f8fe; }
+.pe { margin: 12px 0 4px; }
+.pe table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.pe th { text-align: left; font-weight: 500; color: var(--muted); padding: 4px 6px; }
+.pe td { padding: 2px 4px; }
+.pe input { width: 100%; box-sizing: border-box; padding: 5px 6px; border: 1px solid #d7dce3; border-radius: 5px; font: inherit; }
+.pe button { font: inherit; font-size: 12px; padding: 4px 8px; border: 1px solid #d7dce3; border-radius: 5px; background: #fff; cursor: pointer; }
+.pe .add { margin-top: 6px; }
+@media print { .pe, .apptools { display: none !important; } }
+"""
+
+EDIT_JS = r"""
+(function () {
+  var mid = document.body.getAttribute('data-meeting');
+  var btn = document.getElementById('edit-toggle');
+  if (!mid || !btn) return;
+  var KEY = 'scribe-edit-' + mid;
+  // 고친 뒤 새로 그려도 보던 자리 그대로
+  var y = sessionStorage.getItem(KEY + '-y');
+  if (y) { sessionStorage.removeItem(KEY + '-y'); window.scrollTo(0, +y); }
+  function req(method, url, body) {
+    return fetch(url, { method: method, headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined })
+      .then(function (r) {
+        if (r.ok) return r.json().catch(function () { return {}; });
+        return r.json().catch(function () { return {}; }).then(function (j) { throw new Error(j.detail || ('저장하지 못했어요 (' + r.status + ')')); });
+      });
+  }
+  function redraw() { sessionStorage.setItem(KEY + '-y', String(window.scrollY)); location.reload(); }
+  function fail(e) { alert(e.message); }
+  function editable(el, save) {
+    el.setAttribute('contenteditable', 'true');
+    el.classList.add('ed');
+    var orig = el.innerText;
+    el.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); el.blur(); }
+      if (e.key === 'Escape') { el.innerText = orig; el.blur(); }
+    });
+    el.addEventListener('blur', function () {
+      var v = el.innerText.replace(/\s+/g, ' ').trim();
+      if (v === orig.replace(/\s+/g, ' ').trim()) return;
+      save(v).then(redraw, function (e) { el.innerText = orig; fail(e); });
+    });
+  }
+  function people() {
+    var data = JSON.parse(document.getElementById('people-data').textContent || '[]');
+    var head = document.querySelector('header.head');
+    var old = head.querySelector('.attendees');
+    var box = document.createElement('div');
+    box.className = 'pe';
+    var rows = data.map(function (p) { return Object.assign({}, p); });
+    function draw() {
+      var h = '<table><thead><tr><th>이름</th><th>소속</th><th>직무</th><th>메모</th><th></th></tr></thead><tbody>';
+      rows.forEach(function (p, i) {
+        h += '<tr data-i="' + i + '">' + ['name', 'org', 'role', 'note'].map(function (k) {
+          return '<td><input data-k="' + k + '" value="' + String(p[k] || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;') + '"></td>';
+        }).join('') + '<td><button type="button" data-del="' + i + '">빼기</button></td></tr>';
+      });
+      box.innerHTML = h + '</tbody></table><button type="button" class="add">+ 참석자 추가</button>';
+    }
+    function save() {
+      var names = {};
+      for (var i = 0; i < rows.length; i++) {
+        var n = (rows[i].name || '').trim();
+        if (!n) continue;
+        if (names[n]) { alert("'" + n + "' 참석자가 이미 있어요. 다른 이름으로 적어 주세요."); redraw(); return; }
+        names[n] = 1;
+      }
+      req('PUT', '/api/meetings/' + mid + '/participants', { participants: rows.filter(function (p) { return (p.name || '').trim(); }) }).then(redraw, fail);
+    }
+    box.addEventListener('change', function (e) {
+      var inp = e.target, tr = inp.closest('tr');
+      if (!tr || !inp.getAttribute('data-k')) return;
+      rows[+tr.getAttribute('data-i')][inp.getAttribute('data-k')] = inp.value.trim();
+      save();
+    });
+    box.addEventListener('keydown', function (e) { if (e.key === 'Enter' && !e.isComposing && e.target.tagName === 'INPUT') e.target.blur(); });
+    box.addEventListener('click', function (e) {
+      var del = e.target.getAttribute('data-del');
+      if (del !== null) { rows.splice(+del, 1); save(); }
+      if (e.target.classList.contains('add')) { rows.push({ name: '' }); draw(); var ins = box.querySelectorAll('input[data-k="name"]'); ins[ins.length - 1].focus(); }
+    });
+    draw();
+    if (old) old.replaceWith(box); else head.appendChild(box);
+  }
+  function on() {
+    document.body.classList.add('editing');
+    btn.setAttribute('aria-pressed', 'true');
+    btn.textContent = '고치기 끝내기';
+    document.querySelectorAll('.s[id^="u-"]').forEach(function (s) {
+      var id = s.id.slice(2);
+      editable(s, function (v) { return req('PATCH', '/api/meetings/' + mid + '/segments/' + encodeURIComponent(id), { text: v }); });
+    });
+    document.querySelectorAll('[data-ann] .ann-body').forEach(function (el) {
+      var id = el.closest('[data-ann]').getAttribute('data-ann');
+      if (!id) return;
+      editable(el, function (v) {
+        return v ? req('PATCH', '/api/annotations/' + encodeURIComponent(id), { body: v }) : req('DELETE', '/api/annotations/' + encodeURIComponent(id));
+      });
+    });
+    people();
+  }
+  btn.addEventListener('click', function () {
+    var next = !document.body.classList.contains('editing');
+    sessionStorage.setItem(KEY, next ? '1' : '0');
+    if (next) on(); else redraw();
+  });
+  if (sessionStorage.getItem(KEY) === '1') on();
+})();
+"""
+

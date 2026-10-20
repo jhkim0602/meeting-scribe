@@ -182,13 +182,19 @@ class LiveEngineHolder:
             self.engine = None
             self.state = "idle"
             self._ready.clear()
-        gc.collect()
-        try:
-            import mlx.core as mx  # type: ignore
+        _release_memory()
+        return True
 
-            (getattr(mx, "clear_cache", None) or mx.metal.clear_cache)()
-        except Exception:  # noqa: BLE001 - MLX가 없거나 이전 버전
-            pass
+    def reload(self) -> bool:
+        """모델을 바꿨을 때: 지금 모델을 내리고 새 모델을 올린다. 올리는 중이면 False (잠시 뒤 다시)."""
+        with self._lock:
+            if self.state == "loading":
+                return False
+            self.engine = None
+            self.state = "idle"
+            self._ready.clear()
+        _release_memory()
+        self.start_loading()
         return True
 
     def wait(self, timeout: Optional[float] = None) -> Optional[AsrEngine]:
@@ -201,6 +207,16 @@ class LiveEngineHolder:
         if self._watch:
             out["download"] = self._watch.progress()
         return out
+
+
+def _release_memory() -> None:
+    gc.collect()
+    try:
+        import mlx.core as mx  # type: ignore
+
+        (getattr(mx, "clear_cache", None) or mx.metal.clear_cache)()
+    except Exception:  # noqa: BLE001 - MLX가 없거나 이전 버전
+        pass
 
 
 def engines_info() -> dict:

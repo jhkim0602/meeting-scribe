@@ -99,7 +99,7 @@ def test_housekeeping_shrinks_recorded_meetings_but_not_while_recording(manager,
 
     monkeypatch.setattr(storage, "COMPRESS_AFTER_H", 0.0)
     mid = _meeting(manager)  # 원본 스크립트 없이 녹음만 마친 회의
-    mdir = config.settings.meetings_dir / mid
+    mdir = config.settings.meeting_path(mid)
     mdir.mkdir(parents=True, exist_ok=True)
     _make_wav(mdir / "audio.wav", 3.0)
     manager.recording_any = lambda: True
@@ -134,10 +134,11 @@ def _paused_worker(tmp_path):
     data_dir = tmp_path / "data"
     store = Store(data_dir / "scribe.db")
     m = store.create_meeting("멈춤")
-    mdir = data_dir / "meetings" / m["id"]
-    mdir.mkdir(parents=True)
+    # 회의 폴더는 '날짜_제목', 멈춤 표시는 그 안의 숨김 작업 폴더(.work)에
+    mdir = data_dir / "meetings" / store.meeting_folder(m["id"])
+    (mdir / ".work").mkdir(parents=True, exist_ok=True)
     _make_wav(mdir / "audio.wav", 70.0)
-    (mdir / "pause").write_text("녹음 중이라 잠시 멈췄어요", encoding="utf-8")
+    (mdir / ".work" / "pause").write_text("녹음 중이라 잠시 멈췄어요", encoding="utf-8")
     job = store.create_job(m["id"])
     env = dict(os.environ, SCRIBE_DATA_DIR=str(data_dir), SCRIBE_FINAL_ENGINE="mock", SCRIBE_DIARIZER="mock",
                SCRIBE_PARALLEL_DIARIZE_MIN_S="0", PYTHONPATH=str(BACKEND))
@@ -155,7 +156,7 @@ def test_worker_waits_while_paused_then_finishes(tmp_path):
     progress = store.get_job(job["id"])["progress"]
     time.sleep(1.5)
     assert store.get_job(job["id"])["progress"] == progress and proc.poll() is None
-    (mdir / "pause").unlink()
+    (mdir / ".work" / "pause").unlink()
     assert proc.wait(timeout=120) == 0
     j = store.get_job(job["id"])
     assert j["status"] == "done" and j["waiting"] is None

@@ -81,7 +81,7 @@ def test_worker_resumes_from_window_checkpoints(tmp_path):
     final = store.get_final(m["id"])["data"]
     assert final["utterances"][-1]["t1"] > 95.0
     # 다시 쓸 수 없게 된 옛 창 결과는 지워진다
-    names = sorted(f.name for f in (mdir / "ckpt").glob("asr_*.json"))
+    names = sorted(f.name for f in (mdir / ".work" / "ckpt").glob("asr_*.json"))
     assert len(names) == int(grown["windows"])
 
 
