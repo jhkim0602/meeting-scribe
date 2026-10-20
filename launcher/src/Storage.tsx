@@ -144,7 +144,7 @@ function Uninstall({ info, onClose }: { info: StorageInfo; onClose: () => void }
           <>
             <h3 id="u-title">회의 노트를 지울까요?</h3>
             <p>항상 지우는 것: 파이썬·패키지·설치 캐시·설정·로그 ({fmtSize(always)}). Claude 데스크톱 연결과 로그인할 때 켜기도 꺼요.</p>
-            <label className="check"><input type="checkbox" checked={models} onChange={(e) => setModels(e.target.checked)} />받아쓰기 모델 {fmtSize(modelBytes)} <span className="muted">— 다른 프로그램이 받은 모델은 건드리지 않아요</span></label>
+            <label className="check"><input type="checkbox" checked={models} onChange={(e) => setModels(e.target.checked)} />받아쓰기 모델 {fmtSize(modelBytes)} <span className="muted">— 회의 노트 목록에 있는 모델만 지워요. 같은 모델을 다른 프로그램도 쓰고 있으면 그쪽은 다시 받아야 해요</span></label>
             <label className="check"><input type="checkbox" checked={meetings} onChange={(e) => setMeetings(e.target.checked)} />회의 기록 {fmtSize(info.data)}{info.models ? ` (${info.models.meetings}개)` : ''} <span className="muted">— 휴지통으로 옮겨요</span></label>
             {meetings && <p className="callout warn">녹음·기록·노트가 모두 휴지통으로 가요. 남겨 두려면 회의 노트의 설정 → 전체 백업 내려받기를 먼저 해 두세요.</p>}
             {info.app && <label className="check"><input type="checkbox" checked={app} onChange={(e) => setApp(e.target.checked)} />앱 자체 {fmtSize(info.app_bytes)} <span className="muted">— {mac ? '휴지통으로 옮겨요' : '윈도우 제거 도구로 지워요'}</span></label>}
