@@ -66,8 +66,9 @@ jobs:
         run: |
           bin=launcher/src-tauri/target/release/meeting-scribe.exe
           res=launcher/src-tauri/resources  # 설치 파일에 들어가는 것과 같은 폴더
-          support="$RUNNER_TEMP/support"
-          "$bin" --headless install --support "$support" --resources "$res" --set "data_dir=$RUNNER_TEMP/data" | tee "$RUNNER_TEMP/install.jsonl"
+          # 한글·띄어쓰기가 든 경로에서도 (예: 윈도우 사용자 이름이 한글일 때)
+          support="$RUNNER_TEMP/한글 경로/support"
+          "$bin" --headless install --support "$support" --resources "$res" --set "data_dir=$RUNNER_TEMP/한글 경로/회의 기록" | tee "$RUNNER_TEMP/install.jsonl"
           "$bin" --headless serve --support "$support" --resources "$res"
           "$bin" --headless doctor --support "$support" --resources "$res"
 

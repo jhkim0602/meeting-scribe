@@ -29,12 +29,16 @@ from .record import EditError, apply_legacy_edits, edit_segment
 from .recording import handle_recording
 from .search import search_all
 from .security import LocalOnlyMiddleware
+from . import notices
+from .safety import backup_daily, check_and_recover, sync_folder_warning
 from .storage import audio_file, media_type
 from .system import KeepAwake, disk_free_bytes, disk_free_seconds, power_source
 from .views import Views
 from .live_speakers import forget_tracker, normalize_participants, tracker_for
 
 settings.ensure_dirs()
+# 켤 때 DB 점검: 깨졌으면 깨진 파일은 옆에 두고 최근 사본으로 되돌린다
+_recovered = check_and_recover(settings.db_path)
 store = Store(settings.db_path)
 views = Views(store)
 jobs = JobManager(store)
@@ -52,6 +56,11 @@ async def lifespan(app: FastAPI):
         if m["status"] == "recording":
             store.update_meeting(m["id"], status="recorded")
     apply_legacy_edits(store, views)  # 예전 "수정 제안"을 직접 고친 글자로 (한 번만)
+    if _recovered:
+        notices.add(_recovered, level="error", key="db-recovered")
+    if warning := sync_folder_warning(settings.data_dir):
+        notices.add(warning, key="sync-folder")
+    backup_daily(settings.db_path)
     jobs.start()
     if os.environ.get("SCRIBE_PRELOAD", "1") == "1":
         holder.start_loading()
@@ -61,10 +70,12 @@ async def lifespan(app: FastAPI):
 
 
 async def _unload_idle_model() -> None:
-    """녹음이 없는 채로 오래(기본 30분) 지나면 실시간 모델을 메모리에서 내린다."""
+    """녹음이 없는 채로 오래(기본 30분) 지나면 실시간 모델을 메모리에서 내린다. 하루 한 번 DB 사본도 (녹음 중이 아닐 때)."""
     while True:
         await asyncio.sleep(60)
         holder.unload_if_idle(busy=bool(sessions))
+        if not sessions:
+            await asyncio.to_thread(backup_daily, settings.db_path)
 
 
 app = FastAPI(title="Meeting Scribe", version=__version__, lifespan=lifespan)
@@ -113,8 +124,16 @@ def health() -> dict:
         "language": settings.language,
         # 맥 앱(실행기)으로 설치했으면 모델은 메뉴 막대 앱에서 바꾸고, Claude는 앱의 파이썬으로 MCP 서버를 띄운다
         "app_install": bool(os.environ.get("SCRIBE_CONFIG")),
+        # 저장 폴더가 iCloud·OneDrive 안이면 경고 (설정 → 저장 공간에 보여 준다)
+        "storage_warning": sync_folder_warning(settings.data_dir),
         "mcp": _app_mcp_entry(),
     }
+
+
+@app.get("/api/notices")
+def get_notices(since: int = 0) -> list[dict]:
+    """서버가 스스로 한 일 (화면이 알림으로 보여 준다)"""
+    return notices.since(since)
 
 
 @app.get("/api/system/memory")

@@ -83,6 +83,33 @@ fn start_server(app: AppHandle, open: bool) {
     });
 }
 
+/// 사용자가 끄지 않았는데 서버가 죽으면 다시 켠다 (5분 안에 3번까지). 녹음 중이었으면 화면이 다시 이어 붙인다.
+fn watch_server(app: AppHandle) {
+    thread::spawn(move || loop {
+        thread::sleep(Duration::from_secs(3));
+        let state = app.state::<AppState>();
+        let Some(reason) = state.server.lock().unwrap().crashed(&state.paths) else { continue };
+        let log = state.paths.logs().join("server.log");
+        let again = state.server.lock().unwrap().may_restart();
+        let note = if again { "다시 켭니다" } else { "5분 안에 세 번 멈춰서 더는 다시 켜지 않습니다" };
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&log) {
+            use std::io::Write;
+            let _ = writeln!(f, "[실행기] 서버가 멈췄어요 → {note}\n{reason}");
+        }
+        if again {
+            start_server(app.clone(), false);
+        } else {
+            let status = {
+                let mut s = state.server.lock().unwrap();
+                s.wanted = false;
+                s.error = Some(format!("서버가 5분 안에 세 번 멈춰서 더는 다시 켜지 않았어요. 메뉴의 '서버 다시 켜기'를 누르거나 로그를 확인해 주세요.\n{reason}"));
+                s.status()
+            };
+            let _ = app.emit("server", &status);
+        }
+    });
+}
+
 fn stop_server(app: &AppHandle) {
     let state = app.state::<AppState>();
     state.server.lock().unwrap().stop();
@@ -178,6 +205,7 @@ fn run_app(background: bool) {
             });
             build_tray(app.handle())?;
             update::watch(app.handle().clone());
+            watch_server(app.handle().clone());
             if needs {
                 show_main(app.handle()); // 설치 도우미
             } else {

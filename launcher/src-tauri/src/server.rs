@@ -6,7 +6,7 @@ use crate::paths::Paths;
 use serde_json::{json, Value};
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpStream};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -19,6 +19,14 @@ pub struct Server {
     pub external: bool,
     pub starting: bool,
     pub error: Option<String>,
+    /// 켜 두려는 중 (사용자가 끈 게 아니면 죽었을 때 다시 켠다)
+    pub wanted: bool,
+    restarts: Vec<Instant>,
+}
+
+/// 이 포트를 지금 다른 프로그램이 쓰고 있는지
+fn port_busy(port: u16) -> bool {
+    TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], port))).is_err()
 }
 
 /// 127.0.0.1의 주소를 GET으로 읽는다 (상태 확인용, 라이브러리 없이)
@@ -94,11 +102,12 @@ impl Server {
 
     /// 서버 프로세스를 띄운다. 응답할 때까지 기다리는 것은 wait_ready에서 (잠금을 오래 쥐지 않게).
     pub fn spawn(&mut self, paths: &Paths, cfg: &Config) -> Result<bool, String> {
-        self.port = config::port(cfg);
         self.error = None;
-        if self.running() && healthy(self.port) {
+        // 이미 켜 둔 우리 서버가 있으면 그대로 (빈 포트로 옮겨 켰을 수도 있으니 포트를 되돌리기 전에 본다)
+        if self.child.is_some() && self.running() && healthy(self.port) {
             return Ok(false);
         }
+        self.port = config::port(cfg);
         if healthy(self.port) {
             // 이미 켜져 있는 회의 노트 서버(예: scripts/launchagent.sh)를 그대로 쓴다
             self.external = true;
@@ -107,6 +116,13 @@ impl Server {
         self.external = false;
         if !paths.python().exists() {
             return Err("아직 설치하지 않았어요".into());
+        }
+        // 다른 프로그램이 이 포트를 쓰고 있으면 가까운 빈 포트로 (브라우저 주소도 그 포트로 연다)
+        if port_busy(self.port) {
+            let base = self.port;
+            self.port = (base + 1..=base.saturating_add(20))
+                .find(|p| !port_busy(*p))
+                .ok_or_else(|| format!("다른 프로그램이 포트 {base}~{}를 모두 쓰고 있어요. 그 프로그램을 끄고 다시 켜 주세요.", base.saturating_add(20)))?;
         }
         fs::create_dir_all(paths.logs()).map_err(|e| e.to_string())?;
         let log_path = paths.logs().join("server.log");
@@ -131,11 +147,13 @@ impl Server {
         crate::sys::no_window(&mut cmd);
         let child = cmd.spawn().map_err(|e| format!("서버를 켜지 못했어요: {e}"))?;
         self.child = Some(child);
+        self.wanted = true;
         self.starting = true;
         Ok(true)
     }
 
     pub fn stop(&mut self) {
+        self.wanted = false;
         self.starting = false;
         self.external = false;
         if let Some(mut child) = self.child.take() {
@@ -150,6 +168,24 @@ impl Server {
             kill_tree(child.id(), true);
             let _ = child.wait();
         }
+    }
+
+    /// 사용자가 끄지 않았는데 서버가 죽었으면 그 까닭 (켜는 중에 죽은 것은 wait_ready가 알린다)
+    pub fn crashed(&mut self, paths: &Paths) -> Option<String> {
+        if !self.wanted || self.starting {
+            return None;
+        }
+        self.exited(paths)
+    }
+
+    /// 다시 켜도 되는지: 5분 안에 3번까지 (계속 죽으면 멈추고 까닭을 보여 준다)
+    pub fn may_restart(&mut self) -> bool {
+        self.restarts.retain(|t| t.elapsed() < Duration::from_secs(300));
+        if self.restarts.len() >= 3 {
+            return false;
+        }
+        self.restarts.push(Instant::now());
+        true
     }
 
     /// 프로세스가 살아 있는지 (기다리는 동안 죽었으면 로그 끝부분을 돌려준다)
@@ -201,6 +237,22 @@ pub fn tail(path: &std::path::Path, lines: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn restarts_at_most_three_times_in_five_minutes() {
+        let mut s = super::Server::default();
+        assert!(s.may_restart() && s.may_restart() && s.may_restart());
+        assert!(!s.may_restart());
+    }
+
+    #[test]
+    fn busy_port_is_detected() {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        assert!(super::port_busy(port));
+        drop(l);
+        assert!(!super::port_busy(port));
+    }
+
     use super::*;
     use std::net::TcpListener;
 

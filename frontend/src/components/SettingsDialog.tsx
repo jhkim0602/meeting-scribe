@@ -98,6 +98,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
           </section>
           <section>
             <h3>저장 공간</h3>
+            {health?.storage_warning && <p className="error-text">{health.storage_warning}</p>}
             {storage ? (
               <>
                 <div className="storage-bar" aria-hidden>

@@ -82,8 +82,9 @@ jobs:
           codesign --verify --deep --verbose=2 "$APP"
           bin="$APP/Contents/MacOS/meeting-scribe"
           res="$APP/Contents/Resources"
-          support="$RUNNER_TEMP/support"
-          "$bin" --headless install --support "$support" --resources "$res" --set "data_dir=$RUNNER_TEMP/data" | tee "$RUNNER_TEMP/install.jsonl"
+          # 한글·띄어쓰기가 든 경로에서도 (예: 윈도우 사용자 이름이 한글일 때)
+          support="$RUNNER_TEMP/한글 경로/support"
+          "$bin" --headless install --support "$support" --resources "$res" --set "data_dir=$RUNNER_TEMP/한글 경로/회의 기록" | tee "$RUNNER_TEMP/install.jsonl"
           "$bin" --headless serve --support "$support" --resources "$res"
           "$bin" --headless doctor --support "$support" --resources "$res"
           # 서명된 앱 안에 아무것도 쓰지 않았는지 (__pycache__ 등)

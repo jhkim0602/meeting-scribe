@@ -27,6 +27,7 @@ from .audio import convert_to_wav, read_audio, wav_info
 from .config import SAMPLE_RATE, settings
 from .db import Store
 from .engines import make_diarizer, make_engine, repos_for, resolve_diarizer_kind
+from .engines import diarizers
 from .engines.download import DownloadWatch
 from .engines.base import split_windows
 from .jobs import pause_path
@@ -237,6 +238,8 @@ def run(job_id: str) -> int:
     store.update_job(job_id, status="running", started_at=time.time(), pid=os.getpid(), phase="convert", progress=0.0)
     store.update_meeting(mid, status="processing")
     prog = Progress(store, job_id, mid)
+    # 화자 구분이 GPU 오류로 CPU로 바꿔 다시 할 때: 로그와 화면의 진행 문구로 알린다
+    diarizers.NOTE = lambda msg: (print(msg, file=sys.stderr, flush=True), prog.set("diarize", 0.0, msg, force=True))
     mdir = settings.meeting_dir(mid)
     wav = mdir / "audio.wav"
     work: Path | None = None  # m4a로 줄여 둔 회의를 다시 만들 때 쓰는 임시 WAV

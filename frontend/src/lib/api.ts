@@ -129,6 +129,8 @@ export interface Health {
   live: { kind: string; model: string; state: 'idle' | 'loading' | 'ready' | 'error'; error: string | null; download?: { done: number; total: number } | null }
   precision: string
   power: 'ac' | 'battery' | null
+  /** 저장 폴더가 iCloud·OneDrive 안이면 경고 문장 */
+  storage_warning?: string | null
   final: { kind: string; model: string }
   diarizer: string
   apple_silicon: boolean
@@ -205,6 +207,8 @@ async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
 export const api = {
   health: () => req<Health>('GET', '/api/health'),
   memory: () => req<MemoryInfo>('GET', '/api/system/memory'),
+  /** 서버가 스스로 한 일 (화자 모델을 CPU로 바꿈, DB를 사본으로 되돌림 …) */
+  notices: (since: number) => req<{ id: number; level: 'warn' | 'error' | 'info'; text: string }[]>('GET', `/api/notices?since=${since}`),
   serverLog: (lines = 300) => req<{ path: string | null; available: boolean; lines: string[] }>('GET', `/api/logs/server?lines=${lines}`),
   settings: () => req<AppSettings>('GET', '/api/settings'),
   saveSettings: (s: Partial<AppSettings>) => req<AppSettings>('PUT', '/api/settings', s),

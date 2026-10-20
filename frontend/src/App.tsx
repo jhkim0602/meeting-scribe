@@ -65,7 +65,17 @@ export default function App() {
   useEffect(() => {
     let lastStatus: string | null = null
     let lastRev: { id: string; rev: number } | null = null
+    let lastNotice = 0
+    let ticks = 0
     const tick = async () => {
+      // 3초마다: 서버가 스스로 한 일을 알림으로 (오래 보이게)
+      if (ticks++ % 2 === 0) {
+        const fresh = await api.notices(lastNotice).catch(() => [])
+        for (const n of fresh) {
+          lastNotice = Math.max(lastNotice, n.id)
+          useStore.getState().toast(n.text, n.level === 'info' ? 'info' : 'error', undefined, 15000)
+        }
+      }
       const st = useStore.getState()
       const { job, meeting, meetings, health } = st
       if (meeting) {

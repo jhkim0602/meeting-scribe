@@ -20,6 +20,7 @@ from typing import Optional
 
 import numpy as np
 
+from . import notices
 from .config import SAMPLE_RATE, settings
 from .db import Store
 
@@ -30,6 +31,8 @@ INHERIT_GAP_S = 1.5
 SAME = float(os.environ.get("SCRIBE_LIVE_SPK_SAME", "0.5"))
 NEW = float(os.environ.get("SCRIBE_LIVE_SPK_NEW", "0.35"))
 MAX_CLUSTERS = 10
+# 화자 모델을 GPU에서 CPU로 바꿀 때 화면에 알리는 문장
+CPU_NOTICE = '화자 모델이 GPU(MPS)에서 오류가 나서 CPU로 바꿔서 계속할게요. 회의 중 화자 표시가 조금 늦어지고 CPU를 조금 더 써요. 녹음과 받아쓰기는 그대로예요.'
 LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 
@@ -86,6 +89,8 @@ class PyannoteEmbedder(Embedder):
         self.error: Optional[str] = None
         self.failures = 0
         self._retry_at = 0.0
+        self.cpu = False  # GPU(MPS)에서 오류가 나면 CPU로 바꾼다 (알리고)
+        self._device = "cpu"
 
     def _load(self):
         import torch
@@ -97,7 +102,8 @@ class PyannoteEmbedder(Embedder):
         except TypeError:  # pyannote.audio 3.x
             model = Model.from_pretrained(self.REPO, use_auth_token=token)
         inf = Inference(model, window="whole")
-        if torch.backends.mps.is_available():
+        self._device = "mps" if torch.backends.mps.is_available() and not self.cpu else "cpu"
+        if self._device == "mps":
             inf.to(torch.device("mps"))
         else:
             # CPU뿐인 PC(윈도우): 같은 서버의 실시간 받아쓰기가 코어를 쓰도록 2개만 쓴다 (문장 하나라 충분하다)
@@ -115,6 +121,12 @@ class PyannoteEmbedder(Embedder):
 
                 v = self._inf({"waveform": torch.from_numpy(audio[None, :].astype(np.float32)), "sample_rate": SAMPLE_RATE})
             except Exception as exc:  # noqa: BLE001 - 목소리 특징 없이 진행(앞 문장 이어받기만), 나중에 다시 시도
+                if self._device == "mps" and self._inf is not None:
+                    # GPU에서 난 오류: 알리고 CPU로 바꿔 다음 문장부터 바로 다시 한다
+                    _log(f"화자 특징 모델 GPU(MPS) 오류 ({t0:.1f}s 문장): {type(exc).__name__}: {exc} → CPU로 바꿈")
+                    self.cpu, self._inf = True, None
+                    notices.add(CPU_NOTICE, key="speaker-cpu")
+                    return None
                 self._fail(exc, t0, t1)
                 return None
             if self.error:
@@ -391,6 +403,16 @@ def tracker_for(store: Store, meeting_id: str) -> SpeakerTracker:
         if t is None or t.store is not store:
             t = _trackers[meeting_id] = SpeakerTracker(store, meeting_id, emb.space if emb else "none")
         return t
+
+
+def restart_embedder() -> None:
+    """멈춘 화자 모델을 버리고 새로 만든다 (멈춘 스레드가 쥔 잠금을 다음 문장이 기다리지 않게)"""
+    global _embedder
+    if isinstance(_embedder, PyannoteEmbedder):
+        cpu = _embedder.cpu
+        _embedder = PyannoteEmbedder()
+        _embedder.cpu = cpu
+
 
 
 def status() -> dict:

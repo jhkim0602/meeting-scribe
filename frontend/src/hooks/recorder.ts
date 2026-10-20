@@ -140,6 +140,19 @@ export async function listMics(): Promise<MediaDeviceInfo[]> {
   }
 }
 
+/** 마이크를 못 쓰는 까닭별 안내 */
+function micError(e: unknown): string {
+  const name = (e as { name?: string })?.name
+  const windows = /Windows/i.test(navigator.userAgent)
+  if (name === 'NotFoundError' || name === 'OverconstrainedError') return '마이크를 찾지 못했어요. 마이크(또는 이어폰)가 연결돼 있는지, 아래 마이크 고르기에서 맞는 장치를 골랐는지 확인해 주세요.'
+  if (name === 'NotReadableError') return windows
+    ? '다른 앱(Teams, Zoom 등)이 마이크를 쓰고 있거나 윈도우가 막고 있어요. 그 앱을 닫거나, 윈도우 설정 → 개인 정보 및 보안 → 마이크에서 "데스크톱 앱이 마이크에 액세스하도록 허용"을 켜 주세요.'
+    : '다른 앱이 마이크를 쓰고 있어요. 그 앱을 닫고 다시 시도해 주세요.'
+  return windows
+    ? '마이크를 쓸 수 없어요. 브라우저 주소창 왼쪽에서 마이크 권한을 허용하고, 윈도우 설정 → 개인 정보 및 보안 → 마이크에서 "마이크 액세스"와 "앱이 마이크에 액세스하도록 허용"이 켜져 있는지 확인해 주세요.'
+    : '마이크를 쓸 수 없어요. 브라우저 주소창 왼쪽에서 마이크 권한을 허용하고, 시스템 설정 → 개인정보 보호 및 보안 → 마이크에서 브라우저를 켜 주세요.'
+}
+
 function getMic(deviceId?: string) {
   return navigator.mediaDevices.getUserMedia({
     audio: {
@@ -553,7 +566,7 @@ export async function startRecording(meetingId: string, deviceId?: string): Prom
     stream = await getMic(deviceId)
   } catch (e) {
     st.setRec({ ...REC_IDLE })
-    st.toast('마이크를 쓸 수 없어요. 브라우저 주소창 왼쪽에서 마이크 권한을 허용해 주세요.', 'error')
+    st.toast(micError(e), 'error', undefined, 15000)
     throw e
   }
   const ctx = new AudioContext()

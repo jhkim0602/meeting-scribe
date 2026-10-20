@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Optional
+import sys
+from typing import Callable, Optional
 
 import numpy as np
 
@@ -36,6 +37,14 @@ class SpeakrsDiarizer(Diarizer):
         return parse_rttm(rttm)
 
 
+def _print_note(msg: str) -> None:
+    print(msg, file=sys.stderr, flush=True)
+
+
+# 화자 구분 중 알릴 일 (작업 프로세스가 진행 문구로 바꿔 끼운다: 화면의 진행 카드에 보인다)
+NOTE: Callable[[str], None] = _print_note
+
+
 class PyannoteDiarizer(Diarizer):
     name = "pyannote-community-1"
 
@@ -46,11 +55,18 @@ class PyannoteDiarizer(Diarizer):
             os.environ.setdefault("HF_TOKEN", settings.hf_token)
         try:
             from mlx_qwen3_asr.diarization import DiarizationConfig, infer_speaker_turns
-
-            cfg = DiarizationConfig(num_speakers=num_speakers, min_speakers=1, max_speakers=10, device="auto")
-            turns = infer_speaker_turns(np.asarray(audio, dtype=np.float32), sr=SAMPLE_RATE, config=cfg)  # 이미 float32면 복사하지 않는다
         except ImportError:
             turns = self._direct(audio, num_speakers)
+        else:
+            def run(device: str) -> list:
+                cfg = DiarizationConfig(num_speakers=num_speakers, min_speakers=1, max_speakers=10, device=device)
+                return infer_speaker_turns(np.asarray(audio, dtype=np.float32), sr=SAMPLE_RATE, config=cfg)  # 이미 float32면 복사하지 않는다
+
+            try:
+                turns = run("auto")
+            except Exception as exc:  # noqa: BLE001 - GPU(MPS) 오류: 알리고 CPU로 다시
+                NOTE(f"GPU에서 화자 구분 중 오류가 나서 CPU로 다시 해요. 조금 더 걸려요. ({type(exc).__name__}: {exc})")
+                turns = run("cpu")
         if on_progress:
             on_progress(1.0)
         return [{"speaker": str(t["speaker"]), "start": float(t["start"]), "end": float(t["end"])} for t in turns]
@@ -60,10 +76,18 @@ class PyannoteDiarizer(Diarizer):
         from pyannote.audio import Pipeline
 
         pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-community-1", token=settings.hf_token or None)
+        kwargs = {"num_speakers": num_speakers} if num_speakers else {}
+        clip = {"waveform": torch.from_numpy(audio[None, :]), "sample_rate": SAMPLE_RATE}
         if torch.backends.mps.is_available():
             pipeline.to(torch.device("mps"))
-        kwargs = {"num_speakers": num_speakers} if num_speakers else {}
-        output = pipeline({"waveform": torch.from_numpy(audio[None, :]), "sample_rate": SAMPLE_RATE}, **kwargs)
+            try:
+                output = pipeline(clip, **kwargs)
+            except Exception as exc:  # noqa: BLE001 - GPU(MPS) 오류: 알리고 CPU로 다시
+                NOTE(f"GPU에서 화자 구분 중 오류가 나서 CPU로 다시 해요. 조금 더 걸려요. ({type(exc).__name__}: {exc})")
+                pipeline.to(torch.device("cpu"))
+                output = pipeline(clip, **kwargs)
+        else:
+            output = pipeline(clip, **kwargs)
         annotation = getattr(output, "exclusive_speaker_diarization", None) or getattr(output, "speaker_diarization", output)
         return [{"speaker": spk, "start": seg.start, "end": seg.end} for seg, _, spk in annotation.itertracks(yield_label=True)]
 

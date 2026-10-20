@@ -367,6 +367,12 @@ pub fn run(paths: &Paths, cfg: &Config, cancel: &Cancel, emit: &dyn Fn(Event)) -
 }
 
 fn fail(emit: &dyn Fn(Event), step: &str, message: String) -> String {
+    // 윈도우: 백신(Windows 보안)이 내려받은 설치 도구나 파이썬을 막는 일이 흔하다
+    let message = if cfg!(windows) && matches!(step, "python" | "packages") {
+        format!("{message}\n\nWindows 보안(Defender)이 막았을 수 있어요. 시작 → Windows 보안 → 바이러스 및 위협 방지 → 보호 기록에서 '회의 노트'나 uv.exe·python.exe가 차단됐는지 보고, 허용한 뒤 다시 시도해 주세요.")
+    } else {
+        message
+    };
     emit(Event::new(step, "error", None, message.clone()));
     emit(Event::new("all", "error", None, message.clone()));
     message

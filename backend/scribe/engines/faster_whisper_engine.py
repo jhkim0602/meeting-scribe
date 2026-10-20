@@ -6,6 +6,7 @@ import threading
 
 import numpy as np
 
+from .. import notices
 from .base import AsrEngine, looks_like_hallucination
 
 
@@ -21,7 +22,12 @@ class FasterWhisperEngine(AsrEngine):
         if self._model is None:
             from faster_whisper import WhisperModel
 
-            self._model = WhisperModel(self.model, device="auto", compute_type="int8")
+            try:
+                self._model = WhisperModel(self.model, device="auto", compute_type="int8")
+            except ValueError as exc:  # 오래된 CPU: 가벼운 계산(int8)을 못 한다
+                notices.add(f"이 CPU는 가벼운 계산 방식(int8)을 지원하지 않아 조금 느린 방식으로 받아 적을게요. "
+                            f"글자가 더 늦게 올라올 수 있어요. 더 가벼운 모델(Whisper base)을 고르면 빨라져요. ({exc})", key="fw-int8")
+                self._model = WhisperModel(self.model, device="auto", compute_type="default")
 
     def transcribe(self, audio: np.ndarray, *, language: str, context: str = "") -> str:
         self.load()

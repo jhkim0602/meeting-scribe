@@ -5,24 +5,31 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sys
 import time
+import traceback
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Optional
 
 from fastapi import WebSocket, WebSocketDisconnect
 
+from . import notices
 from .audio import WavAppender, pcm16_to_float, read_audio
 from .config import settings
 from .db import Store
 from .engines import LiveEngineHolder
 from .live import LiveEvent, LiveSegmenter
-from .live_speakers import MIN_EMBED_S, get_embedder, tracker_for
+from .live_speakers import MIN_EMBED_S, get_embedder, restart_embedder, tracker_for
 from .storage import M4A, WAV, restore_wav
 from .system import disk_free_seconds, keep_awake, power_source
 
 _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="live-asr")
 # 임시 화자(목소리 특징)는 받아쓰기를 늦추지 않게 따로, 문장 순서대로 처리한다
 _spk_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="live-speaker")
+# 문장 하나의 화자를 이보다 오래 못 정하면 화자 모델이 멈춘 것으로 보고 새로 시작한다
+SPEAKER_TIMEOUT_S = float(os.environ.get("SCRIBE_SPEAKER_TIMEOUT_S", "30"))
+HANG_NOTICE = ("화자 모델이 멈춰서 새로 시작했어요. 그사이 문장은 화자가 비어 있을 수 있어요 (문장마다 직접 고를 수 있어요). "
+               "녹음과 받아쓰기는 그대로예요.")
 
 # 이보다 짧게 멈춘 것은 구분선을 만들지 않는다 (실수로 누른 일시정지, 짧은 연결 끊김)
 MIN_BREAK_S = float(os.environ.get("SCRIBE_MIN_BREAK_S", "20"))
@@ -176,9 +183,21 @@ class RecordingSession:
 
     async def _label(self, seg: dict) -> None:
         """문장의 임시 화자를 정해 알려 준다 (문장은 먼저 보내고 화자는 조금 뒤에)."""
+        global _spk_executor
+        pool = _spk_executor
         try:
-            labels = await asyncio.get_running_loop().run_in_executor(_spk_executor, self._speaker_for, seg)
-        except Exception:  # noqa: BLE001 - 화자를 못 정해도 기록은 그대로
+            labels = await asyncio.wait_for(asyncio.get_running_loop().run_in_executor(pool, self._speaker_for, seg), SPEAKER_TIMEOUT_S)
+        except asyncio.TimeoutError:
+            # 멈춘 스레드는 그대로 두고(파이썬은 강제로 끝낼 수 없다) 새 작업자와 새 모델로 다음 문장부터 한다
+            if pool is _spk_executor:
+                pool.shutdown(wait=False, cancel_futures=True)
+                _spk_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="live-speaker")
+                restart_embedder()
+                self.embedder = get_embedder()
+                notices.add(HANG_NOTICE)
+            return
+        except Exception:  # noqa: BLE001 - 화자를 못 정해도 기록은 그대로 (로그에 남긴다)
+            print(f"화자를 정하지 못했어요 ({seg['t0']:.1f}s 문장):\n{traceback.format_exc()}", file=sys.stderr, flush=True)
             return
         await self.send({"type": "speaker", "segment": labels})
 
@@ -306,8 +325,8 @@ async def handle_recording(
             holder.mark_used()
             try:
                 session.tracker.learn_voices()  # 참여자 목소리를 기억해 다음 회의에서 알아본다
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception:  # noqa: BLE001 - 기억하지 못해도 기록은 그대로 (로그에 남긴다)
+                print(f"참여자 목소리를 기억하지 못했어요:\n{traceback.format_exc()}", file=sys.stderr, flush=True)
             store.update_meeting(meeting_id, duration=duration, status="recorded")
             # 녹음이 끝나거나 끊긴 시각 → 다시 이어서 녹음하면 그 사이를 쉬는 시간으로 표시
             mark_paused(store, meeting_id, duration, time.time())
