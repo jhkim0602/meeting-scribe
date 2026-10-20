@@ -821,6 +821,8 @@ FILE_EDIT_CSS = r"""
 .fedit button[hidden] { display: none; }
 .fedit .hint { max-width: 300px; color: var(--muted); font-size: 12px; line-height: 1.45; padding: 0 4px; }
 .fedit .hint[hidden] { display: none; }
+.fedit .state { max-width: 260px; color: var(--muted); font-size: 12px; line-height: 1.4; }
+.fedit .state:empty { display: none; }
 body.fediting main :is(.s, .ann-body, h1, h2, h3, p, li, td, dd) { cursor: text; }
 body.fediting main :is(.s, .ann-body, h1, h2, h3, p, li, td, dd):hover { outline: 1px dashed #b8c2d1; outline-offset: 2px; border-radius: 3px; }
 [contenteditable="true"] { outline: 2px solid #2383e2 !important; background: #f3f8fe; border-radius: 3px; }
@@ -828,21 +830,60 @@ body.fediting main :is(.s, .ann-body, h1, h2, h3, p, li, td, dd):hover { outline
 """
 
 FILE_EDIT_HTML = r"""<div class="fedit" id="fedit">
-<span class="hint" id="fe-hint" hidden>글자를 <b>더블클릭</b>해서 고치고 Enter (Esc는 취소). 다 고치면 [저장]. <b>이 파일만 바뀌고 회의 노트 앱의 기록에는 반영되지 않아요.</b> 크롬·엣지에서 열면 저장할 곳과 이름을 고를 수 있어요.</span>
+<span class="hint" id="fe-hint" hidden>글자를 <b>더블클릭</b>해서 고치고 Enter (Esc는 취소). 고칠 때마다 저절로 저장돼요. <b>이 파일만 바뀌고 회의 노트 앱의 기록에는 반영되지 않아요.</b></span>
+<span class="state" id="fe-state"></span>
 <button type="button" id="fe-toggle" title="이 파일을 고쳐요. 회의 노트 앱의 기록은 바뀌지 않아요">고치기</button>
 <button type="button" class="save" id="fe-save" hidden>저장</button>
 </div>
 <script>
 (function () {
-  var bar = document.getElementById('fedit'), tg = document.getElementById('fe-toggle'), sv = document.getElementById('fe-save'), hint = document.getElementById('fe-hint');
-  var dirty = false;
+  // 고칠 때마다 저절로 저장한다:
+  // 1) 이 브라우저 안에 바로 (같은 파일을 다시 열면 되살린다)
+  // 2) 크롬·엣지: [저장]으로 저장할 파일을 한 번 고르면(원래 파일에 덮어써도 된다) 그 뒤로는 고칠 때마다 그 파일에 바로
+  //    (브라우저는 보안 때문에 파일을 처음 한 번은 사람이 골라야 쓸 수 있다)
+  // 3) 그 밖의 브라우저: [저장]을 누르면 고친 파일을 내려받기 폴더에
+  var bar = document.getElementById('fedit'), tg = document.getElementById('fe-toggle'), sv = document.getElementById('fe-save'),
+      hint = document.getElementById('fe-hint'), st = document.getElementById('fe-state'), main = document.querySelector('main');
   var SEL = '.s, .ann-body, h1, h2, h3, p, li, td, dd';
+  var KEY = 'scribe-file-edit:' + location.pathname;
+  var picker = !!window.showSaveFilePicker, handle = null, writing = Promise.resolve();
+  function state(t) { st.textContent = t; }
+  function store(get, set) { try { return set === undefined ? localStorage.getItem(get) : (set === null ? localStorage.removeItem(get) : localStorage.setItem(get, set)); } catch (e) { return null; } }
   function on(v) {
     document.body.classList.toggle('fediting', v);
     tg.classList.toggle('on', v); tg.textContent = v ? '고치기 끝내기' : '고치기';
-    hint.hidden = !v; sv.hidden = !v && !dirty;
+    hint.hidden = !v; sv.hidden = !v && !store(KEY);
+    sv.textContent = handle ? '다른 이름으로 저장' : (picker ? '저장할 파일 정하기' : '고친 파일 내려받기');
   }
+  // 예전에 이 브라우저에서 고친 것이 있으면 되살린다 (파일에 저장하지 않고 닫았어도)
+  var draft = store(KEY);
+  if (draft && draft !== main.innerHTML) { main.innerHTML = draft; state('이 브라우저에 저장해 둔 고친 내용을 불러왔어요'); sv.hidden = false; }
   tg.addEventListener('click', function () { on(!document.body.classList.contains('fediting')); });
+  function html() {
+    var doc = document.documentElement.cloneNode(true);
+    var b = doc.querySelector('body'); if (b) b.classList.remove('fediting');
+    doc.querySelectorAll('[contenteditable]').forEach(function (n) { n.removeAttribute('contenteditable'); });
+    ['#fe-hint', '#fe-save'].forEach(function (q) { var n = doc.querySelector(q); if (n) n.hidden = true; });
+    var t = doc.querySelector('#fe-toggle'); if (t) { t.classList.remove('on'); t.textContent = '고치기'; }
+    var s = doc.querySelector('#fe-state'); if (s) s.textContent = '';
+    return '<!doctype html>\n' + doc.outerHTML;
+  }
+  function blob() { return new Blob([html()], { type: 'text/html;charset=utf-8' }); }
+  function writeFile() {
+    if (!handle) return Promise.resolve(false);
+    writing = writing.then(function () {
+      return handle.createWritable().then(function (w) { return w.write(blob()).then(function () { return w.close(); }); });
+    }).then(function () { state('저장됨 · ' + handle.name); return true; },
+            function (e) { state('파일에 저장하지 못했어요 (이 브라우저에는 저장해 뒀어요): ' + e.message); handle = null; on(true); return false; });
+    return writing;
+  }
+  function saved() {
+    // 고칠 때마다: 브라우저에 먼저, 고른 파일이 있으면 그 파일에도
+    store(KEY, main.innerHTML);
+    sv.hidden = false;
+    if (handle) { state('저장하는 중…'); writeFile(); }
+    else state(picker ? '이 브라우저에 저장됨 · 파일에도 저장하려면 [저장할 파일 정하기]를 한 번 눌러 주세요' : '이 브라우저에 저장됨 · 파일로 남기려면 [고친 파일 내려받기]');
+  }
   document.addEventListener('dblclick', function (e) {
     if (!document.body.classList.contains('fediting')) return;
     var el = e.target.closest && e.target.closest(SEL);
@@ -854,7 +895,7 @@ FILE_EDIT_HTML = r"""<div class="fedit" id="fedit">
       el.removeEventListener('keydown', key); el.removeEventListener('blur', blur);
       el.removeAttribute('contenteditable');
       if (!keep) el.innerHTML = orig;
-      else if (el.innerHTML !== orig) { dirty = true; sv.hidden = false; }
+      else if (el.innerHTML !== orig) saved();
     }
     function key(k) {
       if (k.key === 'Enter' && !k.shiftKey && !k.isComposing) { k.preventDefault(); el.blur(); }
@@ -863,38 +904,25 @@ FILE_EDIT_HTML = r"""<div class="fedit" id="fedit">
     function blur() { done(true); }
     el.addEventListener('keydown', key); el.addEventListener('blur', blur);
   });
-  function html() {
-    var doc = document.documentElement.cloneNode(true);
-    var b = doc.querySelector('body'); if (b) b.classList.remove('fediting');
-    doc.querySelectorAll('[contenteditable]').forEach(function (n) { n.removeAttribute('contenteditable'); });
-    var h = doc.querySelector('#fe-hint'); if (h) h.hidden = true;
-    var s = doc.querySelector('#fe-save'); if (s) s.hidden = true;
-    var t = doc.querySelector('#fe-toggle'); if (t) { t.classList.remove('on'); t.textContent = '고치기'; }
-    return '<!doctype html>\n' + doc.outerHTML;
-  }
   function fileName() {
     var name = decodeURIComponent((location.pathname.split('/').pop() || 'meeting.html'));
     return /\.html?$/i.test(name) ? name : name + '.html';
   }
   sv.addEventListener('click', function () {
-    var blob = new Blob([html()], { type: 'text/html;charset=utf-8' });
-    // 크롬·엣지: 저장할 곳을 고른다 (원래 파일에 덮어써도 된다). 그 밖의 브라우저: 내려받기 폴더에 새 파일로
-    if (window.showSaveFilePicker) {
+    if (picker) {
       window.showSaveFilePicker({ suggestedName: fileName(), types: [{ description: 'HTML', accept: { 'text/html': ['.html'] } }] })
-        .then(function (h) { return h.createWritable().then(function (w) { return w.write(blob).then(function () { return w.close(); }); }); })
-        .then(function () { dirty = false; on(false); alert('저장했어요. (이 파일만 바뀌었어요. 회의 노트 앱의 기록은 그대로예요)'); })
-        .catch(function (e) { if (e && e.name !== 'AbortError') download(blob); });
-    } else download(blob);
+        .then(function (h) { handle = h; return writeFile(); })
+        .then(function (ok) { if (ok) { store(KEY, null); on(document.body.classList.contains('fediting')); } })
+        .catch(function (e) { if (e && e.name !== 'AbortError') download(); });
+    } else download();
   });
-  function download(blob) {
+  function download() {
     var a = document.createElement('a');
-    a.href = URL.createObjectURL(blob); a.download = fileName().replace(/(\.html?)$/i, ' (고침)$1');
+    a.href = URL.createObjectURL(blob()); a.download = fileName().replace(/(\.html?)$/i, ' (고침)$1');
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
-    dirty = false; on(false);
-    alert('고친 파일을 내려받기 폴더에 저장했어요. 이름이 \'download\'처럼 보이면 끝에 .html을 붙여 주세요. 녹음도 같이 들으려면 원래 파일이 있던 폴더로 옮겨 주세요. (회의 노트 앱의 기록은 그대로예요)');
+    state('내려받기 폴더에 저장했어요. 이름이 download처럼 보이면 끝에 .html을 붙여 주세요');
   }
-  window.addEventListener('beforeunload', function (e) { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
 })();
 </script>"""
 
