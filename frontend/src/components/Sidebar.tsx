@@ -4,6 +4,7 @@ import { createAndRecord } from '../hooks/recorder'
 import { api, type MeetingSummary, type SearchHit } from '../lib/api'
 import { useStore, type Theme } from '../lib/store'
 import { Floating } from './Floating'
+import { FolderTree, type ItemExtra } from './FolderTree'
 import { dateGroup, fmtDuration, fmtTime, fmtDownload } from '../lib/time'
 
 const stem = (name: string) => name.replace(/\.[^.]+$/, '')
@@ -40,13 +41,13 @@ export async function uploadFiles(files: FileList | File[]) {
   }
 }
 
-function Item({ m, active }: { m: MeetingSummary; active: boolean }) {
+function Item({ m, active, extra }: { m: MeetingSummary; active: boolean; extra?: ItemExtra }) {
   // 이 회의를 녹음 중일 때의 상태만 본다 (소리 크기·시간이 바뀔 때마다 목록을 다시 그리지 않게)
   const recStatus = useStore((s) => (s.rec.meetingId === m.id ? s.rec.status : 'idle'))
   const recording = recStatus !== 'idle'
   const rec = { status: recStatus }
   return (
-    <a className={`side-item ${active ? 'active' : ''}`} href={`#/m/${m.id}`}>
+    <a className={`side-item ${active ? 'active' : ''}`} href={`#/m/${m.id}`} {...extra?.drag} onContextMenu={extra?.onContextMenu}>
       {m.source === 'upload' ? <FileAudio size={15} className="side-icon" /> : <Mic size={15} className="side-icon" />}
       <span className="side-title">{m.title || '제목 없는 회의'}</span>
       <span className="side-meta">
@@ -109,16 +110,20 @@ export function Sidebar({ onSettings }: { onSettings: () => void }) {
     return () => clearTimeout(t)
   }, [q])
 
+  // 폴더 밖 회의만 날짜별로 (폴더 안 회의는 FolderTree가 그린다)
+  const folderIds = useStore((s) => s.groups)
   const groups = useMemo(() => {
+    const known = new Set(folderIds.map((g) => g.id))
     const out: { label: string; items: MeetingSummary[] }[] = []
     for (const m of meetings) {
+      if (m.group_id && known.has(m.group_id)) continue
       const g = dateGroup(m.created_at)
       const last = out[out.length - 1]
       if (last && last.label === g) last.items.push(m)
       else out.push({ label: g, items: [m] })
     }
     return out
-  }, [meetings])
+  }, [meetings, folderIds])
 
   const setTheme = (t: Theme) => {
     set({ theme: t })
@@ -206,15 +211,21 @@ export function Sidebar({ onSettings }: { onSettings: () => void }) {
             ))}
           </>
         ) : (
-          <>
-            {groups.length === 0 && <p className="side-empty">아직 회의가 없어요</p>}
-            {groups.map((g) => (
-              <div key={g.label}>
-                <div className="side-group">{g.label}</div>
-                {g.items.map((m) => <Item key={m.id} m={m} active={m.id === selectedId} />)}
-              </div>
-            ))}
-          </>
+          <FolderTree
+            meetings={meetings}
+            renderItem={(m, extra) => <Item key={m.id} m={m} active={m.id === selectedId} extra={extra} />}
+            rest={(extra) => (
+              <>
+                {meetings.length === 0 && <p className="side-empty">아직 회의가 없어요</p>}
+                {groups.map((g) => (
+                  <div key={g.label}>
+                    <div className="side-group">{g.label}</div>
+                    {g.items.map((m) => <Item key={m.id} m={m} active={m.id === selectedId} extra={extra(m)} />)}
+                  </div>
+                ))}
+              </>
+            )}
+          />
         )}
       </nav>
 

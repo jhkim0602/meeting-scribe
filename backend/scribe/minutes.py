@@ -561,7 +561,7 @@ def page(data: dict, *, brand: tuple[str, str, str], facts: str, body: str, audi
 <title>{_esc(data["title"])} · {ko}</title>
 <link rel="stylesheet" media="print" onload="this.media='all'" href="{FONT_CSS}">
 <noscript><link rel="stylesheet" href="{FONT_CSS}"></noscript>
-<style>{CSS}{extra_css}{EDIT_CSS if tools else ""}</style>
+<style>{CSS}{extra_css}{EDIT_CSS if tools else FILE_EDIT_CSS}</style>
 </head>
 <body{f' class="in-app" data-meeting="{_esc(data["id"])}"' if tools else ""}>
 {tools}
@@ -577,7 +577,7 @@ def page(data: dict, *, brand: tuple[str, str, str], facts: str, body: str, audi
   {player}
 </main>
 <script>{JS}{extra_js}</script>
-{_edit_scripts(data) if tools else ""}
+{_edit_scripts(data) if tools else FILE_EDIT_HTML}
 </body>
 </html>
 """
@@ -808,6 +808,95 @@ JS = r"""
   });
 })();
 """
+
+
+# 받은 파일(앱 밖에서 여는 HTML)의 [고치기]: 더블클릭해서 그 자리에서 고치고 [저장]으로 고친 파일을 새로 저장한다.
+# 앱의 회의 기록에는 반영되지 않는다 (파일만 바뀐다). 인쇄에는 나오지 않는다.
+FILE_EDIT_CSS = r"""
+.fedit { position: fixed; right: 16px; bottom: 16px; z-index: 50; display: flex; gap: 6px; align-items: center; padding: 6px; border-radius: 10px;
+  background: #fff; border: 1px solid var(--line); box-shadow: 0 6px 24px rgba(15,23,42,.12); font-size: 13px; }
+.fedit button { font: inherit; padding: 5px 11px; border-radius: 7px; border: 1px solid var(--line); background: #fff; color: var(--ink); cursor: pointer; }
+.fedit button.on { background: var(--ink); color: #fff; border-color: var(--ink); }
+.fedit button.save { background: var(--accent); color: #fff; border-color: var(--accent); }
+.fedit button[hidden] { display: none; }
+.fedit .hint { max-width: 300px; color: var(--muted); font-size: 12px; line-height: 1.45; padding: 0 4px; }
+.fedit .hint[hidden] { display: none; }
+body.fediting main :is(.s, .ann-body, h1, h2, h3, p, li, td, dd) { cursor: text; }
+body.fediting main :is(.s, .ann-body, h1, h2, h3, p, li, td, dd):hover { outline: 1px dashed #b8c2d1; outline-offset: 2px; border-radius: 3px; }
+[contenteditable="true"] { outline: 2px solid #2383e2 !important; background: #f3f8fe; border-radius: 3px; }
+@media print { .fedit { display: none !important; } }
+"""
+
+FILE_EDIT_HTML = r"""<div class="fedit" id="fedit">
+<span class="hint" id="fe-hint" hidden>글자를 <b>더블클릭</b>해서 고치고 Enter (Esc는 취소). 다 고치면 [저장]. <b>이 파일만 바뀌고 회의 노트 앱의 기록에는 반영되지 않아요.</b> 크롬·엣지에서 열면 저장할 곳과 이름을 고를 수 있어요.</span>
+<button type="button" id="fe-toggle" title="이 파일을 고쳐요. 회의 노트 앱의 기록은 바뀌지 않아요">고치기</button>
+<button type="button" class="save" id="fe-save" hidden>저장</button>
+</div>
+<script>
+(function () {
+  var bar = document.getElementById('fedit'), tg = document.getElementById('fe-toggle'), sv = document.getElementById('fe-save'), hint = document.getElementById('fe-hint');
+  var dirty = false;
+  var SEL = '.s, .ann-body, h1, h2, h3, p, li, td, dd';
+  function on(v) {
+    document.body.classList.toggle('fediting', v);
+    tg.classList.toggle('on', v); tg.textContent = v ? '고치기 끝내기' : '고치기';
+    hint.hidden = !v; sv.hidden = !v && !dirty;
+  }
+  tg.addEventListener('click', function () { on(!document.body.classList.contains('fediting')); });
+  document.addEventListener('dblclick', function (e) {
+    if (!document.body.classList.contains('fediting')) return;
+    var el = e.target.closest && e.target.closest(SEL);
+    if (!el || bar.contains(el) || !el.closest('main') || el.isContentEditable) return;
+    var orig = el.innerHTML;
+    el.setAttribute('contenteditable', 'true');
+    el.focus();
+    function done(keep) {
+      el.removeEventListener('keydown', key); el.removeEventListener('blur', blur);
+      el.removeAttribute('contenteditable');
+      if (!keep) el.innerHTML = orig;
+      else if (el.innerHTML !== orig) { dirty = true; sv.hidden = false; }
+    }
+    function key(k) {
+      if (k.key === 'Enter' && !k.shiftKey && !k.isComposing) { k.preventDefault(); el.blur(); }
+      if (k.key === 'Escape') { done(false); }
+    }
+    function blur() { done(true); }
+    el.addEventListener('keydown', key); el.addEventListener('blur', blur);
+  });
+  function html() {
+    var doc = document.documentElement.cloneNode(true);
+    var b = doc.querySelector('body'); if (b) b.classList.remove('fediting');
+    doc.querySelectorAll('[contenteditable]').forEach(function (n) { n.removeAttribute('contenteditable'); });
+    var h = doc.querySelector('#fe-hint'); if (h) h.hidden = true;
+    var s = doc.querySelector('#fe-save'); if (s) s.hidden = true;
+    var t = doc.querySelector('#fe-toggle'); if (t) { t.classList.remove('on'); t.textContent = '고치기'; }
+    return '<!doctype html>\n' + doc.outerHTML;
+  }
+  function fileName() {
+    var name = decodeURIComponent((location.pathname.split('/').pop() || 'meeting.html'));
+    return /\.html?$/i.test(name) ? name : name + '.html';
+  }
+  sv.addEventListener('click', function () {
+    var blob = new Blob([html()], { type: 'text/html;charset=utf-8' });
+    // 크롬·엣지: 저장할 곳을 고른다 (원래 파일에 덮어써도 된다). 그 밖의 브라우저: 내려받기 폴더에 새 파일로
+    if (window.showSaveFilePicker) {
+      window.showSaveFilePicker({ suggestedName: fileName(), types: [{ description: 'HTML', accept: { 'text/html': ['.html'] } }] })
+        .then(function (h) { return h.createWritable().then(function (w) { return w.write(blob).then(function () { return w.close(); }); }); })
+        .then(function () { dirty = false; on(false); alert('저장했어요. (이 파일만 바뀌었어요. 회의 노트 앱의 기록은 그대로예요)'); })
+        .catch(function (e) { if (e && e.name !== 'AbortError') download(blob); });
+    } else download(blob);
+  });
+  function download(blob) {
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = fileName().replace(/(\.html?)$/i, ' (고침)$1');
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
+    dirty = false; on(false);
+    alert('고친 파일을 내려받기 폴더에 저장했어요. 이름이 \'download\'처럼 보이면 끝에 .html을 붙여 주세요. 녹음도 같이 들으려면 원래 파일이 있던 폴더로 옮겨 주세요. (회의 노트 앱의 기록은 그대로예요)');
+  }
+  window.addEventListener('beforeunload', function (e) { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
+})();
+</script>"""
 
 
 # 앱에서 연 문서의 [고치기]: 문장·메모·댓글은 그 자리에서, 참석자는 표에서 고쳐 앱에 저장하고 문서를 새로 그린다

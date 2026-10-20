@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { api, type Annotation, type AppSettings, type SegmentEdit, type SpeakerChange, type Health, type Job, type LiveView, type Meeting, type MeetingSummary, type Unit } from './api'
+import { api, type Annotation, type AppSettings, type SegmentEdit, type SpeakerChange, type Health, type Job, type LiveView, type Group, type Meeting, type MeetingSummary, type Unit } from './api'
 
 export type Tab = 'live' | 'summary'
 export type RecStatus = 'idle' | 'connecting' | 'recording' | 'paused' | 'stopping'
@@ -53,6 +53,8 @@ interface State {
   health: Health | null
   settings: AppSettings | null
   meetings: MeetingSummary[]
+  /** 왼쪽 목록의 폴더 */
+  groups: Group[]
   selectedId: string | null
   meeting: Meeting | null
   live: LiveView | null
@@ -120,6 +122,7 @@ export const useStore = create<State>((set, get) => ({
   health: null,
   settings: null,
   meetings: [],
+  groups: [],
   selectedId: null,
   meeting: null,
   live: null,
@@ -147,7 +150,8 @@ export const useStore = create<State>((set, get) => ({
   loadSettings: async () => set({ settings: await api.settings() }),
   loadMeetings: async () => {
     try {
-      set({ meetings: await api.meetings() })
+      const [meetings, g] = await Promise.all([api.meetings(), api.groups().catch(() => null)])
+      set(g ? { meetings, groups: g.groups } : { meetings })
     } catch {
       /* 무시 */
     }

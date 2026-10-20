@@ -163,6 +163,12 @@ class Store:
         # 회의 폴더 이름: '날짜_제목' (비어 있으면 예전처럼 id)
         if "folder" not in mcols:
             c.execute("ALTER TABLE meetings ADD COLUMN folder TEXT")
+        # 왼쪽 목록의 폴더 (사용자가 만든 정리용 폴더, 안에 폴더를 둘 수 있다). 회의는 group_id로 하나에 들어간다
+        c.execute(
+            "CREATE TABLE IF NOT EXISTS meeting_groups (id TEXT PRIMARY KEY, name TEXT NOT NULL, parent_id TEXT, created_at REAL NOT NULL)"
+        )
+        if "group_id" not in mcols:
+            c.execute("ALTER TABLE meetings ADD COLUMN group_id TEXT")
         # 원본 스크립트 작업: 녹음을 마쳐 저절로 시작한 것인지(auto), 지금 기다리는 까닭(waiting)
         jcols = {r["name"] for r in c.execute("PRAGMA table_info(jobs)").fetchall()}
         if "auto" not in jcols:
@@ -311,6 +317,48 @@ class Store:
         if "notes_md" in fields:
             self._fts_replace(meeting_id, "notes", _note_rows(fields["notes_md"] or ""))
         return self.get_meeting(meeting_id)
+
+    # ---------- 폴더 (왼쪽 목록 정리) ----------
+    def list_groups(self) -> list[dict]:
+        with self.conn() as c:
+            rows = c.execute(
+                "SELECT g.*, (SELECT COUNT(*) FROM meetings m WHERE m.group_id=g.id) AS count FROM meeting_groups g ORDER BY g.name COLLATE NOCASE"
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_group(self, group_id: str) -> Optional[dict]:
+        with self.conn() as c:
+            row = c.execute("SELECT * FROM meeting_groups WHERE id=?", (group_id,)).fetchone()
+        return dict(row) if row else None
+
+    def create_group(self, name: str, parent_id: Optional[str]) -> dict:
+        gid = new_id()
+        with self.conn() as c:
+            c.execute("INSERT INTO meeting_groups(id,name,parent_id,created_at) VALUES(?,?,?,?)", (gid, name, parent_id, time.time()))
+        return self.get_group(gid)  # type: ignore[return-value]
+
+    def update_group(self, group_id: str, **fields: Any) -> Optional[dict]:
+        if fields:
+            sets = ",".join(f"{k}=?" for k in fields)
+            with self.conn() as c:
+                c.execute(f"UPDATE meeting_groups SET {sets} WHERE id=?", (*fields.values(), group_id))
+        return self.get_group(group_id)
+
+    def delete_group(self, group_id: str) -> None:
+        """폴더만 지운다: 안의 회의와 폴더는 한 칸 위(없으면 맨 바깥)로 나온다"""
+        g = self.get_group(group_id)
+        if g is None:
+            return
+        with self.conn() as c:
+            c.execute("BEGIN")
+            c.execute("UPDATE meetings SET group_id=? WHERE group_id=?", (g["parent_id"], group_id))
+            c.execute("UPDATE meeting_groups SET parent_id=? WHERE parent_id=?", (g["parent_id"], group_id))
+            c.execute("DELETE FROM meeting_groups WHERE id=?", (group_id,))
+            c.execute("COMMIT")
+
+    def set_meeting_group(self, meeting_id: str, group_id: Optional[str]) -> None:
+        with self.conn() as c:
+            c.execute("UPDATE meetings SET group_id=? WHERE id=?", (group_id, meeting_id))
 
     def delete_meeting(self, meeting_id: str) -> None:
         with self.conn() as c:

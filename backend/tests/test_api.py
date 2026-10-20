@@ -686,6 +686,9 @@ def test_transcript_html_is_a_call_log_with_marks_in_place(client):
     d = client.get(f"/api/meetings/{mid}/transcript.html?download=1")
     assert "%EC%A0%84%EC%82%AC%20%EA%B8%B0%EB%A1%9D.html" in d.headers["content-disposition"]  # "전사 기록.html"
     assert 'class="apptools"' not in d.text and 'src="녹음.wav"' in d.text
+    # 받은 파일: 더블클릭으로 고치고 새 파일로 저장 (앱 기록에는 반영 안 된다는 안내), 앱에서 연 문서에는 없다
+    assert 'id="fedit"' in d.text and "회의 노트 앱의 기록에는 반영되지 않아요" in d.text
+    assert 'id="fedit"' not in h
     client.post(f"/api/meetings/{mid}/cancel")
 
 

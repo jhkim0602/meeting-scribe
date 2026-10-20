@@ -913,3 +913,28 @@ kbd { display: inline-grid; place-items: center; min-width: 20px; height: 20px; 
 .model-menu .menu-item { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; }
 .model-menu .menu-item.on .model-name { font-weight: 600; }
 .model-menu .menu-item.on .model-name::after { content: ' ✓'; color: var(--accent); }
+
+/* 왼쪽 목록의 폴더 */
+.folder-head { display: flex; align-items: center; gap: 2px; padding-right: 4px; }
+.folder-head .spacer { flex: 1; }
+.folder-head .icon-btn { width: 22px; height: 22px; color: var(--text-3); }
+.folder-body { padding-left: 14px; }
+.folder-row { cursor: pointer; user-select: none; }
+.folder-row .chev { flex: none; color: var(--text-3); transition: transform 0.12s; margin-left: -2px; }
+.folder-row .chev.open { transform: rotate(90deg); }
+.folder-row .folder-more { width: 22px; height: 22px; margin-right: -4px; opacity: 0; }
+.folder-row:hover .folder-more, .folder-row:focus-within .folder-more { opacity: 1; }
+.folder-row.drop, .root-drop.drop { background: var(--accent-soft, rgba(35, 131, 226, 0.12)); outline: 1px dashed var(--accent, #2383e2); }
+.folder-input { flex: 1; min-width: 0; height: 22px; padding: 0 6px; font: inherit; font-size: 13.5px; border: 1px solid var(--accent, #2383e2); border-radius: 4px; background: var(--bg); color: var(--text); }
+.folder-empty { margin: 2px 0 4px 26px; font-size: 12px; color: var(--text-3); }
+.folder-hint { display: block; width: 100%; padding: 4px 10px 6px; text-align: left; font-size: 12.5px; color: var(--text-3); background: none; border: 0; cursor: pointer; }
+.folder-hint:hover { color: var(--text-2); }
+.root-drop { display: none; margin: 6px 4px 0; padding: 8px; border-radius: 6px; font-size: 12px; color: var(--text-3); text-align: center; border: 1px dashed var(--border-strong, #ccc); }
+.root-drop.show { display: block; }
+.folder-menu { width: 240px; max-height: 60vh; overflow: auto; }
+.folder-menu .menu-item.on { font-weight: 600; }
+.menu-empty { padding: 4px 9px 8px; font-size: 12.5px; color: var(--text-3); }
+.folder-help { width: 340px; font-size: 13px; line-height: 1.55; }
+.folder-help ul { margin: 2px 0 6px; padding: 0 10px 0 26px; }
+.folder-help li { margin: 4px 0; word-break: keep-all; }
+.folder-help code { font-size: 11.5px; padding: 0 3px; border-radius: 3px; background: var(--bg-hover); }

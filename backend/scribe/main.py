@@ -90,6 +90,9 @@ async def _unload_idle_model() -> None:
         holder.unload_if_idle(busy=bool(sessions))
         if not sessions:
             await asyncio.to_thread(backup_daily, settings.db_path)
+            # 그때 못 옮긴 회의 폴더(윈도우: 파일이 열려 있었음)를 다시 맞춘다
+            busy = {j["meeting_id"] for j in store.active_jobs()}
+            await asyncio.to_thread(folders.migrate_all, store, busy)
 
 
 app = FastAPI(title="Meeting Scribe", version=__version__, lifespan=lifespan)
@@ -298,12 +301,172 @@ def list_meetings(q: Optional[str] = None) -> list[dict]:
     out = []
     for m in store.list_meetings(q):
         item = {k: m[k] for k in ("id", "title", "created_at", "updated_at", "status", "source", "duration")}
+        item["group_id"] = m.get("group_id")
         item["recording"] = m["id"] in sessions
         if m["status"] == "processing":
             job = store.latest_job(m["id"])
             item["progress"] = job["progress"] if job else None
         out.append(item)
     return out
+
+
+# ---------------- 폴더 (왼쪽 목록 정리) ----------------
+# 앱의 목록은 DB를 따르고, 디스크(저장 폴더/meetings/폴더/날짜_제목)는 그 뒤에 맞춘다.
+# 녹음·원본 스크립트 작업 중이거나 옮기지 못하면(윈도우: 다른 프로그램이 파일을 열고 있음) 나중에 다시 맞춘다.
+
+GROUP_MAX_DEPTH = 3
+
+
+class GroupIn(BaseModel):
+    name: Optional[str] = None
+    # 만들 때: 어느 폴더 안에(없으면 맨 바깥). 고칠 때: None이면 그대로, ""이면 맨 바깥으로
+    parent_id: Optional[str] = None
+
+
+class MeetingGroupIn(BaseModel):
+    group_id: Optional[str] = None
+
+
+def _group_or_404(group_id: str) -> dict:
+    g = store.get_group(group_id)
+    if g is None:
+        raise HTTPException(404, "폴더를 찾을 수 없어요")
+    return g
+
+
+def _group_name(name: Optional[str]) -> str:
+    n = " ".join((name or "").split())[:60]
+    if not n:
+        raise HTTPException(400, "폴더 이름을 적어 주세요")
+    return n
+
+
+def _group_tree() -> tuple[dict[str, dict], dict[Optional[str], list[str]]]:
+    groups = {g["id"]: g for g in store.list_groups()}
+    children: dict[Optional[str], list[str]] = {}
+    for g in groups.values():
+        children.setdefault(g["parent_id"] if g["parent_id"] in groups else None, []).append(g["id"])
+    return groups, children
+
+
+def _depth(groups: dict[str, dict], gid: Optional[str]) -> int:
+    d, seen = 0, set()
+    while gid and gid in groups and gid not in seen:
+        seen.add(gid)
+        d += 1
+        gid = groups[gid]["parent_id"]
+    return d
+
+
+def _subtree(children: dict[Optional[str], list[str]], gid: str) -> list[str]:
+    out, todo = [], [gid]
+    while todo:
+        g = todo.pop()
+        out.append(g)
+        todo.extend(children.get(g, []))
+    return out
+
+
+def _check_unique(name: str, parent_id: Optional[str], exclude: Optional[str] = None) -> None:
+    """같은 곳에 같은 이름(대소문자·디스크 이름 기준)의 폴더는 둘 수 없다. 윈도우·맥은 대소문자를 구분하지 않는다."""
+    key = folders.dir_name(name).casefold()
+    for g in store.list_groups():
+        if g["id"] != exclude and g["parent_id"] == parent_id and folders.dir_name(g["name"]).casefold() == key:
+            raise HTTPException(409, f"'{g['name']}' 폴더가 이미 있어요. 다른 이름으로 지어 주세요.")
+
+
+def _resync(meeting_ids: list[str]) -> list[str]:
+    """회의 폴더를 디스크에서도 맞춘다. 아직 못 옮긴(녹음·작업 중이거나 실패한) 회의 id."""
+    pending = []
+    for mid in meeting_ids:
+        _sync_folder(mid)
+        m = store.get_meeting(mid)
+        if m and folders.needs_sync(store, m):
+            pending.append(mid)
+    return pending
+
+
+def _groups_out(pending: Optional[list[str]] = None) -> dict:
+    return {"groups": store.list_groups(), "pending": pending or []}
+
+
+@app.get("/api/groups")
+def list_groups() -> dict:
+    return _groups_out()
+
+
+@app.post("/api/groups")
+def create_group(body: GroupIn) -> dict:
+    name = _group_name(body.name)
+    groups, _ = _group_tree()
+    parent = body.parent_id or None
+    if parent and parent not in groups:
+        raise HTTPException(404, "폴더를 찾을 수 없어요")
+    if _depth(groups, parent) >= GROUP_MAX_DEPTH:
+        raise HTTPException(400, f"폴더는 {GROUP_MAX_DEPTH}단계까지 넣을 수 있어요")
+    _check_unique(name, parent)
+    g = store.create_group(name, parent)
+    return {**_groups_out(), "group": g}
+
+
+@app.patch("/api/groups/{group_id}")
+def update_group(group_id: str, body: GroupIn) -> dict:
+    g = _group_or_404(group_id)
+    groups, children = _group_tree()
+    fields: dict[str, Any] = {}
+    name = _group_name(body.name) if body.name is not None else g["name"]
+    parent = g["parent_id"]
+    if body.parent_id is not None:
+        parent = body.parent_id or None
+        sub = _subtree(children, group_id)
+        if parent and parent not in groups:
+            raise HTTPException(404, "폴더를 찾을 수 없어요")
+        if parent in sub:
+            raise HTTPException(400, "폴더를 자기 안으로 옮길 수 없어요")
+        height = max(_depth(groups, s) for s in sub) - _depth(groups, group_id) + 1
+        if _depth(groups, parent) + height > GROUP_MAX_DEPTH:
+            raise HTTPException(400, f"폴더는 {GROUP_MAX_DEPTH}단계까지 넣을 수 있어요")
+        fields["parent_id"] = parent
+    if body.name is not None:
+        fields["name"] = name
+    if (name, parent) != (g["name"], g["parent_id"]):
+        _check_unique(name, parent, exclude=group_id)
+    store.update_group(group_id, **fields)
+    _, children = _group_tree()
+    inside = set(_subtree(children, group_id))
+    return _groups_out(_resync([m["id"] for m in store.list_meetings() if m.get("group_id") in inside]))
+
+
+@app.delete("/api/groups/{group_id}")
+def delete_group(group_id: str) -> dict:
+    """폴더만 지운다. 안의 회의와 폴더는 한 칸 위로 나온다 (회의는 지우지 않는다)."""
+    _group_or_404(group_id)
+    _, children = _group_tree()
+    inside = set(_subtree(children, group_id))
+    affected = [m["id"] for m in store.list_meetings() if m.get("group_id") in inside]
+    store.delete_group(group_id)
+    return _groups_out(_resync(affected))
+
+
+@app.post("/api/groups/{group_id}/reveal")
+def reveal_group(group_id: str) -> dict:
+    """폴더를 Finder·파일 탐색기로 연다 (아직 회의가 없으면 빈 폴더를 만든다)"""
+    _group_or_404(group_id)
+    path = settings.meetings_dir / folders.group_rel(store, group_id)
+    path.mkdir(parents=True, exist_ok=True)
+    _open_in_files(path)
+    return {"path": str(path)}
+
+
+@app.put("/api/meetings/{meeting_id}/group")
+def move_meeting(meeting_id: str, body: MeetingGroupIn) -> dict:
+    """회의를 폴더로 옮긴다 (group_id가 없으면 폴더 밖으로)"""
+    _meeting_or_404(meeting_id)
+    gid = body.group_id or None
+    if gid:
+        _group_or_404(gid)
+    store.set_meeting_group(meeting_id, gid)
+    return _groups_out(_resync([meeting_id]))
 
 
 @app.post("/api/meetings")
@@ -410,8 +573,10 @@ def delete_meeting(meeting_id: str) -> dict:
         raise HTTPException(409, "녹음 중인 회의는 삭제할 수 없습니다")
     jobs.cancel(meeting_id)
     forget_tracker(meeting_id)
+    mdir = settings.meeting_path(meeting_id)
     store.delete_meeting(meeting_id)
-    shutil.rmtree(settings.meeting_path(meeting_id), ignore_errors=True)
+    shutil.rmtree(mdir, ignore_errors=True)
+    folders.prune_empty(mdir.parent)  # 폴더 안의 마지막 회의였으면 빈 폴더도
     return {"ok": True}
 
 
@@ -785,28 +950,34 @@ def _doc_response(meeting_id: str, kind: str, download: int) -> Response:
 @app.post("/api/meetings/{meeting_id}/reveal")
 def reveal_meeting(meeting_id: str) -> dict:
     """회의 폴더 열기: 전사 기록·회의록 HTML을 새로 만들어 넣고 Finder·파일 탐색기로 연다 (이 컴퓨터에서만)"""
-    import subprocess
-    import sys
-
     from . import minutes, transcript_html
 
     _meeting_or_404(meeting_id)
+    _sync_folder(meeting_id)  # 못 옮겨 둔 것이 있으면 지금 (녹음·작업 중이 아니면)
     mdir = settings.meeting_dir(meeting_id)
     audio = _audio_path(meeting_id)
     for mod, name in ((transcript_html, "전사 기록.html"), (minutes, "회의록.html")):
         data = mod.collect(store, views, meeting_id)
         if data is not None:
             (mdir / name).write_text(mod.render(data, audio_src=audio.name if audio else None), encoding="utf-8")
+    _open_in_files(mdir)
+    return {"path": str(mdir)}
+
+
+def _open_in_files(path: Path) -> None:
+    """Finder(맥)·파일 탐색기(윈도우)로 연다"""
+    import subprocess
+    import sys
+
     try:
         if sys.platform == "darwin":
-            subprocess.Popen(["open", str(mdir)])
+            subprocess.Popen(["open", str(path)])
         elif sys.platform == "win32":
-            os.startfile(str(mdir))  # type: ignore[attr-defined]
+            os.startfile(str(path))  # type: ignore[attr-defined]
         else:
-            subprocess.Popen(["xdg-open", str(mdir)])
+            subprocess.Popen(["xdg-open", str(path)])
     except OSError as exc:
         raise HTTPException(500, f"폴더를 열지 못했어요: {exc}")
-    return {"path": str(mdir)}
 
 
 @app.get("/api/meetings/{meeting_id}/transcript.html")

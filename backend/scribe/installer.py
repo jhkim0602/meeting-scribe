@@ -328,15 +328,29 @@ def storage() -> dict:
         {"repo": repo, "label": names[repo], "bytes": downloaded_bytes(repo), "in_use": repo in in_use}
         for repo in sorted(_cached_repos()) if repo in names
     ]
-    meetings = settings.meetings_dir
     return {
         "ok": True,
         "hub": str(hub_cache()),
         "models": models,
         "models_bytes": sum(m["bytes"] for m in models),
         "data_dir": str(settings.data_dir),
-        "meetings": sum(1 for d in meetings.iterdir() if d.is_dir()) if meetings.exists() else 0,
+        "meetings": _meeting_count(),
     }
+
+
+def _meeting_count() -> int:
+    """회의 수 (DB에서 센다: 폴더로 정리한 회의도 있어서 폴더 수로는 셀 수 없다)"""
+    import sqlite3
+
+    if not settings.db_path.exists():
+        return 0
+    from contextlib import closing
+
+    try:  # with sqlite3.connect()만으로는 연결이 닫히지 않는다 (윈도우는 열린 DB 파일을 지우거나 옮기지 못한다)
+        with closing(sqlite3.connect(f"file:{settings.db_path.as_posix()}?mode=ro", uri=True)) as c:
+            return int(c.execute("SELECT COUNT(*) FROM meetings").fetchone()[0])
+    except sqlite3.Error:
+        return 0
 
 
 def remove_models(repos: list[str]) -> dict:
