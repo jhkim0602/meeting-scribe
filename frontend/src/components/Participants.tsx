@@ -169,14 +169,46 @@ function DetailInput({ person, field }: { person: Participant; field: (typeof FI
 /** 참여자 아래 펼치는 세부 정보: 사람마다 소속·직무·메모. 전사 기록과 회의록에도 함께 나온다. */
 export function ParticipantDetails() {
   const parts = useStore((s) => s.meeting?.participants || [])
-  const [details, setDetails] = usePref(PEOPLE_DETAILS, false)
+  const [details] = usePref(PEOPLE_DETAILS, false)
+  const [closing, setClosing] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  const timer = useRef<number>(0)
+  // 접기: 짧게 접히는 움직임을 보여 준 뒤 닫는다
+  const close = () => {
+    if (timer.current) return
+    setClosing(true)
+    timer.current = window.setTimeout(() => {
+      timer.current = 0
+      setClosing(false)
+      setPref(PEOPLE_DETAILS, false)
+    }, 160)
+  }
+  // 바깥을 누르면 접는다 (참여자 줄, 참여자 추가 창, 알림을 누른 것은 빼고). Esc로도.
+  useEffect(() => {
+    if (!details) return
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Element | null
+      if (!t || ref.current?.contains(t) || t.closest?.('.prop-people, .floating, .toasts, .modal-backdrop')) return
+      close()
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && ref.current?.contains(document.activeElement)) close()
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [details]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => window.clearTimeout(timer.current), [])
   if (!details || parts.length === 0) return null
   return (
-    <div className="people-details">
+    <div ref={ref} className={`people-details ${closing ? 'closing' : ''}`}>
       <div className="pd-row pd-cols">
         <span>참석자</span>
         {FIELDS.map((f) => <span key={f.key}>{f.label}</span>)}
-        <button className="icon-btn pd-close" onClick={() => setDetails(false)} title="접기"><X size={13} /></button>
+        <button className="icon-btn pd-close" onClick={close} title="접기 (바깥을 눌러도 접혀요)"><X size={13} /></button>
       </div>
       {parts.map((p, i) => (
         <div key={p.id} className="pd-row" data-pid={p.id}>

@@ -55,7 +55,7 @@ const api = async (path, opts) => (await fetch(BASE + path, opts)).json()
   const page2 = await ctx.newPage()
   await page2.goto(BASE)
   await page2.waitForSelector('.welcome h1')
-  await page2.click('.start-card.primary')
+  await page2.click('.start-card.primary'); await page2.click('.new-meeting .rec-start') // 새 회의 준비 창에서 바로 녹음
   await page2.waitForSelector('.dock-rec', { timeout: 15000 })
   let waiting = null
   for (let i = 0; i < 40 && !waiting; i++) {

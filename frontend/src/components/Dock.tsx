@@ -8,7 +8,7 @@ import { getPrefStr, HINT_SEEN } from '../lib/prefs'
 import { bridges, useStore } from '../lib/store'
 import { fmtDownload, fmtDuration, fmtTime } from '../lib/time'
 
-function useMicChoice() {
+export function useMicChoice() {
   const [mics, setMics] = useState<MediaDeviceInfo[]>([])
   const [mic, setMic] = useState<string>(() => {
     try {

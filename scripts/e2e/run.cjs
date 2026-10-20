@@ -51,7 +51,7 @@ async function notesMarkdown(mid) {
 
   await page.goto(BASE)
   await page.waitForSelector('.welcome h1')
-  await page.click('.start-card.primary')
+  await page.click('.start-card.primary'); await page.click('.new-meeting .rec-start') // 새 회의 준비 창에서 바로 녹음
   await page.waitForSelector('.dock-rec', { timeout: 15000 })
   await page.fill('.page-title', '3분기 마케팅 예산 회의')
   await page.keyboard.press('Enter')

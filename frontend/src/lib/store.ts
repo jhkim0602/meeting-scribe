@@ -94,6 +94,8 @@ interface State {
   hiddenMeetings: string[]
   /** 방금 올린 회의: 받아 적기 창(모델·화자 고르기)을 바로 연다 */
   askProcess: string | null
+  /** 새 회의 준비 창 (제목·참석자·폴더·마이크를 정하고 녹음 시작) */
+  newMeetingOpen: boolean
   stampExported: (stamps: Record<string, number | null>) => void
   setPartial: (p: State['partial']) => void
   setTab: (t: Tab) => void
@@ -245,6 +247,7 @@ export const useStore = create<State>((set, get) => ({
   },
   hiddenMeetings: [],
   askProcess: null,
+  newMeetingOpen: false,
   stampExported: (stamps) => {
     const { live } = get()
     if (live) set({ live: { ...live, annotations: live.annotations.map((x) => (x.id in stamps ? { ...x, exported_at: stamps[x.id] } : x)) } })

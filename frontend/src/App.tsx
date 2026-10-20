@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { MeetingPage } from './components/MeetingPage'
 import { RecAlertBar } from './components/RecAlertBar'
 import { SettingsDialog } from './components/SettingsDialog'
+import { NewMeetingDialog } from './components/NewMeeting'
 import { ShortcutsOverlay, useGlobalShortcuts } from './components/Shortcuts'
 import { Sidebar } from './components/Sidebar'
 import { Toasts } from './components/Toasts'
@@ -17,6 +18,7 @@ function parseHash(): string | null {
 export default function App() {
   const selectedId = useStore((s) => s.selectedId)
   const sidebarOpen = useStore((s) => s.sidebarOpen)
+  const newMeetingOpen = useStore((s) => s.newMeetingOpen)
   const theme = useStore((s) => s.theme)
   const [settingsOpen, setSettingsOpen] = useState(false)
   useGlobalShortcuts()
@@ -117,6 +119,7 @@ export default function App() {
         <RecAlertBar />
       </main>
       {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
+      {newMeetingOpen && <NewMeetingDialog onClose={() => useStore.getState().set({ newMeetingOpen: false })} />}
       <ShortcutsOverlay />
       <Toasts />
     </div>

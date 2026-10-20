@@ -1,6 +1,5 @@
 import { FileUp, Mic, PanelLeft } from 'lucide-react'
 import { useRef, useState, useMemo } from 'react'
-import { createAndRecord } from '../hooks/recorder'
 import { useStore } from '../lib/store'
 import { fmtDuration, fmtRelative } from '../lib/time'
 import { uploadFiles } from './Sidebar'
@@ -39,10 +38,10 @@ export function Welcome() {
         <h1>{greet}</h1>
         <p className="muted">회의를 녹음하면 실시간으로 받아 적고, 그 위에 바로 메모하고 고칠 수 있어요. 모든 처리는 이 맥 안에서만 이루어져요.</p>
         <div className="start-cards">
-          <button className="start-card primary" onClick={() => createAndRecord().catch(() => undefined)}>
+          <button className="start-card primary" onClick={() => useStore.getState().set({ newMeetingOpen: true })}>
             <span className="start-icon rec"><Mic size={20} /></span>
             <span className="start-title">새 회의 녹음</span>
-            <span className="start-desc">실시간으로 받아 적고, 틀린 글자는 그 자리에서 고쳐요</span>
+            <span className="start-desc">제목·참석자를 정하고 시작해요. 실시간으로 받아 적고, 틀린 글자는 그 자리에서 고쳐요</span>
           </button>
           <button className="start-card" onClick={() => fileRef.current?.click()}>
             <span className="start-icon"><FileUp size={20} /></span>

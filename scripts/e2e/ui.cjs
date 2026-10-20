@@ -32,7 +32,7 @@ function check(cond, msg) {
 
   await page.goto(BASE)
   await page.waitForSelector('.welcome h1')
-  await page.click('.start-card.primary')
+  await page.click('.start-card.primary'); await page.click('.new-meeting .rec-start') // 새 회의 준비 창에서 바로 녹음
   await page.waitForSelector('.dock-rec', { timeout: 15000 })
   const mid = (await get('/api/meetings'))[0].id
   await sleep(6000)

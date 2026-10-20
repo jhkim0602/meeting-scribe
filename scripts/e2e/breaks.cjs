@@ -36,7 +36,7 @@ async function main() {
   // ---------- A. 말소리가 나오는 마이크 ----------
   const { browser, page, errors } = await launch(`${OUT}/speech.wav`)
   await page.goto(BASE)
-  await page.click('.start-card.primary')
+  await page.click('.start-card.primary'); await page.click('.new-meeting .rec-start') // 새 회의 준비 창에서 바로 녹음
   await page.waitForSelector('.dock-rec', { timeout: 15000 })
   const mid = (await get('/api/meetings'))[0].id
   await sleep(6000)
@@ -164,7 +164,7 @@ async function main() {
   await fetch(`${BASE}/api/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ break_prompt_minutes: 0.1 }) })
   const q = await launch(`${OUT}/quiet.wav`)
   await q.page.goto(BASE)
-  await q.page.click('.start-card.primary')
+  await q.page.click('.start-card.primary'); await q.page.click('.new-meeting .rec-start') // 새 회의 준비 창에서 바로 녹음
   await q.page.waitForSelector('.dock-rec', { timeout: 15000 })
   const qid = (await get('/api/meetings'))[0].id
   await q.page.mouse.move(10, 450)
@@ -191,7 +191,7 @@ async function main() {
   // ---------- C. 완전 무음: 아이콘 → 경고, 탭 닫기 확인 ----------
   const z = await launch(`${OUT}/zero.wav`)
   await z.page.goto(BASE)
-  await z.page.click('.start-card.primary')
+  await z.page.click('.start-card.primary'); await z.page.click('.new-meeting .rec-start') // 새 회의 준비 창에서 바로 녹음
   await z.page.waitForSelector('.dock-rec', { timeout: 15000 })
   await z.page.evaluate(() => window.__scribeDebug.timing({ deadIcon: 2000, deadBanner: 6000 }))
   await z.page.waitForSelector('.dock-rec .sig.warn', { timeout: 8000 })
