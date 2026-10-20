@@ -31,8 +31,8 @@ export async function uploadFiles(files: FileList | File[]) {
     try {
       const m = await api.upload(f)
       await st.loadMeetings()
+      st.set({ askProcess: m.id }) // 올린 뒤 바로 모델 고르는 창이 뜬다 (알림 대신)
       location.hash = `#/m/${m.id}`
-      st.toast('올렸어요. 받아 적기를 시작했어요.', 'success')
     } catch (e) {
       st.toast(`업로드 실패: ${(e as Error).message}`, 'error')
     }

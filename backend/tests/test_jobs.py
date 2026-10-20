@@ -1,4 +1,4 @@
-"""원본 스크립트 작업이 회의를 방해하지 않게: 녹음 중에는 멈추고, 저절로 만드는 것은 전원이 연결돼 있을 때만."""
+"""원본 스크립트 작업: 사용자가 시킬 때만, 고른 모델·화자 구분으로, 녹음 중에는 멈춘다."""
 
 import os
 import signal
@@ -18,6 +18,7 @@ from test_worker import BACKEND, _make_wav
 class FakeProc:
     def __init__(self, *a, **k):
         self.args = a
+        self.kwargs = k
         self.terminated = False
 
     def poll(self):
@@ -39,7 +40,6 @@ def manager(tmp_path, monkeypatch):
 
     # 작업 관리자만 가짜 프로세스를 띄우게 한다 (파일 줄이기의 ffmpeg는 진짜로)
     monkeypatch.setattr(jobs, "subprocess", SimpleNamespace(Popen=fake_popen, STDOUT=subprocess.STDOUT))
-    monkeypatch.setattr(jobs, "power_source", lambda: "ac")
     store = Store(tmp_path / "scribe.db")
     jm = jobs.JobManager(store)
     jm.started = started
@@ -52,51 +52,29 @@ def _meeting(jm, status="recorded", source="live"):
     return m["id"]
 
 
-def test_auto_job_waits_for_recording_and_power(manager, monkeypatch):
+def test_job_waits_while_recording_then_starts(manager):
     mid = _meeting(manager)
     recording = [True]
     manager.recording_any = lambda: recording[0]
-    job = manager.enqueue(mid, auto=True)
+    job = manager.enqueue(mid)
     assert not manager.started and job["status"] == "queued"
     assert "녹음 중" in manager.store.get_job(job["id"])["waiting"]
-    # 저절로 만드는 작업은 실제로 시작할 때까지 '녹음 완료'로 둔다
-    assert manager.store.get_meeting(mid)["status"] == "recorded"
-
-    recording[0] = False
-    monkeypatch.setattr(jobs, "power_source", lambda: "battery")
-    manager._kick()
-    assert not manager.started
-    assert manager.store.get_job(job["id"])["waiting"] == "전원을 연결하면 만들어요"
-
-    monkeypatch.setattr(jobs, "power_source", lambda: "ac")
-    manager._kick()
-    assert len(manager.started) == 1 and manager.current == job["id"]
-    assert manager.store.get_job(job["id"])["waiting"] is None
-
-
-def test_manual_job_runs_on_battery_and_upgrades_a_waiting_auto_job(manager, monkeypatch):
-    monkeypatch.setattr(jobs, "power_source", lambda: "battery")
-    mid = _meeting(manager)
-    auto = manager.enqueue(mid, auto=True)
-    assert not manager.started
-    # 사용자가 '만들기'를 누르면 기다리던 작업을 바로 한다
-    again = manager.enqueue(mid)
-    assert again["id"] == auto["id"] and again["auto"] == 0
-    assert len(manager.started) == 1
     assert manager.store.get_meeting(mid)["status"] == "processing"
-
-
-def test_auto_job_on_battery_when_allowed(manager, monkeypatch):
-    monkeypatch.setattr(jobs, "power_source", lambda: "battery")
-    mid = _meeting(manager)
-    job = manager.enqueue(mid, auto=True)
-    assert not manager.started
-    # 설정에서 '배터리로 쓸 때도 만들기'를 켜면 기다리던 작업이 바로 시작한다
-    manager.store.set_setting("auto_on_battery", True)
+    recording[0] = False
     manager._kick()
     assert len(manager.started) == 1 and manager.current == job["id"]
     assert manager.store.get_job(job["id"])["waiting"] is None
-    assert manager.hold_reason(manager.store.get_job(job["id"]), running=True) is None
+
+
+def test_chosen_model_and_speakers_go_to_the_worker(manager):
+    """고른 모델·화자 구분은 작업 프로세스 환경 변수로 (설정 파일보다 먼저)"""
+    mid = _meeting(manager, source="upload")
+    manager.enqueue(mid, {"final": "qwen3-0.6b-8bit", "speakers": False})
+    env = manager.started[0].kwargs["env"]
+    assert env["SCRIBE_FINAL_ENGINE"] == "qwen3" and env["SCRIBE_FINAL_MODEL"] == "moona3k/mlx-qwen3-asr-0.6b-8bit"
+    assert env["SCRIBE_DIARIZER"] == "none"
+    assert jobs.job_env({"final": "fw-large-v3-turbo"}) == {"SCRIBE_FINAL_ENGINE": "faster-whisper", "SCRIBE_FINAL_MODEL": "mobiuslabsgmbh/faster-whisper-large-v3-turbo"}
+    assert jobs.job_env({}) == {}
 
 
 def test_running_job_is_paused_while_recording(manager):

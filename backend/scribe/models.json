@@ -1,5 +1,5 @@
 {
-  "_": "받아쓰기 모델 목록. 설치 도우미(launcher)와 서버가 같이 읽는다. 크기는 GB(1024^3), 내려받는 양 계산에 쓴다. os가 없으면 맥(MLX) 전용, 있으면 그 기기에서만 보인다(macos | windows | linux).",
+  "_": "받아쓰기 모델 목록. 설치 도우미(launcher)와 서버가 같이 읽는다. 크기는 GB(1024^3), 내려받는 양 계산에 쓴다. rtf: 녹음 1초를 처리하는 데 걸리는 어림 초(예상 시간용, 이 컴퓨터에서 잰 값이 있으면 그것을 쓴다). os가 없으면 맥(MLX) 전용, 있으면 그 기기에서만 보인다(macos | windows | linux).",
   "sizes_gb": {
     "moona3k/mlx-qwen3-asr-0.6b-8bit": 0.80,
     "moona3k/mlx-qwen3-asr-1.7b-8bit": 2.0,
@@ -50,31 +50,31 @@
       "id": "qwen3-1.7b-8bit", "engine": "qwen3", "model": "moona3k/mlx-qwen3-asr-1.7b-8bit",
       "label": "Qwen3-ASR 1.7B", "tag": "권장",
       "detail": "정확하고 메모리를 적게 써요. 1시간 녹음에 15분 안팎.",
-      "repos": ["moona3k/mlx-qwen3-asr-1.7b-8bit", "Qwen/Qwen3-ForcedAligner-0.6B"], "memory_gb": 4
+      "repos": ["moona3k/mlx-qwen3-asr-1.7b-8bit", "Qwen/Qwen3-ForcedAligner-0.6B"], "memory_gb": 4, "rtf": 0.25
     },
     {
       "id": "qwen3-0.6b-8bit", "engine": "qwen3", "model": "moona3k/mlx-qwen3-asr-0.6b-8bit",
       "label": "Qwen3-ASR 0.6B", "tag": "가볍게",
       "detail": "메모리 8GB 맥이나 빨리 끝내고 싶을 때. 정확도는 조금 낮아요.",
-      "repos": ["moona3k/mlx-qwen3-asr-0.6b-8bit", "Qwen/Qwen3-ForcedAligner-0.6B"], "memory_gb": 2
+      "repos": ["moona3k/mlx-qwen3-asr-0.6b-8bit", "Qwen/Qwen3-ForcedAligner-0.6B"], "memory_gb": 2, "rtf": 0.15
     },
     {
       "id": "qwen3-1.7b-fp16", "engine": "qwen3", "model": "Qwen/Qwen3-ASR-1.7B",
       "label": "Qwen3-ASR 1.7B 원본", "tag": "메모리 32GB 이상",
       "detail": "8bit와 결과가 거의 같고 두 배 넘게 커요. 메모리 32GB 이상에서만 권해요.",
-      "repos": ["Qwen/Qwen3-ASR-1.7B", "Qwen/Qwen3-ForcedAligner-0.6B"], "memory_gb": 8, "min_ram_gb": 32
+      "repos": ["Qwen/Qwen3-ASR-1.7B", "Qwen/Qwen3-ForcedAligner-0.6B"], "memory_gb": 8, "min_ram_gb": 32, "rtf": 0.35
     },
     {
       "id": "fw-large-v3-turbo", "engine": "faster-whisper", "model": "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
       "label": "Whisper large-v3 turbo", "tag": "권장",
       "detail": "정확해요. CPU로 1시간 녹음에 20~60분 걸려요 (CPU에 따라).",
-      "repos": ["mobiuslabsgmbh/faster-whisper-large-v3-turbo"], "memory_gb": 3, "os": ["windows", "linux"]
+      "repos": ["mobiuslabsgmbh/faster-whisper-large-v3-turbo"], "memory_gb": 3, "os": ["windows", "linux"], "rtf": 0.6
     },
     {
       "id": "fw-small", "engine": "faster-whisper", "model": "Systran/faster-whisper-small",
       "label": "Whisper small", "tag": "빠르게",
       "detail": "빨리 끝나지만 정확도는 낮아요.",
-      "repos": ["Systran/faster-whisper-small"], "memory_gb": 1, "os": ["windows", "linux"]
+      "repos": ["Systran/faster-whisper-small"], "memory_gb": 1, "os": ["windows", "linux"], "rtf": 0.2
     }
   ],
   "recommend": [
@@ -84,6 +84,7 @@
   ],
   "speaker": {
     "repos": ["pyannote/speaker-diarization-community-1", "pyannote/wespeaker-voxceleb-resnet34-LM"],
+    "rtf": {"macos": 0.08, "windows": 0.2, "linux": 0.2},
     "terms_url": "https://huggingface.co/pyannote/speaker-diarization-community-1",
     "token_url": "https://huggingface.co/settings/tokens"
   }

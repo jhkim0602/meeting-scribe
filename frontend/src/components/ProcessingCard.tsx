@@ -1,7 +1,9 @@
 import { AlertCircle, Check, Loader2, PauseCircle, RefreshCw, X } from 'lucide-react'
+import { useState } from 'react'
 import { api, type Job, type Meeting } from '../lib/api'
 import { useStore } from '../lib/store'
 import { fmtDuration } from '../lib/time'
+import { ProcessDialog } from './ProcessDialog'
 
 const STEPS: { key: string; label: string }[] = [
   { key: 'convert', label: '오디오 준비' },
@@ -24,21 +26,19 @@ function stepState(job: Job, key: string): 'done' | 'active' | 'todo' {
  *  녹음한 회의는 기록 위에 작은 띠로(기록은 그대로), 올린 파일은 기록이 생기기 전까지 카드로 보여 준다. */
 export function ProcessingCard({ meeting, job, compact }: { meeting: Meeting; job: Job | null; compact?: boolean }) {
   const upload = meeting.source === 'upload'
-  const toast = useStore((s) => s.toast)
   const refreshMeeting = useStore((s) => s.refreshMeeting)
   const loadMeetings = useStore((s) => s.loadMeetings)
   const recording = useStore((s) => s.rec.status !== 'idle' && s.rec.meetingId === meeting.id)
   const running = job && (job.status === 'queued' || job.status === 'running')
-
-  const start = async () => {
-    try {
-      await api.process(meeting.id)
-      await refreshMeeting()
-      await loadMeetings()
-    } catch (e) {
-      toast((e as Error).message, 'error')
-    }
-  }
+  // 시작은 언제나 고르는 창에서 (방금 올린 파일이면 바로 연다)
+  const askProcess = useStore((s) => s.askProcess)
+  const set = useStore((s) => s.set)
+  const [choosing, setChoosing] = useState(false)
+  const dialogOpen = choosing || (askProcess === meeting.id && !compact && !running)
+  const start = () => setChoosing(true)
+  const dialog = dialogOpen && (
+    <ProcessDialog meeting={meeting} onClose={() => { setChoosing(false); if (askProcess === meeting.id) set({ askProcess: null }) }} />
+  )
   const cancel = async () => {
     await api.cancel(meeting.id)
     await refreshMeeting()
@@ -104,6 +104,7 @@ export function ProcessingCard({ meeting, job, compact }: { meeting: Meeting; jo
           <AlertCircle size={14} />
           <span>{what} 못했어요</span>
           <button className="btn btn-sm" onClick={start}><RefreshCw size={13} />다시 시도</button>
+          {dialog}
         </div>
       )
     }
@@ -117,6 +118,7 @@ export function ProcessingCard({ meeting, job, compact }: { meeting: Meeting; jo
           </div>
         </div>
         <button className="btn btn-primary" onClick={start}>다시 시도</button>
+        {dialog}
       </div>
     )
   }
@@ -130,6 +132,7 @@ export function ProcessingCard({ meeting, job, compact }: { meeting: Meeting; jo
       {meeting.has_audio && !recording && (
         <button className="btn btn-primary" onClick={start}>받아 적기 시작</button>
       )}
+      {dialog}
     </div>
   )
 }

@@ -1,6 +1,7 @@
 import { CalendarDays, Clock3, Download, FileAudio, FileText, FolderDown, Mic, MoreHorizontal, PanelLeft, RefreshCw, ScrollText, Trash2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api'
+import { ProcessDialog } from './ProcessDialog'
 import { deleteLater } from '../lib/annActions'
 import { bridges, useStore } from '../lib/store'
 import { fmtDate, fmtDuration } from '../lib/time'
@@ -19,7 +20,6 @@ const STATUS: Record<string, { label: string; tone: string }> = {
 
 export function PageHeader() {
   const meeting = useStore((s) => s.meeting)!
-  const job = useStore((s) => s.job)
   const recStatus = useStore((s) => s.rec.status)
   const recMeeting = useStore((s) => s.rec.meetingId)
   // 길이는 분 단위로 보이므로 그때만 다시 그린다
@@ -38,11 +38,10 @@ export function PageHeader() {
     ? (rec.status === 'paused' ? STATUS.paused : STATUS.recording)
     : meeting.status === 'processing' && meeting.source === 'upload' ? { label: '받아 적는 중', tone: 'blue' } : STATUS[meeting.status] || STATUS.empty
   const duration = recordingHere ? rec.elapsed : meeting.duration
-  // 저절로 만들 원본 스크립트가 전원 연결을 기다리는 중이면 '지금 만들기'로 바로 시킬 수 있다
-  const waitingAuto = !!job && job.status === 'queued' && !!job.auto
   const reprocessLabel = meeting.source === 'upload' && !meeting.final_version
     ? '다시 받아 적기'
-    : waitingAuto ? '원본 스크립트 지금 만들기' : meeting.final_version ? '원본 스크립트 다시 만들기' : '원본 스크립트 만들기'
+    : meeting.final_version ? '원본 스크립트 다시 만들기' : '원본 스크립트 만들기'
+  const [choosing, setChoosing] = useState(false)
 
   useEffect(() => setTitle(meeting.title), [meeting.id, meeting.title])
   useEffect(() => {
@@ -60,15 +59,10 @@ export function PageHeader() {
     await Promise.all([refreshMeeting(), loadMeetings()])
   }
 
-  const reprocess = async () => {
+  // 모델·화자 구분을 고르고 예상 시간을 본 뒤 시작한다
+  const reprocess = () => {
     setMenu(null)
-    try {
-      await api.process(meeting.id)
-      await refreshMeeting()
-      await loadMeetings()
-    } catch (e) {
-      toast((e as Error).message, 'error')
-    }
+    setChoosing(true)
   }
 
   // 방금 쓴 노트·메모까지 담기도록 저장을 마친 뒤 연다 (새 탭은 먼저 열어 두어야 팝업 차단에 안 걸린다).
@@ -164,13 +158,14 @@ export function PageHeader() {
               <FileAudio size={15} />원본 스크립트 받기 (.md)
             </a>
           )}
-          <button className="menu-item" onClick={reprocess} disabled={!meeting.has_audio || recordingHere || (meeting.status === 'processing' && !waitingAuto)} title={waitingAuto ? job?.waiting ?? undefined : undefined}>
+          <button className="menu-item" onClick={reprocess} disabled={!meeting.has_audio || recordingHere || meeting.status === 'processing'}>
             <RefreshCw size={15} />{reprocessLabel}
           </button>
           <div className="menu-sep" />
           <button className="menu-item danger" onClick={remove} disabled={recordingHere} title={recordingHere ? '녹음을 마친 뒤 지울 수 있어요' : undefined}><Trash2 size={15} />회의 삭제</button>
         </Floating>
       )}
+      {choosing && <ProcessDialog meeting={meeting} onClose={() => setChoosing(false)} />}
     </header>
   )
 }

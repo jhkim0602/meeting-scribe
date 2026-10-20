@@ -205,7 +205,6 @@ async def handle_recording(
     store: Store,
     holder: LiveEngineHolder,
     sessions: dict,
-    on_stop: Callable[[str], Optional[dict]],
     on_resume: Optional[Callable[[str], bool]] = None,
 ) -> None:
     meeting_id = ws.path_params["meeting_id"]
@@ -313,9 +312,8 @@ async def handle_recording(
             # 녹음이 끝나거나 끊긴 시각 → 다시 이어서 녹음하면 그 사이를 쉬는 시간으로 표시
             mark_paused(store, meeting_id, duration, time.time())
             if stop:
-                job = on_stop(meeting_id)
                 try:
-                    await session.send({"type": "stopped", "duration": duration, "job": job})
+                    await session.send({"type": "stopped", "duration": duration})
                     await ws.close()
                 except BaseException:  # noqa: BLE001
                     pass

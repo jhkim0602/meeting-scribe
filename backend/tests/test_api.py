@@ -81,7 +81,8 @@ def test_full_flow(client):
                 break
     segs = [e["segment"] for e in events if e["type"] == "segment"]
     assert len(segs) == 3, events
-    assert events[-1]["job"]["status"] in ("queued", "running")
+    # 녹음을 마쳐도 원본 스크립트는 저절로 만들지 않는다 (사용자가 직접 시작)
+    assert "job" not in events[-1] and client.get(f"/api/meetings/{mid}/job").json()["job"] is None
 
     live = client.get(f"/api/meetings/{mid}/live").json()
     units = live["units"]
@@ -108,6 +109,7 @@ def test_full_flow(client):
     assert moved[c["id"]]["pos"]["text"] == f"{w[0]} (고침)"
     assert client.patch(f"/api/meetings/{mid}/segments/{u0['id']}", json={"text": "   "}).status_code == 400
 
+    client.post(f"/api/meetings/{mid}/process")
     job = _wait_job(client, mid)
     assert job["status"] == "done", job
     # 후처리 뒤에도 기록은 그대로 (고친 글자, 메모·댓글 위치 모두)
@@ -165,6 +167,14 @@ def test_upload_file(client, tmp_path):
     with open(mp3, "rb") as f:
         m = client.post("/api/upload", files={"file": ("회의 녹음.m4a", f, "audio/mp4")}, data={"title": ""}).json()
     assert m["title"] == "회의 녹음" and m["source"] == "upload"
+    # 올려도 바로 받아 적지 않는다: 고를 것과 예상 시간을 보고 시작한다
+    assert client.get(f"/api/meetings/{m['id']}/job").json()["job"] is None and m["duration"] > 0
+    opts = client.get(f"/api/meetings/{m['id']}/process/options").json()
+    assert opts["choices"] and opts["default"] in {c["id"] for c in opts["choices"]}
+    assert all(c["eta_s"]["with_speakers"] >= c["eta_s"]["without_speakers"] > 0 for c in opts["choices"])
+    assert client.post(f"/api/meetings/{m['id']}/process", json={"final": "no-such-model"}).status_code == 400
+    client.post(f"/api/meetings/{m['id']}/process", json={"num_speakers": 2})  # 모델은 설정 그대로(시연용), 화자 구분은 켠 채로
+    assert client.get(f"/api/meetings/{m['id']}").json()["num_speakers"] == 2
     job = _wait_job(client, m["id"])
     assert job["status"] == "done", job
     # 올린 파일은 받아 적은 결과가 곧 회의 기록 (목소리 묶음 A, B…로 화자를 고를 수 있고, 직접 고칠 수 있다)
@@ -252,8 +262,8 @@ def test_pause_resume_creates_break_divider(client):
 def test_resume_after_stop_cancels_processing_and_marks_break(client):
     mid = client.post("/api/meetings", json={}).json()["id"]
     pcm = _speech_pcm([("s", 2.5), ("n", 1.0)] * 3)
-    got = _record(client, mid, pcm, messages=[{"type": "stop"}], until="stopped")
-    assert got[-1]["job"]["status"] in ("queued", "running")
+    _record(client, mid, pcm, messages=[{"type": "stop"}], until="stopped")
+    assert client.post(f"/api/meetings/{mid}/process").json()["job"]["status"] in ("queued", "running")
     # 실수로 종료한 직후 바로 이어서 녹음: 원본 작업을 취소하고, 몇 초 차이는 쉬는 시간이 아니다
     got2 = _record(client, mid, b"", messages=[{"type": "pause"}])
     ready = got2[0]
@@ -296,8 +306,7 @@ def test_manual_divider_and_settings(client):
     assert client.patch(f"/api/annotations/{d['id']}", json={"body": "안건 2"}).json()["body"] == "안건 2"
     assert "──── 안건 2 ────" in client.get(f"/api/meetings/{mid}/export.md").text
     s = client.put("/api/settings", json={"break_prompt_minutes": 5}).json()
-    assert s["break_prompt_minutes"] == 5 and s["auto_on_battery"] is False
-    assert client.put("/api/settings", json={"auto_on_battery": True}).json()["auto_on_battery"] is True
+    assert s["break_prompt_minutes"] == 5 and "auto_process" not in s
     client.post(f"/api/meetings/{mid}/cancel")
 
 
@@ -401,6 +410,7 @@ def test_mutations_return_the_changed_item_with_its_position(client):
     mid = client.post("/api/meetings", json={}).json()["id"]
     pcm = _speech_pcm([("s", 2.5), ("n", 1.0), ("s", 3.0), ("n", 1.0)])
     _record(client, mid, pcm, messages=[{"type": "stop"}], until="stopped")
+    client.post(f"/api/meetings/{mid}/process")
     assert _wait_job(client, mid)["status"] == "done"
     u = client.get(f"/api/meetings/{mid}/live").json()["units"][0]
     c = client.post(f"/api/meetings/{mid}/annotations", json={
@@ -438,6 +448,7 @@ def test_settled_audio_is_compressed_and_still_usable(client, monkeypatch):
     mid = client.post("/api/meetings", json={}).json()["id"]
     pcm = _speech_pcm([("s", 2.5), ("n", 1.0)] * 2)
     _record(client, mid, pcm, messages=[{"type": "stop"}], until="stopped")
+    client.post(f"/api/meetings/{mid}/process")
     assert _wait_job(client, mid)["status"] == "done"
     mdir = config.settings.meetings_dir / mid
     duration = client.get(f"/api/meetings/{mid}").json()["duration"]
@@ -481,6 +492,7 @@ def test_upload_copy_is_removed_after_processing(client, tmp_path):
     f.write_bytes(wav_header(len(pcm)) + pcm)
     with open(f, "rb") as fh:
         m = client.post("/api/upload", files={"file": ("회의.wav", fh, "audio/wav")}, data={"title": ""}).json()
+    client.post(f"/api/meetings/{m['id']}/process")
     assert _wait_job(client, m["id"])["status"] == "done"
     mdir = config.settings.meetings_dir / m["id"]
     assert not list(mdir.glob("source.*")) and (mdir / "audio.wav").exists()
@@ -726,6 +738,7 @@ def test_marks_and_edits_stay_on_the_record_after_postprocess(client):
         ws.send_text(json.dumps({"type": "stop"}))
         while json.loads(ws.receive_text())["type"] != "stopped":
             pass
+    client.post(f"/api/meetings/{mid}/process")
     assert _wait_job(client, mid)["status"] == "done"
     # 끝난 뒤에도 같은 기록에 댓글
     u = live[2]

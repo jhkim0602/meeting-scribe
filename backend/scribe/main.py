@@ -186,8 +186,6 @@ def storage() -> dict:
 
 class SettingsIn(BaseModel):
     vocabulary: Optional[str] = None
-    auto_process: Optional[bool] = None
-    auto_on_battery: Optional[bool] = None
     break_prompt_minutes: Optional[float] = None
 
 
@@ -195,9 +193,6 @@ class SettingsIn(BaseModel):
 def get_settings() -> dict:
     return {
         "vocabulary": store.get_setting("vocabulary", ""),
-        "auto_process": store.get_setting("auto_process", True),
-        # 저절로 만드는 원본 스크립트를 배터리로 쓸 때도 만든다 (끄면 전원을 연결할 때까지 기다림)
-        "auto_on_battery": store.get_setting("auto_on_battery", False),
         # 이만큼 조용하면 '쉬는 시간인가요?'를 묻는다 (0이면 묻지 않음)
         "break_prompt_minutes": store.get_setting("break_prompt_minutes", 3),
     }
@@ -207,10 +202,6 @@ def get_settings() -> dict:
 def put_settings(body: SettingsIn) -> dict:
     if body.vocabulary is not None:
         store.set_setting("vocabulary", body.vocabulary.strip())
-    if body.auto_process is not None:
-        store.set_setting("auto_process", bool(body.auto_process))
-    if body.auto_on_battery is not None:
-        store.set_setting("auto_on_battery", bool(body.auto_on_battery))
     if body.break_prompt_minutes is not None:
         store.set_setting("break_prompt_minutes", max(0.0, min(60.0, float(body.break_prompt_minutes))))
     return get_settings()
@@ -364,8 +355,10 @@ async def upload(file: UploadFile = File(...), title: str = Form("")) -> dict:
             if not chunk:
                 break
             f.write(chunk)
-    store.update_meeting(m["id"], status="recorded")
-    jobs.enqueue(m["id"])
+    # 바로 받아 적지 않는다: 사용자가 모델·화자 구분을 고르고(예상 시간을 보고) 시작한다
+    from .audio import probe_duration
+
+    store.update_meeting(m["id"], status="recorded", duration=probe_duration(dst) or 0.0)
     return _meeting_detail(store.get_meeting(m["id"]))  # type: ignore[arg-type]
 
 
@@ -413,15 +406,42 @@ def patch_segment(meeting_id: str, segment_id: str, body: SegmentEdit) -> dict:
         raise HTTPException(400, str(exc))
 
 
+class ProcessIn(BaseModel):
+    final: Optional[str] = None  # 모델 id (models.json final)
+    speakers: Optional[bool] = None  # 화자 구분
+    num_speakers: Optional[int] = None  # 0이면 자동
+
+
+@app.get("/api/meetings/{meeting_id}/process/options")
+def process_options(meeting_id: str) -> dict:
+    """시작하기 전에 고를 것: 이 기기의 모델들(받았는지, 예상 시간), 화자 구분, 화자 수"""
+    from .process_plan import plan
+
+    m = _meeting_or_404(meeting_id)
+    return dict(plan(store, float(m.get("duration") or 0)), num_speakers=m.get("num_speakers"))
+
+
 @app.post("/api/meetings/{meeting_id}/process")
-def process(meeting_id: str) -> dict:
+def process(meeting_id: str, body: Optional[ProcessIn] = None) -> dict:
+    """사용자가 직접 시작한다 (모델·화자 구분을 고른 대로)"""
+    from .process_plan import plan, validate
+
     m = _meeting_or_404(meeting_id)
     if meeting_id in sessions:
         raise HTTPException(409, "녹음을 먼저 종료해 주세요")
     mdir = settings.meetings_dir / meeting_id
     if _audio_path(meeting_id) is None and not any(mdir.glob("source.*")):
         raise HTTPException(400, "처리할 오디오가 없습니다")
-    return {"job": jobs.enqueue(m["id"])}
+    body = body or ProcessIn()
+    if (err := validate(body.final)) is not None:
+        raise HTTPException(400, err)
+    # 모델을 고르지 않았으면 설정의 모델 그대로 (고른 것만 작업에 적는다)
+    options: dict = {"speakers": bool(plan(store, 0)["speakers"]["available"] and body.speakers is not False)}
+    if body.final:
+        options["final"] = body.final
+    if body.num_speakers is not None:
+        store.update_meeting(meeting_id, num_speakers=max(0, min(20, body.num_speakers)) or None)
+    return {"job": jobs.enqueue(m["id"], options)}
 
 
 @app.post("/api/meetings/{meeting_id}/cancel")
@@ -736,13 +756,6 @@ def search(q: str, limit: int = 30) -> list[dict]:
 
 # ---------------- 녹음 WebSocket ----------------
 
-def _after_stop(meeting_id: str) -> Optional[dict]:
-    # 참고용 원본 스크립트: 전원이 연결돼 있고 녹음하지 않을 때 저절로 만든다 (설정에서 끄면 '만들기'를 누를 때만)
-    if store.get_setting("auto_process", True):
-        return jobs.enqueue(meeting_id, auto=True)
-    return None
-
-
 def _before_resume(meeting_id: str) -> bool:
     """원본 스크립트를 만드는 중에 다시 녹음하면 그 작업을 취소한다. 취소했으면 True."""
     latest = store.latest_job(meeting_id)
@@ -754,7 +767,7 @@ def _before_resume(meeting_id: str) -> bool:
 
 @app.websocket("/api/meetings/{meeting_id}/record")
 async def record(ws: WebSocket) -> None:
-    await handle_recording(ws, store, holder, sessions, _after_stop, _before_resume)
+    await handle_recording(ws, store, holder, sessions, _before_resume)
 
 
 @app.exception_handler(Exception)

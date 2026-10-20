@@ -893,3 +893,15 @@ kbd { display: inline-grid; place-items: center; min-width: 20px; height: 20px; 
   .pd-row .pd-note { grid-column: 2 / span 2; }
 }
 
+
+/* 받아 적기·원본 스크립트 시작 창: 모델 고르기 */
+.process-dialog { width: min(640px, 100%); }
+.choices { display: flex; flex-direction: column; gap: 6px; }
+.choice { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; }
+.choice.on { border-color: var(--accent, #2f6feb); background: var(--bg-soft); }
+.choice input { margin-top: 3px; }
+.choice-main { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.choice-main .tag { font-size: 11.5px; color: var(--text-3); }
+.choice-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; white-space: nowrap; font-size: 13px; }
+.process-eta { margin-right: auto; align-self: center; }
+@media (max-width: 520px) { .choice { flex-wrap: wrap; } .choice-meta { align-items: flex-start; width: 100%; padding-left: 24px; } }

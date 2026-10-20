@@ -11,8 +11,6 @@ export interface Job {
   message: string | null
   error: string | null
   eta: number | null
-  /** 녹음을 마쳐 저절로 시작한 작업 (전원이 연결돼 있을 때만 한다) */
-  auto?: number
   /** 지금 기다리는 까닭 (녹음 중, 전원 연결 대기). 없으면 null */
   waiting?: string | null
   created_at: number
@@ -151,8 +149,6 @@ export interface Health {
 
 export interface AppSettings {
   vocabulary: string
-  auto_process: boolean
-  auto_on_battery: boolean
   break_prompt_minutes: number
 }
 
@@ -164,6 +160,18 @@ export interface MemoryInfo {
   live_model: Health['live']
   speaker_model: { loaded: boolean; error: string | null; failures: number; meetings: number }
   recording: { meeting_id: string; backlog_s: number }[]
+}
+
+/** 받아 적기·원본 스크립트를 시작하기 전에 고를 것 (예상 시간은 초) */
+export interface ProcessOptions {
+  duration: number
+  default: string
+  num_speakers: number | null
+  speakers: { available: boolean; reason: string | null }
+  choices: {
+    id: string; label: string; tag: string; detail: string; memory_gb: number; download_gb: number; downloaded: boolean
+    measured: boolean; eta_s: { with_speakers: number; without_speakers: number }
+  }[]
 }
 
 export interface SearchHit {
@@ -209,7 +217,10 @@ export const api = {
   live: (id: string) => req<LiveView>('GET', `/api/meetings/${id}/live`),
   editSegment: (id: string, segmentId: string, text: string) => req<SegmentEdit>('PATCH', `/api/meetings/${id}/segments/${segmentId}`, { text }),
   job: (id: string) => req<{ job: Job | null; record_rev?: number }>('GET', `/api/meetings/${id}/job`),
-  process: (id: string) => req<{ job: Job }>('POST', `/api/meetings/${id}/process`),
+  processOptions: (id: string) => req<ProcessOptions>('GET', `/api/meetings/${id}/process/options`),
+  /** 사용자가 직접 시작한다 (저절로 시작하지 않는다) */
+  process: (id: string, opts?: { final?: string; speakers?: boolean; num_speakers?: number }) =>
+    req<{ job: Job }>('POST', `/api/meetings/${id}/process`, opts ?? {}),
   cancel: (id: string) => req<{ ok: boolean }>('POST', `/api/meetings/${id}/cancel`),
   notes: (id: string) => req<{ blocks: unknown[] | null; markdown: string; updated_at: number | null }>('GET', `/api/meetings/${id}/notes`),
   saveNotes: (id: string, blocks: unknown[]) => req<{ ok: boolean; updated_at: number }>('PUT', `/api/meetings/${id}/notes`, { blocks }),

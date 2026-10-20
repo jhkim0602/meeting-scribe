@@ -162,6 +162,9 @@ class Store:
             c.execute("ALTER TABLE jobs ADD COLUMN auto INTEGER NOT NULL DEFAULT 0")
         if "waiting" not in jcols:
             c.execute("ALTER TABLE jobs ADD COLUMN waiting TEXT")
+        # 이 작업에서 쓸 모델·화자 구분 (사용자가 고른 것, JSON)
+        if "options" not in jcols:
+            c.execute("ALTER TABLE jobs ADD COLUMN options TEXT")
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path, timeout=30, isolation_level=None, check_same_thread=False)
@@ -568,13 +571,13 @@ class Store:
         return d
 
     # ---------- jobs ----------
-    def create_job(self, meeting_id: str, kind: str = "postprocess", auto: bool = False) -> dict:
+    def create_job(self, meeting_id: str, kind: str = "postprocess", options: Optional[dict] = None) -> dict:
         job = {"id": new_id(), "meeting_id": meeting_id, "kind": kind, "status": "queued", "phase": "queued", "progress": 0.0,
-               "created_at": time.time(), "auto": int(auto)}
+               "created_at": time.time(), "options": json.dumps(options, ensure_ascii=False) if options else None}
         with self.conn() as c:
             c.execute(
-                "INSERT INTO jobs(id,meeting_id,kind,status,phase,progress,created_at,auto)"
-                " VALUES(:id,:meeting_id,:kind,:status,:phase,:progress,:created_at,:auto)",
+                "INSERT INTO jobs(id,meeting_id,kind,status,phase,progress,created_at,options)"
+                " VALUES(:id,:meeting_id,:kind,:status,:phase,:progress,:created_at,:options)",
                 job,
             )
         return self.get_job(job["id"])  # type: ignore[return-value]

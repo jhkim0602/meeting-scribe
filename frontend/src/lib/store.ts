@@ -90,6 +90,8 @@ interface State {
   restoreAnnotation: (snap: AnnSnapshot) => void
   /** 지우는 중(되돌리기 대기)이라 목록에서 숨긴 회의 */
   hiddenMeetings: string[]
+  /** 방금 올린 회의: 받아 적기 창(모델·화자 고르기)을 바로 연다 */
+  askProcess: string | null
   stampExported: (stamps: Record<string, number | null>) => void
   setPartial: (p: State['partial']) => void
   setTab: (t: Tab) => void
@@ -238,6 +240,7 @@ export const useStore = create<State>((set, get) => ({
     set({ live: { ...live, annotations: next } })
   },
   hiddenMeetings: [],
+  askProcess: null,
   stampExported: (stamps) => {
     const { live } = get()
     if (live) set({ live: { ...live, annotations: live.annotations.map((x) => (x.id in stamps ? { ...x, exported_at: stamps[x.id] } : x)) } })

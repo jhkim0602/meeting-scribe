@@ -30,8 +30,6 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const loadSettings = useStore((s) => s.loadSettings)
   const toast = useStore((s) => s.toast)
   const [vocab, setVocab] = useState(settings?.vocabulary || '')
-  const [auto, setAuto] = useState(settings?.auto_process ?? true)
-  const [onBattery, setOnBattery] = useState(settings?.auto_on_battery ?? false)
   const [breakMin, setBreakMin] = useState(settings?.break_prompt_minutes ?? 3)
   const [storage, setStorage] = useState<StorageInfo | null>(null)
   const [log, setLog] = useState<string | null>(null)
@@ -62,7 +60,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
       .catch((e) => setLog(`불러오지 못했어요: ${e.message}`))
 
   const save = async () => {
-    await api.saveSettings({ vocabulary: vocab, auto_process: auto, auto_on_battery: onBattery, break_prompt_minutes: breakMin })
+    await api.saveSettings({ vocabulary: vocab, break_prompt_minutes: breakMin })
     await loadSettings()
     toast('설정을 저장했어요', 'success')
     onClose()
@@ -89,14 +87,6 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
               <span>자주 나오는 용어·이름</span>
               <textarea className="input" rows={3} value={vocab} placeholder="예: 김민지 박준호 OKR 리텐션 Qwen" onChange={(e) => setVocab(e.target.value)} />
               <em>띄어쓰기로 구분해 적으면 받아쓰기가 이 단어들을 더 잘 알아들어요.</em>
-            </label>
-            <label className="check">
-              <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} />
-              원본 스크립트(참고용) 저절로 만들기 — 녹음하지 않을 때만. 끄면 ⋯ 메뉴에서 만들 때만 만들어요
-            </label>
-            <label className="check sub">
-              <input type="checkbox" checked={onBattery} disabled={!auto} onChange={(e) => setOnBattery(e.target.checked)} />
-              배터리로 쓸 때도 만들기 — 끄면 전원을 연결할 때까지 기다려요. 1시간 녹음에 15분쯤 칩을 바쁘게 써서 배터리가 더 줄어요
             </label>
             <label className="field-inline">
               <span>조용한 시간이 이어지면 쉬는 시간인지 묻기</span>

@@ -1,15 +1,14 @@
 """후처리 작업 대기열. 한 번에 하나씩 별도 프로세스로 실행한다.
 
-원본 스크립트는 참고용이라 회의를 방해하지 않게 돌린다:
-- 어떤 회의든 녹음하는 동안에는 시작하지 않고, 하던 작업도 잠시 멈춘다 (실시간 받아쓰기가 GPU를 먼저 쓴다).
-- 녹음을 마쳐 저절로 시작한 작업은 전원이 연결돼 있을 때만 한다 (배터리면 연결할 때까지 기다린다).
-- 사용자가 직접 시킨 작업(만들기 버튼, 파일 올리기)은 배터리여도 한다.
+작업은 사용자가 직접 시킬 때만 만든다 (녹음을 마쳐도 저절로 만들지 않는다). 모델·화자 구분은 작업마다 고른 것을 쓴다.
+회의를 방해하지 않게, 어떤 회의든 녹음하는 동안에는 시작하지 않고 하던 작업도 잠시 멈춘다 (실시간 받아쓰기가 먼저다).
 멈추기는 워커가 안전한 곳(진행률을 알리는 때)에서 스스로 멈추게 한다: 회의 폴더의 `pause` 파일이 있는 동안 기다린다.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import subprocess
 import sys
@@ -17,10 +16,10 @@ import time
 from pathlib import Path
 from typing import Callable, Optional
 
+from . import catalog
 from .config import settings
 from .db import Store
 from .storage import audio_file, compress_audio, is_settled
-from .system import power_source
 
 HOUSEKEEP_EVERY_S = 60.0
 PAUSE_FILE = "pause"
@@ -41,6 +40,17 @@ def _alive(pid: Optional[int]) -> bool:
     except OSError:
         return False
     return True
+
+
+def job_env(options: dict) -> dict[str, str]:
+    """사용자가 고른 모델·화자 구분을 작업 프로세스의 환경 변수로 (설정 파일보다 먼저 쓴다)"""
+    env: dict[str, str] = {}
+    c = catalog.choice("final", options.get("final"))
+    if c:
+        env.update(SCRIBE_FINAL_ENGINE=c["engine"], SCRIBE_FINAL_MODEL=c["model"])
+    if options.get("speakers") is False:
+        env["SCRIBE_DIARIZER"] = "none"
+    return env
 
 
 class JobManager:
@@ -64,31 +74,21 @@ class JobManager:
                 if m and m["status"] == "processing":
                     self.store.update_meeting(m["id"], status=self.store.status_after_job(m["id"]))
 
-    def enqueue(self, meeting_id: str, auto: bool = False) -> dict:
-        """auto: 녹음을 마쳐 저절로 만드는 것 (전원이 연결돼 있을 때만). 직접 시키면 기다리던 작업도 바로 할 수 있게 바꾼다."""
+    def enqueue(self, meeting_id: str, options: Optional[dict] = None) -> dict:
+        """options: {final: 모델 id, speakers: 화자 구분 여부} (없으면 설정의 기본값)"""
         latest = self.store.latest_job(meeting_id)
         if latest and latest["status"] in ("queued", "running"):
-            if not auto and latest.get("auto"):
-                self.store.update_job(latest["id"], auto=0)
-                if latest["status"] == "queued":
-                    self.store.update_meeting(meeting_id, status="processing")
-                self._kick()
-                return self.store.get_job(latest["id"]) or latest
             return latest
-        job = self.store.create_job(meeting_id, auto=auto)
-        if not auto:
-            # 저절로 만드는 것은 실제로 시작할 때 '만드는 중'이 된다 (전원을 기다리는 동안은 '녹음 완료')
-            self.store.update_meeting(meeting_id, status="processing")
+        job = self.store.create_job(meeting_id, options=options)
+        self.store.update_meeting(meeting_id, status="processing")
         self._kick()
         return self.store.get_job(job["id"]) or job
 
-    def hold_reason(self, job: dict, running: bool = False) -> Optional[str]:
+    def hold_reason(self, job: dict) -> Optional[str]:
         """이 작업을 지금 하지 말아야 하면 그 까닭 (화면에 그대로 보여 준다)."""
         upload = (self.store.get_meeting(job["meeting_id"]) or {}).get("source") == "upload"
         if self.recording_any():
             return "녹음 중이라 잠시 멈췄어요. 녹음을 마치면 이어서 " + ("받아 적어요" if upload else "만들어요")
-        if job.get("auto") and power_source() == "battery" and not self.store.get_setting("auto_on_battery", False):
-            return "전원을 연결하면 " + ("이어서 " if running else "") + "만들어요"
         return None
 
     def cancel(self, meeting_id: str) -> None:
@@ -137,6 +137,7 @@ class JobManager:
         pause_path(job["meeting_id"]).unlink(missing_ok=True)
         env = dict(os.environ)
         env["PYTHONPATH"] = str(BACKEND_DIR) + os.pathsep + env.get("PYTHONPATH", "")
+        env.update(job_env(json.loads(job.get("options") or "null") or {}))
         log = open(settings.meeting_dir(job["meeting_id"]) / "worker.log", "ab")
         self.proc = subprocess.Popen([sys.executable, "-m", "scribe.worker", job["id"]], cwd=str(BACKEND_DIR), env=env, stdout=log, stderr=subprocess.STDOUT)
         self.current = job["id"]
@@ -171,7 +172,7 @@ class JobManager:
         job = self.store.get_job(job_id)
         if job is None or job["status"] != "running":
             return
-        reason = self.hold_reason(job, running=True)
+        reason = self.hold_reason(job)
         path = pause_path(job["meeting_id"])
         if reason is None:
             path.unlink(missing_ok=True)
