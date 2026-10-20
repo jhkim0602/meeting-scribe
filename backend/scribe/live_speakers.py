@@ -12,7 +12,10 @@ from __future__ import annotations
 
 import os
 import secrets
+import sys
 import threading
+import time
+import traceback
 from typing import Optional
 
 import numpy as np
@@ -73,10 +76,16 @@ class PyannoteEmbedder(Embedder):
     space = "live:wespeaker"
     REPO = "pyannote/wespeaker-voxceleb-resnet34-LM"
 
+    # 실패하면 이 간격(초)을 두 배씩 늘려 가며 조용히 다시 시도한다 (회의 기록은 그대로 이어진다)
+    RETRY_MIN_S = 30.0
+    RETRY_MAX_S = 300.0
+
     def __init__(self) -> None:
         self._inf = None
         self._lock = threading.Lock()
         self.error: Optional[str] = None
+        self.failures = 0
+        self._retry_at = 0.0
 
     def _load(self):
         import torch
@@ -93,7 +102,7 @@ class PyannoteEmbedder(Embedder):
         return inf
 
     def embed(self, audio, t0, t1):
-        if self.error:
+        if self.error and time.monotonic() < self._retry_at:
             return None
         with self._lock:
             try:
@@ -102,11 +111,30 @@ class PyannoteEmbedder(Embedder):
                 import torch
 
                 v = self._inf({"waveform": torch.from_numpy(audio[None, :].astype(np.float32)), "sample_rate": SAMPLE_RATE})
-            except Exception as exc:  # noqa: BLE001 - 목소리 특징 없이 진행(앞 문장 이어받기만)
-                self.error = f"{type(exc).__name__}: {exc}"
+            except Exception as exc:  # noqa: BLE001 - 목소리 특징 없이 진행(앞 문장 이어받기만), 나중에 다시 시도
+                self._fail(exc, t0, t1)
                 return None
+            if self.error:
+                _log(f"화자 특징 모델 복구됨 (실패 {self.failures}회 후, {t0:.1f}s 문장)")
+                self.error, self.failures = None, 0
         v = np.asarray(v, dtype=float).reshape(-1)
         return [round(float(x), 5) for x in v] if np.all(np.isfinite(v)) else None
+
+    def _fail(self, exc: Exception, t0: float, t1: float) -> None:
+        """실패를 로그에 남기고, 모델을 버린 뒤 다음 시도 시각을 정한다."""
+        msg = f"{type(exc).__name__}: {exc}"
+        self.failures += 1
+        delay = min(self.RETRY_MIN_S * 2 ** (self.failures - 1), self.RETRY_MAX_S)
+        self._retry_at = time.monotonic() + delay
+        self._inf = None  # 다음 시도 때 모델을 새로 불러온다
+        # 같은 에러가 반복되면 한 줄만, 처음 보는 에러면 traceback까지 남긴다
+        tb = "" if msg == self.error else "\n" + traceback.format_exc().rstrip()
+        _log(f"화자 특징 모델 실패 #{self.failures} ({t0:.1f}-{t1:.1f}s 문장): {msg} → {delay:.0f}초 뒤 다시 시도{tb}")
+        self.error = msg
+
+
+def _log(msg: str) -> None:
+    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] live_speakers: {msg}", file=sys.stderr, flush=True)
 
 
 _embedder: Optional[Embedder] = None
