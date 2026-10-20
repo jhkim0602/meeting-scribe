@@ -1,0 +1,57 @@
+# 시험용(릴리스와 무관): 실제 윈도우 PC에서 받아쓰기·화자 나누기 모델의 속도·메모리를 잰다
+name: 모델 속도 측정
+
+on:
+  push:
+    branches: [bench-windows]
+    paths: ["bench/**", ".github/workflows/bench.yml"]
+
+jobs:
+  bench:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    defaults:
+      run:
+        shell: bash
+        working-directory: bench
+    env:
+      PYTHONUTF8: "1"
+      HF_HUB_DISABLE_SYMLINKS_WARNING: "1"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: 이 PC
+        run: |
+          python -c "import os, platform; print(platform.platform(), platform.processor(), os.cpu_count())"
+          powershell -Command "Get-CimInstance Win32_Processor | Select-Object Name,NumberOfCores,NumberOfLogicalProcessors | Format-List; (Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory/1GB"
+      - name: 패키지 (앱의 requirements-win.txt와 같은 것)
+        run: pip install "faster-whisper>=1.1" "pyannote.audio>=4.0" pyarrow soundfile jiwer psutil --extra-index-url https://download.pytorch.org/whl/cpu
+      - name: 시험 회의 만들기 (Zeroth Korean, 4명 10분)
+        run: |
+          mkdir -p data
+          curl -sL -o data/zeroth_test.parquet https://huggingface.co/datasets/kresnik/zeroth_korean/resolve/main/data/test-00000-of-00001.parquet
+          python make_meeting.py 600
+      - name: OpenMP 충돌 확인 (torch + CTranslate2 한 프로세스)
+        continue-on-error: true
+        run: python omp_check.py
+      - name: 받아쓰기 (회의 중 문장마다)
+        run: |
+          for th in 4 2; do for m in Systran/faster-whisper-base Systran/faster-whisper-small mobiuslabsgmbh/faster-whisper-large-v3-turbo; do
+            python bench_asr.py $m $th live 2>/dev/null | tee -a results.jsonl; done; done
+      - name: 받아쓰기 (녹음 후 10분 전체)
+        run: |
+          for th in 4 2; do for m in Systran/faster-whisper-small mobiuslabsgmbh/faster-whisper-large-v3-turbo; do
+            python bench_asr.py $m $th final 2>/dev/null | tee -a results.jsonl; done; done
+      - name: 화자 나누기 (회의 중 화자 모델, 녹음 후 community-1)
+        run: |
+          for th in 4 2; do python bench_diar.py $th live 2>/dev/null | tee -a results.jsonl; done
+          for th in 4 2; do python bench_diar.py $th pipeline 2>/dev/null | tee -a results.jsonl; done
+      - name: 결과
+        if: always()
+        run: cat results.jsonl || true
