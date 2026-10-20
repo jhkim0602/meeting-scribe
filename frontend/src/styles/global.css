@@ -882,6 +882,7 @@ kbd { display: inline-grid; place-items: center; min-width: 20px; height: 20px; 
 .pd-name { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .pd-name .sp-dot { flex: none; width: 7px; height: 7px; border-radius: 2px; background: currentColor; }
 .pd-input { min-width: 0; height: 28px; padding: 0 8px; border: 0; border-radius: 4px; outline: none; background: none; font: inherit; color: var(--text); }
+.pd-name .pd-name-input, .pd-name .pd-input { flex: 1; font-weight: 600; color: inherit; }
 .pd-input::placeholder { color: var(--text-3); opacity: 0; transition: opacity 0.12s; }
 .pd-row:hover .pd-input::placeholder, .pd-input:focus::placeholder { opacity: 1; }
 .pd-input:hover { background: var(--bg-hover); }
@@ -905,3 +906,10 @@ kbd { display: inline-grid; place-items: center; min-width: 20px; height: 20px; 
 .choice-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; white-space: nowrap; font-size: 13px; }
 .process-eta { margin-right: auto; align-self: center; }
 @media (max-width: 520px) { .choice { flex-wrap: wrap; } .choice-meta { align-items: flex-start; width: 100%; padding-left: 24px; } }
+
+/* 왼쪽 아래 모델 표시 → 실시간 받아쓰기 모델 고르기 */
+.model-menu { min-width: 240px; }
+.model-menu .menu-label { padding: 6px 10px 4px; font-size: 11.5px; color: var(--text-3); }
+.model-menu .menu-item { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; }
+.model-menu .menu-item.on .model-name { font-weight: 600; }
+.model-menu .menu-item.on .model-name::after { content: ' ✓'; color: var(--accent); }

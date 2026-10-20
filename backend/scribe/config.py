@@ -6,6 +6,7 @@ import os
 import platform
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable, Optional
 
 
 def _apply_config_file() -> None:
@@ -27,6 +28,10 @@ def _apply_config_file() -> None:
 
 
 _apply_config_file()
+
+
+# 회의 id → 폴더 이름 (Store가 열릴 때 DB에서 찾는 함수로 바꿔 끼운다)
+folder_of: Callable[[str], Optional[str]] = lambda meeting_id: None
 
 
 def _env(name: str, default: str) -> str:
@@ -70,8 +75,15 @@ class Settings:
     def meetings_dir(self) -> Path:
         return self.data_dir / "meetings"
 
+    def meeting_path(self, meeting_id: str) -> Path:
+        """회의 폴더 (만들지는 않는다). 이름은 '날짜_제목'(DB에 적어 둔 것), 예전 회의나 옮기기 전이면 id."""
+        name = folder_of(meeting_id)
+        if name and (name == meeting_id or (self.meetings_dir / name).exists() or not (self.meetings_dir / meeting_id).exists()):
+            return self.meetings_dir / name
+        return self.meetings_dir / meeting_id
+
     def meeting_dir(self, meeting_id: str) -> Path:
-        path = self.meetings_dir / meeting_id
+        path = self.meeting_path(meeting_id)
         path.mkdir(parents=True, exist_ok=True)
         return path
 

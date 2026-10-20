@@ -151,6 +151,9 @@ export interface Health {
 
 export interface AppSettings {
   vocabulary: string
+  /** 실시간 받아쓰기 모델 (왼쪽 아래 모델 표시에서 바꾼다) */
+  live_model?: string | null
+  live_choices?: { id: string; label: string; tag: string; detail: string; memory_gb: number }[]
   break_prompt_minutes: number
 }
 
@@ -221,6 +224,7 @@ export const api = {
   live: (id: string) => req<LiveView>('GET', `/api/meetings/${id}/live`),
   editSegment: (id: string, segmentId: string, text: string) => req<SegmentEdit>('PATCH', `/api/meetings/${id}/segments/${segmentId}`, { text }),
   job: (id: string) => req<{ job: Job | null; record_rev?: number }>('GET', `/api/meetings/${id}/job`),
+  revealMeeting: (id: string) => req<{ path: string }>('POST', `/api/meetings/${id}/reveal`),
   processOptions: (id: string) => req<ProcessOptions>('GET', `/api/meetings/${id}/process/options`),
   /** 사용자가 직접 시작한다 (저절로 시작하지 않는다) */
   process: (id: string, opts?: { final?: string; speakers?: boolean; num_speakers?: number }) =>

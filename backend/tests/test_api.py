@@ -450,7 +450,7 @@ def test_settled_audio_is_compressed_and_still_usable(client, monkeypatch):
     _record(client, mid, pcm, messages=[{"type": "stop"}], until="stopped")
     client.post(f"/api/meetings/{mid}/process")
     assert _wait_job(client, mid)["status"] == "done"
-    mdir = config.settings.meetings_dir / mid
+    mdir = config.settings.meeting_path(mid)
     duration = client.get(f"/api/meetings/{mid}").json()["duration"]
 
     monkeypatch.setattr(storage, "COMPRESS_AFTER_H", 0.0)
@@ -494,7 +494,7 @@ def test_upload_copy_is_removed_after_processing(client, tmp_path):
         m = client.post("/api/upload", files={"file": ("회의.wav", fh, "audio/wav")}, data={"title": ""}).json()
     client.post(f"/api/meetings/{m['id']}/process")
     assert _wait_job(client, m["id"])["status"] == "done"
-    mdir = config.settings.meetings_dir / m["id"]
+    mdir = config.settings.meeting_path(m["id"])
     assert not list(mdir.glob("source.*")) and (mdir / "audio.wav").exists()
 
 
@@ -544,7 +544,8 @@ def test_backup_zip_contains_everything(client, tmp_path):
     zf = zipfile.ZipFile(io.BytesIO(r.content))
     names = zf.namelist()
     assert "scribe.db" in names and "복원 방법.txt" in names
-    assert f"meetings/{mid}/audio.wav" in names
+    from scribe import config
+    assert f"meetings/{config.settings.meeting_path(mid).name}/audio.wav" in names  # 날짜_제목 폴더
     md = [n for n in names if n.startswith("회의록/") and "백업_시험_ 회의" in n]
     assert md and "백업/시험" in zf.read(md[0]).decode()
     db = tmp_path / "restored.db"
@@ -824,3 +825,46 @@ def test_memory_info(client):
     assert r["live_model"]["state"] in ("idle", "loading", "ready", "error")
     assert set(r["speaker_model"]) == {"loaded", "error", "failures", "meetings"}
     assert r["jobs"] == [] and r["recording"] == []
+
+
+def test_reveal_writes_documents_into_the_meeting_folder(client, monkeypatch):
+    """폴더 열기: 전사 기록·회의록 HTML을 폴더에 새로 만들고 Finder·탐색기를 부른다 (시험에서는 부르기만 확인)."""
+    import subprocess
+
+    from scribe import config
+
+    opened = []
+    monkeypatch.setattr(subprocess, "Popen", lambda args, **k: opened.append(args))
+    mid = client.post("/api/meetings", json={"title": "폴더 열기"}).json()["id"]
+    r = client.post(f"/api/meetings/{mid}/reveal").json()
+    mdir = config.settings.meeting_path(mid)
+    assert r["path"] == str(mdir) and mdir.name.endswith("_폴더 열기")
+    assert (mdir / "전사 기록.html").exists() and (mdir / "회의록.html").exists()
+    assert opened and opened[0][-1] == str(mdir)
+    # 제목을 바꾸면 폴더 이름도
+    client.patch(f"/api/meetings/{mid}", json={"title": "이름 바꾼 회의"})
+    assert config.settings.meeting_path(mid).name.endswith("_이름 바꾼 회의") and (config.settings.meeting_path(mid) / "회의록.html").exists()
+
+
+def test_live_model_can_be_switched_when_not_recording(client):
+    """왼쪽 아래 모델 표시: 이 기기에서 쓸 수 있는 실시간 모델만, 녹음 중이 아닐 때 바로 바꾼다."""
+    from scribe import config, main
+
+    s = client.get("/api/settings").json()
+    assert s["live_choices"] and all("id" in c for c in s["live_choices"])
+    assert client.put("/api/settings", json={"live_model": "no-such"}).status_code == 400
+    target = s["live_choices"][-1]["id"]
+    old = config.settings.live_engine, config.settings.live_model
+    main.sessions["busy"] = object()  # 녹음 중
+    try:
+        assert client.put("/api/settings", json={"live_model": target}).status_code == 409
+    finally:
+        main.sessions.pop("busy")
+    try:
+        r = client.put("/api/settings", json={"live_model": target})
+        assert r.status_code in (200, 409), r.text  # 409: 앞선 모델을 아직 올리는 중
+        if r.status_code == 200:
+            assert r.json()["live_model"] == target
+    finally:
+        config.settings.live_engine, config.settings.live_model = old
+        main.holder.reload()

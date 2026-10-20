@@ -13,7 +13,7 @@ from typing import Callable, Optional
 
 from fastapi import WebSocket, WebSocketDisconnect
 
-from . import notices
+from . import folders, notices
 from .audio import WavAppender, pcm16_to_float, read_audio
 from .config import settings
 from .db import Store
@@ -330,6 +330,10 @@ async def handle_recording(
             store.update_meeting(meeting_id, duration=duration, status="recorded")
             # 녹음이 끝나거나 끊긴 시각 → 다시 이어서 녹음하면 그 사이를 쉬는 시간으로 표시
             mark_paused(store, meeting_id, duration, time.time())
+            # 녹음 중에 제목을 바꿨으면 이제 폴더 이름도 '날짜_제목'으로 (녹음 파일을 닫은 뒤라 바꿀 수 있다)
+            latest = store.latest_job(meeting_id)
+            if not (latest and latest["status"] in ("queued", "running")):
+                folders.sync(store, meeting_id)
             if stop:
                 try:
                     await session.send({"type": "stopped", "duration": duration})

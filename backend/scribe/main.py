@@ -6,6 +6,7 @@ import asyncio
 import os
 import re
 import shutil
+import sys
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -16,12 +17,12 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTex
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import __version__
+from . import __version__, catalog
 from .anchors import anchor_from_request
 from .audio import ffmpeg_path
 from .config import settings
 from .db import Store
-from .engines import LiveEngineHolder, engines_info
+from .engines import LiveEngineHolder, engines_info, model_for
 from .export import meeting_markdown, script_markdown
 from .jobs import JobManager
 from .notes_md import blocks_to_markdown
@@ -29,7 +30,7 @@ from .record import EditError, apply_legacy_edits, edit_segment
 from .recording import handle_recording
 from .search import search_all
 from .security import LocalOnlyMiddleware
-from . import notices
+from . import folders, notices
 from .safety import backup_daily, check_and_recover, sync_folder_warning
 from .storage import audio_file, media_type
 from .system import KeepAwake, disk_free_bytes, disk_free_seconds, power_source
@@ -44,7 +45,19 @@ views = Views(store)
 jobs = JobManager(store)
 jobs.is_recording = lambda mid: mid in sessions
 jobs.recording_any = lambda: bool(sessions)
-jobs.on_job_end = lambda mid: forget_tracker(mid)  # 올린 파일: 워커가 정한 화자 묶음을 새로 읽는다
+def _sync_folder(meeting_id: str) -> None:
+    """회의 폴더 이름을 '날짜_제목'에 맞춘다. 녹음·원본 스크립트 작업 중이면 파일을 쓰고 있으니 끝난 뒤에."""
+    latest = store.latest_job(meeting_id)
+    if meeting_id not in sessions and not (latest and latest["status"] in ("queued", "running")):
+        folders.sync(store, meeting_id)
+
+
+def _on_job_end(meeting_id: str) -> None:
+    forget_tracker(meeting_id)  # 올린 파일: 워커가 정한 화자 묶음을 새로 읽는다
+    _sync_folder(meeting_id)  # 작업 중에 제목을 바꿨으면 이제 폴더 이름도
+
+
+jobs.on_job_end = _on_job_end
 holder = LiveEngineHolder()
 sessions: dict[str, Any] = {}
 
@@ -61,6 +74,7 @@ async def lifespan(app: FastAPI):
     if warning := sync_folder_warning(settings.data_dir):
         notices.add(warning, key="sync-folder")
     backup_daily(settings.db_path)
+    folders.migrate_all(store, busy=set())  # 예전 id 폴더를 '날짜_제목'으로 (켤 때는 녹음·작업이 없다)
     jobs.start()
     if os.environ.get("SCRIBE_PRELOAD", "1") == "1":
         holder.start_loading()
@@ -93,7 +107,7 @@ def _meeting_or_404(meeting_id: str) -> dict:
 
 def _audio_path(meeting_id: str) -> Optional[Path]:
     """재생할 녹음 파일 (WAV, 다 만든 뒤 줄였으면 m4a)"""
-    return audio_file(settings.meetings_dir / meeting_id)
+    return audio_file(settings.meeting_path(meeting_id))
 
 
 def _meeting_detail(m: dict) -> dict:
@@ -206,6 +220,32 @@ def storage() -> dict:
 class SettingsIn(BaseModel):
     vocabulary: Optional[str] = None
     break_prompt_minutes: Optional[float] = None
+    live_model: Optional[str] = None  # 실시간 받아쓰기 모델 id (models.json live)
+
+
+def _live_choice_id() -> Optional[str]:
+    kind, model = model_for("live")
+    return next((c["id"] for c in catalog.CATALOG["live"] if c["engine"] == kind and c["model"] == model), None)
+
+
+def _save_app_config(key: str, value: Any) -> None:
+    """앱으로 설치했으면 config.json에도 적어 다음에 켤 때와 설치·설정 창이 같은 값을 보게 한다"""
+    path = os.environ.get("SCRIBE_CONFIG")
+    if not path:
+        return
+    import json
+
+    p = Path(path)
+    try:
+        cfg = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+        cfg[key] = value
+        tmp = p.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+        if os.name != "nt":
+            os.chmod(tmp, 0o600)  # Hugging Face 토큰이 들어 있다
+        tmp.replace(p)
+    except (OSError, ValueError) as exc:
+        print(f"설정 파일에 적지 못했어요: {exc}", file=sys.stderr, flush=True)
 
 
 @app.get("/api/settings")
@@ -214,6 +254,10 @@ def get_settings() -> dict:
         "vocabulary": store.get_setting("vocabulary", ""),
         # 이만큼 조용하면 '쉬는 시간인가요?'를 묻는다 (0이면 묻지 않음)
         "break_prompt_minutes": store.get_setting("break_prompt_minutes", 3),
+        # 실시간 받아쓰기 모델: 이 기기에서 고를 수 있는 것과 지금 것 (왼쪽 아래 모델 표시에서 바꾼다)
+        "live_model": _live_choice_id(),
+        "live_choices": [{k: c.get(k) for k in ("id", "label", "tag", "detail", "memory_gb")}
+                         for c in catalog.CATALOG["live"] if catalog.for_os(c)],
     }
 
 
@@ -223,6 +267,18 @@ def put_settings(body: SettingsIn) -> dict:
         store.set_setting("vocabulary", body.vocabulary.strip())
     if body.break_prompt_minutes is not None:
         store.set_setting("break_prompt_minutes", max(0.0, min(60.0, float(body.break_prompt_minutes))))
+    if body.live_model and body.live_model != _live_choice_id():
+        c = catalog.choice("live", body.live_model)
+        if c is None or not catalog.for_os(c):
+            raise HTTPException(400, "이 기기에서 쓸 수 없는 모델이에요")
+        if sessions:
+            raise HTTPException(409, "녹음 중에는 모델을 바꿀 수 없어요. 녹음을 마친 뒤 바꿔 주세요")
+        old = settings.live_engine, settings.live_model
+        settings.live_engine, settings.live_model = c["engine"], c["model"]
+        if not holder.reload():
+            settings.live_engine, settings.live_model = old
+            raise HTTPException(409, "모델을 올리는 중이에요. 잠시 뒤 다시 바꿔 주세요")
+        _save_app_config("live", c["id"])
     return get_settings()
 
 
@@ -270,6 +326,8 @@ def patch_meeting(meeting_id: str, body: MeetingPatch) -> dict:
     if body.num_speakers is not None:
         fields["num_speakers"] = body.num_speakers or None
     m = store.update_meeting(meeting_id, **fields)
+    if "title" in fields:
+        _sync_folder(meeting_id)
     return _meeting_detail(m)  # type: ignore[arg-type]
 
 
@@ -353,7 +411,7 @@ def delete_meeting(meeting_id: str) -> dict:
     jobs.cancel(meeting_id)
     forget_tracker(meeting_id)
     store.delete_meeting(meeting_id)
-    shutil.rmtree(settings.meetings_dir / meeting_id, ignore_errors=True)
+    shutil.rmtree(settings.meeting_path(meeting_id), ignore_errors=True)
     return {"ok": True}
 
 
@@ -448,7 +506,7 @@ def process(meeting_id: str, body: Optional[ProcessIn] = None) -> dict:
     m = _meeting_or_404(meeting_id)
     if meeting_id in sessions:
         raise HTTPException(409, "녹음을 먼저 종료해 주세요")
-    mdir = settings.meetings_dir / meeting_id
+    mdir = settings.meeting_path(meeting_id)
     if _audio_path(meeting_id) is None and not any(mdir.glob("source.*")):
         raise HTTPException(400, "처리할 오디오가 없습니다")
     body = body or ProcessIn()
@@ -722,6 +780,33 @@ def _doc_response(meeting_id: str, kind: str, download: int) -> Response:
     name = re.sub(r'[\\/:*?"<>|]+', " ", f"{day} {data['title']} {label}.html").strip()
     headers = {"Content-Disposition": _attachment(name, f"{day} {ascii_label}.html")}
     return HTMLResponse(mod.render(data, audio_src=f"녹음{path.suffix}" if path else None), headers=headers)
+
+
+@app.post("/api/meetings/{meeting_id}/reveal")
+def reveal_meeting(meeting_id: str) -> dict:
+    """회의 폴더 열기: 전사 기록·회의록 HTML을 새로 만들어 넣고 Finder·파일 탐색기로 연다 (이 컴퓨터에서만)"""
+    import subprocess
+    import sys
+
+    from . import minutes, transcript_html
+
+    _meeting_or_404(meeting_id)
+    mdir = settings.meeting_dir(meeting_id)
+    audio = _audio_path(meeting_id)
+    for mod, name in ((transcript_html, "전사 기록.html"), (minutes, "회의록.html")):
+        data = mod.collect(store, views, meeting_id)
+        if data is not None:
+            (mdir / name).write_text(mod.render(data, audio_src=audio.name if audio else None), encoding="utf-8")
+    try:
+        if sys.platform == "darwin":
+            subprocess.Popen(["open", str(mdir)])
+        elif sys.platform == "win32":
+            os.startfile(str(mdir))  # type: ignore[attr-defined]
+        else:
+            subprocess.Popen(["xdg-open", str(mdir)])
+    except OSError as exc:
+        raise HTTPException(500, f"폴더를 열지 못했어요: {exc}")
+    return {"path": str(mdir)}
 
 
 @app.get("/api/meetings/{meeting_id}/transcript.html")

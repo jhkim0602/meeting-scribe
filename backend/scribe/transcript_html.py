@@ -99,7 +99,7 @@ class _Marks:
 
 def _memo_html(m: dict) -> str:
     t = float(m["anchor"].get("t", 0) or 0)
-    return f'<div class="memo" id="a-{_esc(m["id"])}"><span class="memo-h"><span class="memo-tag">메모</span>{_chip(t)}</span><p>{_esc(m["body"])}</p></div>'
+    return f'<div class="memo" id="a-{_esc(m["id"])}" data-ann="{_esc(m["id"])}"><span class="memo-h"><span class="memo-tag">메모</span>{_chip(t)}</span><p class="ann-body">{_esc(m["body"])}</p></div>'
 
 
 def _divider_html(d: dict) -> str:
@@ -109,8 +109,8 @@ def _divider_html(d: dict) -> str:
 def _comment_html(c: dict) -> str:
     replies = "".join(f'<p class="reply">{_esc(r.get("text", ""))}</p>' for r in c.get("replies") or [])
     done = '<span class="tag ok">해결</span>' if c.get("status") == "resolved" else ""
-    return (f'<div class="cmt" id="c-{c["n"]}"><span class="n">{c["n"]}</span>'
-            f'<div class="cb"><p class="body">{_esc(c.get("body") or "")}{done}</p>{replies}</div></div>')
+    return (f'<div class="cmt" id="c-{c["n"]}" data-ann="{_esc(c.get("id", ""))}"><span class="n">{c["n"]}</span>'
+            f'<div class="cb"><p class="body"><span class="ann-body">{_esc(c.get("body") or "")}</span>{done}</p>{replies}</div></div>')
 
 
 def _person_index(data: dict) -> dict[str, int]:

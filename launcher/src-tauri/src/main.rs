@@ -286,7 +286,7 @@ async fn update_install(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 fn get_state(app: AppHandle, state: State<AppState>) -> Value {
-    let cfg = state.config.lock().unwrap().clone();
+    let cfg = reload_config(&state);
     json!({
         "config": cfg,
         "needs_install": install::needs_install(&state.paths, &cfg),
@@ -304,8 +304,19 @@ fn get_state(app: AppHandle, state: State<AppState>) -> Value {
     })
 }
 
+/// 회의 화면(왼쪽 아래 모델 표시)에서 서버가 config.json의 실시간 모델을 바꿀 수 있다. 덮어쓰지 않게 파일에서 다시 읽는다.
+fn reload_config(state: &AppState) -> config::Config {
+    let fresh = config::load(&state.paths.config_file());
+    let mut cfg = state.config.lock().unwrap();
+    if !fresh.is_empty() {
+        *cfg = fresh;
+    }
+    cfg.clone()
+}
+
 #[tauri::command]
 fn save_config(state: State<AppState>, patch: config::Config) -> Result<config::Config, String> {
+    reload_config(&state);
     let mut cfg = state.config.lock().unwrap();
     config::merge(&mut cfg, patch);
     config::save(&state.paths.config_file(), &cfg)?;
@@ -375,6 +386,7 @@ fn install_start(app: AppHandle, state: State<AppState>) -> Result<(), String> {
         };
         let result = install::run(&state.paths, &cfg, &state.cancel, &emit);
         if let Ok(updates) = &result {
+            reload_config(&state);
             let mut cfg = state.config.lock().unwrap();
             config::merge(&mut cfg, updates.clone());
             let _ = config::save(&state.paths.config_file(), &cfg);

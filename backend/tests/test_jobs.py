@@ -99,7 +99,7 @@ def test_housekeeping_shrinks_recorded_meetings_but_not_while_recording(manager,
 
     monkeypatch.setattr(storage, "COMPRESS_AFTER_H", 0.0)
     mid = _meeting(manager)  # 원본 스크립트 없이 녹음만 마친 회의
-    mdir = config.settings.meetings_dir / mid
+    mdir = config.settings.meeting_path(mid)
     mdir.mkdir(parents=True, exist_ok=True)
     _make_wav(mdir / "audio.wav", 3.0)
     manager.recording_any = lambda: True

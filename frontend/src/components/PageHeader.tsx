@@ -1,4 +1,4 @@
-import { CalendarDays, Clock3, Download, FileAudio, FileText, FolderDown, Mic, MoreHorizontal, PanelLeft, RefreshCw, ScrollText, Trash2 } from 'lucide-react'
+import { CalendarDays, Clock3, Download, FileAudio, FileText, FolderDown, FolderOpen, Mic, MoreHorizontal, PanelLeft, RefreshCw, ScrollText, Trash2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api'
 import { ProcessDialog } from './ProcessDialog'
@@ -59,6 +59,16 @@ export function PageHeader() {
     await Promise.all([refreshMeeting(), loadMeetings()])
   }
 
+  // 이 회의 폴더를 Finder·파일 탐색기로 연다 (전사 기록·회의록 HTML을 새로 만들어 넣은 뒤)
+  const reveal = async () => {
+    await bridges.notes?.flush().catch(() => undefined)
+    try {
+      await api.revealMeeting(meeting.id)
+    } catch (e) {
+      toast((e as Error).message, 'error')
+    }
+  }
+
   // 모델·화자 구분을 고르고 예상 시간을 본 뒤 시작한다
   const reprocess = () => {
     setMenu(null)
@@ -113,6 +123,7 @@ export function PageHeader() {
         <span className="crumb">{meeting.source === 'upload' ? <FileAudio size={14} /> : <Mic size={14} />}{meeting.title || '제목 없는 회의'}</span>
         <span className="spacer" />
         <span className={`status-pill tone-${status.tone}`}><span className="dot" />{status.label}</span>
+        <button className="icon-btn" onClick={reveal} title="이 회의 폴더 열기 (녹음 · 전사 기록 · 회의록)"><FolderOpen size={16} /></button>
         <button className="icon-btn" onClick={(e) => setMenu(e.currentTarget.getBoundingClientRect())} title="더 보기"><MoreHorizontal size={16} /></button>
       </div>
       <div className="title-wrap">

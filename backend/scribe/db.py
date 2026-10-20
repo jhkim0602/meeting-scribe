@@ -110,6 +110,10 @@ class Store:
             c.executescript(SCHEMA)
             self._migrate(c)
         self.fts = self._init_fts()
+        # 회의 폴더 이름('날짜_제목')은 이 DB에서 찾는다 (settings.meeting_path)
+        from . import config
+
+        config.folder_of = self.meeting_folder
 
     @staticmethod
     def _migrate(c: sqlite3.Connection) -> None:
@@ -156,6 +160,9 @@ class Store:
         # 기록이 바뀐 횟수: 문장이 늘거나 고쳐질 때마다 올린다 (화면용 글자 색인을 다시 만들지 정한다)
         if "record_rev" not in mcols:
             c.execute("ALTER TABLE meetings ADD COLUMN record_rev INTEGER NOT NULL DEFAULT 0")
+        # 회의 폴더 이름: '날짜_제목' (비어 있으면 예전처럼 id)
+        if "folder" not in mcols:
+            c.execute("ALTER TABLE meetings ADD COLUMN folder TEXT")
         # 원본 스크립트 작업: 녹음을 마쳐 저절로 시작한 것인지(auto), 지금 기다리는 까닭(waiting)
         jcols = {r["name"] for r in c.execute("PRAGMA table_info(jobs)").fetchall()}
         if "auto" not in jcols:
@@ -247,7 +254,24 @@ class Store:
                 (mid, title, now, now, "empty", source, original_name),
             )
         self._fts_replace(mid, "title", [(None, None, title or "")])
+        from .folders import base_name, unique_name
+
+        # 이름을 정하자마자 폴더를 만든다 (같은 날 제목 없는 회의 둘이 같은 이름을 받지 않게)
+        from .config import settings
+
+        folder = unique_name(base_name({"created_at": now, "title": title}))
+        (settings.meetings_dir / folder).mkdir(parents=True, exist_ok=True)
+        self.set_folder(mid, folder)
         return self.get_meeting(mid)  # type: ignore[return-value]
+
+    def meeting_folder(self, meeting_id: str) -> Optional[str]:
+        with self.conn() as c:
+            row = c.execute("SELECT folder FROM meetings WHERE id=?", (meeting_id,)).fetchone()
+        return row["folder"] if row else None
+
+    def set_folder(self, meeting_id: str, folder: str) -> None:
+        with self.conn() as c:
+            c.execute("UPDATE meetings SET folder=? WHERE id=?", (folder, meeting_id))
 
     def get_meeting(self, meeting_id: str, *, with_notes: bool = False) -> Optional[dict]:
         with self.conn() as c:

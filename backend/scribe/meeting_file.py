@@ -145,7 +145,7 @@ def render(store: Store, views: Views, meeting_id: str, audio_name: Optional[str
 
 def iter_zip(store: Store, views: Views, meeting_id: str, name: str) -> Iterator[bytes]:
     """name/name.html + name/name.m4a 를 zip으로 흘려보낸다 (녹음은 이미 압축돼 있어 그대로)"""
-    audio = audio_file(settings.meetings_dir / meeting_id)
+    audio = audio_file(settings.meeting_path(meeting_id))
     page = render(store, views, meeting_id, f"{name}{audio.suffix}" if audio else None) or ""
     sink = _Sink()
     with zipfile.ZipFile(sink, "w", allowZip64=True) as zf:

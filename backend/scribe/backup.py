@@ -97,8 +97,8 @@ def iter_backup(store: Store, views: Views) -> Iterator[bytes]:
             if md:
                 zf.writestr(zipfile.ZipInfo(f"회의록/{name}.md", date_time=time.localtime()[:6]), md.encode("utf-8"), compress_type=zipfile.ZIP_DEFLATED)
                 yield sink.take()
-            audio = audio_file(settings.meetings_dir / m["id"])
+            audio = audio_file(settings.meeting_path(m["id"]))
             if audio is not None:
-                yield from _add_file(zf, sink, audio, f"meetings/{m['id']}/{audio.name}", compress=False)
+                yield from _add_file(zf, sink, audio, f"meetings/{audio.parent.name}/{audio.name}", compress=False)
         zf.writestr("복원 방법.txt", RESTORE.encode("utf-8"))
     yield sink.take()

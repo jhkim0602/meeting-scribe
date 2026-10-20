@@ -19,6 +19,7 @@ from typing import Callable, Optional
 from . import catalog
 from .config import settings
 from .db import Store
+from .folders import work_dir
 from .storage import audio_file, compress_audio, is_settled
 
 HOUSEKEEP_EVERY_S = 60.0
@@ -27,7 +28,7 @@ PAUSE_FILE = "pause"
 
 def pause_path(meeting_id: str) -> Path:
     """워커에게 잠시 멈추라고 알리는 파일 (내용은 기다리는 까닭)"""
-    return settings.meetings_dir / meeting_id / PAUSE_FILE
+    return work_dir(meeting_id) / PAUSE_FILE
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 
@@ -103,7 +104,7 @@ class JobManager:
 
     @staticmethod
     def _has_audio(meeting_id: str) -> bool:
-        return audio_file(settings.meetings_dir / meeting_id) is not None
+        return audio_file(settings.meeting_path(meeting_id)) is not None
 
     def housekeep_once(self) -> list[str]:
         """녹음을 마치고 한동안 손대지 않은 회의의 WAV를 m4a로 줄인다. 줄인 회의 id 목록."""
@@ -116,7 +117,7 @@ class JobManager:
             # 원본 스크립트를 만들었는지와 상관없이, 녹음을 마치고 한동안 손대지 않았으면 줄인다
             if m["status"] not in ("ready", "recorded") or mid in busy or self.is_recording(mid):
                 continue
-            mdir = settings.meetings_dir / mid
+            mdir = settings.meeting_path(mid)
             if is_settled(mdir) and compress_audio(mdir):
                 done.append(mid)
         return done
@@ -138,7 +139,7 @@ class JobManager:
         env = dict(os.environ)
         env["PYTHONPATH"] = str(BACKEND_DIR) + os.pathsep + env.get("PYTHONPATH", "")
         env.update(job_env(json.loads(job.get("options") or "null") or {}))
-        log = open(settings.meeting_dir(job["meeting_id"]) / "worker.log", "ab")
+        log = open(work_dir(job["meeting_id"]) / "worker.log", "ab")
         self.proc = subprocess.Popen([sys.executable, "-m", "scribe.worker", job["id"]], cwd=str(BACKEND_DIR), env=env, stdout=log, stderr=subprocess.STDOUT)
         self.current = job["id"]
 

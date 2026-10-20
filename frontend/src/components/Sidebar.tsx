@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { createAndRecord } from '../hooks/recorder'
 import { api, type MeetingSummary, type SearchHit } from '../lib/api'
 import { useStore, type Theme } from '../lib/store'
+import { Floating } from './Floating'
 import { dateGroup, fmtDuration, fmtTime, fmtDownload } from '../lib/time'
 
 const stem = (name: string) => name.replace(/\.[^.]+$/, '')
@@ -68,6 +69,22 @@ const THEMES: { key: Theme; icon: typeof Sun; label: string }[] = [
 ]
 
 export function Sidebar({ onSettings }: { onSettings: () => void }) {
+  // 왼쪽 아래 모델 표시: 눌러서 실시간 받아쓰기 모델을 바로 바꾼다 (녹음 중에는 못 바꾼다)
+  const [modelMenu, setModelMenu] = useState<DOMRect | null>(null)
+  const settings = useStore((s) => s.settings)
+  const recordingAny = useStore((s) => s.rec.status !== 'idle')
+  const pickModel = async (id: string) => {
+    setModelMenu(null)
+    if (id === settings?.live_model) return
+    const st = useStore.getState()
+    try {
+      await api.saveSettings({ live_model: id })
+      await Promise.all([st.loadSettings(), st.loadHealth()])
+      st.toast('실시간 받아쓰기 모델을 바꿨어요. 새 모델을 올리는 중이에요 (처음이면 내려받아요).', 'success')
+    } catch (e) {
+      st.toast((e as Error).message, 'error')
+    }
+  }
   const allMeetings = useStore((s) => s.meetings)
   const hidden = useStore((s) => s.hiddenMeetings)
   // 지우는 중(되돌리기 대기)인 회의는 숨긴다
@@ -204,13 +221,32 @@ export function Sidebar({ onSettings }: { onSettings: () => void }) {
       <div className="side-foot">
         <button
           className={`engine-status st-${live?.state || 'idle'}`}
-          onClick={onSettings}
-          title={live?.error || ''}
+          onClick={(e) => setModelMenu(e.currentTarget.getBoundingClientRect())}
+          title={live?.error || '실시간 받아쓰기 모델 바꾸기'}
         >
           <span className="dot" />
           {live ? (live.kind === 'mock' ? '시연용 엔진' : live.model.split('/').pop()) : '서버 연결 중'}
           <em>{live?.state === 'ready' ? '준비됨' : live?.state === 'loading' ? (live.download ? `내려받는 중 ${fmtDownload(live.download)}` : '준비 중') : live?.state === 'error' ? '오류' : live?.state === 'idle' ? '쉬는 중' : ''}</em>
         </button>
+        {modelMenu && (
+          <Floating rect={modelMenu} placement="above" onClose={() => setModelMenu(null)} className="menu model-menu">
+            <div className="menu-label">실시간 받아쓰기 모델</div>
+            {(settings?.live_choices || []).map((c) => (
+              <button
+                key={c.id}
+                className={`menu-item ${c.id === settings?.live_model ? 'on' : ''}`}
+                disabled={recordingAny}
+                title={recordingAny ? '녹음을 마친 뒤 바꿀 수 있어요' : c.detail}
+                onClick={() => pickModel(c.id)}
+              >
+                <span className="model-name">{c.label}</span>
+                <span className="muted small">{c.id === settings?.live_model ? '쓰는 중' : `${c.tag} · 메모리 ${c.memory_gb}GB`}</span>
+              </button>
+            ))}
+            <div className="menu-sep" />
+            <button className="menu-item" onClick={() => { setModelMenu(null); onSettings() }}>설정 열기</button>
+          </Floating>
+        )}
         <div className="foot-row">
           <div className="theme-switch">
             {THEMES.map(({ key, icon: Icon, label }) => (

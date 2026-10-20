@@ -110,7 +110,8 @@ export function ParticipantsProp() {
   )
 }
 
-type Field = 'org' | 'role' | 'note'
+type Field = 'name' | 'org' | 'role' | 'note'
+const NAME_FIELD = { key: 'name' as Field, label: '이름', hint: '이름', max: 40 }
 const FIELDS: { key: Field; label: string; hint: string; max: number }[] = [
   { key: 'org', label: '소속', hint: '팀·회사', max: 60 },
   { key: 'role', label: '직무', hint: '역할·직책', max: 60 },
@@ -127,6 +128,15 @@ function DetailInput({ person, field }: { person: Participant; field: (typeof FI
     const value = v.trim()
     if (value === saved) return
     const cur = useStore.getState().meeting?.participants || []
+    if (field.key === 'name') {
+      // 이름은 비울 수 없고, 다른 참석자와 같으면 둘이 하나로 합쳐지므로 막는다
+      const clash = cur.some((p) => p.id !== person.id && p.name === value)
+      if (!value || clash) {
+        setV(saved)
+        if (clash) useStore.getState().toast(`'${value}' 참석자가 이미 있어요. 다른 이름으로 적어 주세요.`, 'error')
+        return
+      }
+    }
     const next = cur.map((p) => (p.id === person.id ? { ...p, [field.key]: value } : p))
     setParticipantsLocal(next)
     try {
@@ -170,11 +180,11 @@ export function ParticipantDetails() {
       </div>
       {parts.map((p, i) => (
         <div key={p.id} className="pd-row" data-pid={p.id}>
-          <span className={`pd-name sp-${(i % 8) + 1}`}><span className="sp-dot" />{p.name}</span>
+          <span className={`pd-name sp-${(i % 8) + 1}`}><span className="sp-dot" /><DetailInput person={p} field={NAME_FIELD} /></span>
           {FIELDS.map((f) => <DetailInput key={f.key} person={p} field={f} />)}
         </div>
       ))}
-      <p className="pd-tip">여기 적은 소속·직무·메모는 전사 기록과 회의록에 함께 나오고, 다음 회의에 같은 이름을 넣으면 소속·직무를 이어받아요.</p>
+      <p className="pd-tip">이름을 고치면 그 사람으로 고른 문장의 화자도 함께 바뀌어요. 여기 적은 소속·직무·메모는 전사 기록과 회의록에 함께 나오고, 다음 회의에 같은 이름을 넣으면 소속·직무를 이어받아요.</p>
     </div>
   )
 }
