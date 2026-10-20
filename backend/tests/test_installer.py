@@ -29,8 +29,14 @@ def test_config_file_becomes_server_settings(tmp_path):
 
 
 def test_catalog_choices_sizes_and_recommendation():
-    assert catalog.recommend(8.0) == {"live": "qwen3-0.6b-8bit", "final": "qwen3-0.6b-8bit"}
-    assert catalog.recommend(18.0) == {"live": "qwen3-0.6b-8bit", "final": "qwen3-1.7b-8bit"}
+    assert catalog.recommend(8.0, "macos") == {"live": "qwen3-0.6b-8bit", "final": "qwen3-0.6b-8bit"}
+    assert catalog.recommend(18.0, "macos") == {"live": "qwen3-0.6b-8bit", "final": "qwen3-1.7b-8bit"}
+    assert catalog.recommend(18.0, "windows") == {"live": "fw-small", "final": "fw-large-v3-turbo"}
+    # 추천 모델은 그 기기에서 보이는 모델이어야 한다
+    for os_name in ("macos", "windows", "linux"):
+        rec = catalog.recommend(16.0, os_name)
+        for role in ("live", "final"):
+            assert catalog.for_os(catalog.choice(role, rec[role]), os_name), (os_name, role)
     repos = catalog.repos_for("qwen3-0.6b-8bit", "qwen3-0.6b-8bit")
     assert repos == ["moona3k/mlx-qwen3-asr-0.6b-8bit", "Qwen/Qwen3-ForcedAligner-0.6B"]  # 같은 모델은 한 번만
     assert catalog.total_gb(repos) == 2.64

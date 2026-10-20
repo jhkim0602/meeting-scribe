@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { catalog, type Choice } from './api'
+import { catalog, deviceName, forThisOs, type Choice } from './api'
 
 export const Logo = ({ size = 40 }: { size?: number }) => (
   <svg width={size} height={size} viewBox="0 0 64 64" aria-hidden>
@@ -44,9 +44,9 @@ export function Field({ label, hint, children }: { label: string; hint?: ReactNo
   )
 }
 
-/** 모델 고르기 (콤보박스). 이 맥 메모리에 맞지 않는 것은 알려 준다. */
+/** 모델 고르기 (콤보박스). 이 기기 메모리에 맞지 않는 것은 알려 준다. */
 export function ModelSelect({ role, value, onChange, ram, recommended }: { role: 'live' | 'final'; value?: string; onChange: (id: string) => void; ram: number | null; recommended: string }) {
-  const list: Choice[] = catalog[role]
+  const list: Choice[] = catalog[role].filter(forThisOs)
   const cur = list.find((c) => c.id === value) ?? list[0]
   const size = Math.round(cur.repos.reduce((n, r) => n + (catalog.sizes_gb[r] ?? 0), 0) * 10) / 10
   const tooBig = cur.min_ram_gb !== undefined && ram !== null && ram < cur.min_ram_gb
@@ -56,7 +56,7 @@ export function ModelSelect({ role, value, onChange, ram, recommended }: { role:
         <select value={cur.id} onChange={(e) => onChange(e.target.value)}>
           {list.map((c) => (
             <option key={c.id} value={c.id}>
-              {c.label} · {c.id === recommended ? '이 맥에 추천' : c.tag}
+              {c.label} · {c.id === recommended ? `이 ${deviceName}에 추천` : c.tag}
             </option>
           ))}
         </select>
@@ -65,8 +65,8 @@ export function ModelSelect({ role, value, onChange, ram, recommended }: { role:
       <p className="model-meta">
         <span>받는 양 약 {size}GB</span>
         <span>메모리 약 {cur.memory_gb}GB 사용</span>
-        {cur.id === recommended && <span className="tag good">이 맥에 추천</span>}
-        {tooBig && <span className="tag warn">이 맥({ram}GB)에는 무거워요</span>}
+        {cur.id === recommended && <span className="tag good">이 {deviceName}에 추천</span>}
+        {tooBig && <span className="tag warn">이 {deviceName}({ram}GB)에는 무거워요</span>}
       </p>
     </div>
   )

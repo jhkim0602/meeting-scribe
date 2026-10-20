@@ -2,6 +2,7 @@
 # 앱에 넣을 것을 launcher/src-tauri/resources에 모은다: 서버 코드, 회의 노트 화면, 설치 도구(uv)
 #   launcher/scripts/prepare.sh            이 기기용
 #   launcher/scripts/prepare.sh aarch64-apple-darwin
+#   launcher/scripts/prepare.sh x86_64-pc-windows-msvc   (윈도우: Git Bash에서)
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 RES="$ROOT/launcher/src-tauri/resources"
@@ -14,6 +15,7 @@ case "${1:-auto}" in
       Darwin-x86_64) TARGET=x86_64-apple-darwin ;;
       Linux-x86_64) TARGET=x86_64-unknown-linux-gnu ;;
       Linux-aarch64) TARGET=aarch64-unknown-linux-gnu ;;
+      MINGW*-x86_64|MSYS*-x86_64) TARGET=x86_64-pc-windows-msvc ;;
       *) echo "이 기기는 아직 지원하지 않아요: $(uname -s)-$(uname -m)"; exit 1 ;;
     esac ;;
   *) TARGET="$1" ;;
@@ -37,12 +39,20 @@ fi
 cp -R "$ROOT/frontend/dist" "$RES/app/frontend"
 
 echo "· 설치 도구 uv $UV_VERSION ($TARGET)"
-if [[ ! -x "$RES/bin/uv" || "$("$RES/bin/uv" --version 2>/dev/null | awk '{print $2}')" != "$UV_VERSION" ]]; then
+UV="uv"; [[ "$TARGET" == *windows* ]] && UV="uv.exe"
+if [[ ! -x "$RES/bin/$UV" || "$("$RES/bin/$UV" --version 2>/dev/null | awk '{print $2}')" != "$UV_VERSION" ]]; then
   tmp="$(mktemp -d)"
-  curl -fsSL "https://github.com/astral-sh/uv/releases/download/$UV_VERSION/uv-$TARGET.tar.gz" -o "$tmp/uv.tar.gz"
-  tar -xzf "$tmp/uv.tar.gz" -C "$tmp"
-  cp "$tmp/uv-$TARGET/uv" "$RES/bin/uv"
-  chmod +x "$RES/bin/uv"
+  if [[ "$TARGET" == *windows* ]]; then
+    # 윈도우용은 zip 안에 uv.exe만 들어 있다
+    curl -fsSL "https://github.com/astral-sh/uv/releases/download/$UV_VERSION/uv-$TARGET.zip" -o "$tmp/uv.zip"
+    unzip -q "$tmp/uv.zip" -d "$tmp"
+    cp "$tmp/uv.exe" "$RES/bin/uv.exe"
+  else
+    curl -fsSL "https://github.com/astral-sh/uv/releases/download/$UV_VERSION/uv-$TARGET.tar.gz" -o "$tmp/uv.tar.gz"
+    tar -xzf "$tmp/uv.tar.gz" -C "$tmp"
+    cp "$tmp/uv-$TARGET/uv" "$RES/bin/uv"
+  fi
+  chmod +x "$RES/bin/$UV"
   rm -rf "$tmp"
 fi
 du -sh "$RES/app" "$RES/bin" | sed 's/^/  /'

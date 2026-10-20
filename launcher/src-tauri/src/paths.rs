@@ -44,9 +44,15 @@ impl Paths {
         self.support.join("logs")
     }
 
-    /// 이 기기에서 설치할 패키지 목록 (맥은 MLX 받아쓰기까지)
+    /// 이 기기에서 설치할 패키지 목록 (맥은 MLX 받아쓰기, 윈도우는 CPU 받아쓰기까지)
     pub fn requirements(&self) -> PathBuf {
-        let name = if cfg!(target_os = "macos") { "requirements-mac.txt" } else { "requirements.txt" };
+        let name = if cfg!(target_os = "macos") {
+            "requirements-mac.txt"
+        } else if cfg!(windows) {
+            "requirements-win.txt"
+        } else {
+            "requirements.txt"
+        };
         self.backend().join(name)
     }
 

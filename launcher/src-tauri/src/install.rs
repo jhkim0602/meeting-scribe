@@ -74,6 +74,8 @@ pub fn python_env(paths: &Paths) -> Vec<(String, String)> {
         // 앱 안(서명된 번들)에 .pyc를 쓰지 않는다
         ("PYTHONPYCACHEPREFIX".into(), paths.support.join("pycache").display().to_string()),
         ("PYTHONUNBUFFERED".into(), "1".into()),
+        // 윈도우 기본 인코딩(cp1252·cp949)으로는 한국어 출력이 깨지거나 멈춘다
+        ("PYTHONUTF8".into(), "1".into()),
         ("HF_HUB_DISABLE_TELEMETRY".into(), "1".into()),
         ("PATH".into(), if cfg!(windows) { std::env::var("PATH").unwrap_or_default() } else { path }),
     ]
@@ -146,6 +148,7 @@ pub fn run_lines(
         use std::os::unix::process::CommandExt;
         cmd.process_group(0); // 멈출 때 자식 프로세스까지 함께
     }
+    crate::sys::no_window(&mut cmd);
     let mut child = cmd.spawn().map_err(|e| format!("실행하지 못했어요: {e}"))?;
     *cancel.pid.lock().unwrap() = Some(child.id());
     let (tx, rx) = mpsc::channel::<String>();
@@ -226,7 +229,7 @@ impl UvProgress {
 
 fn python_works(paths: &Paths) -> bool {
     paths.python().exists()
-        && Command::new(paths.python())
+        && crate::sys::no_window(&mut Command::new(paths.python()))
             .args(["-c", "import sys; assert sys.version_info >= (3, 11)"])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -238,6 +241,7 @@ fn python_works(paths: &Paths) -> bool {
 fn installer_cmd(paths: &Paths, args: &[&str]) -> Command {
     let mut cmd = Command::new(paths.python());
     cmd.args(["-m", "scribe.installer"]).args(args).current_dir(paths.backend()).envs(python_env(paths));
+    crate::sys::no_window(&mut cmd);
     cmd
 }
 

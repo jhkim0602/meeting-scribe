@@ -4,8 +4,18 @@ use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// 윈도우: 창 없는 앱에서 띄운 명령이 콘솔 창을 열지 않게 한다 (다른 곳에서는 그대로)
+pub fn no_window(cmd: &mut Command) -> &mut Command {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    cmd
+}
+
 fn sh(cmd: &str, args: &[&str]) -> String {
-    Command::new(cmd)
+    no_window(&mut Command::new(cmd))
         .args(args)
         .output()
         .ok()
@@ -13,8 +23,14 @@ fn sh(cmd: &str, args: &[&str]) -> String {
         .unwrap_or_default()
 }
 
+/// 윈도우: PowerShell 한 줄의 결과 (한국어 윈도우 이름이 깨지지 않게 UTF-8로)
+fn ps(script: &str) -> String {
+    let script = format!("[Console]::OutputEncoding=[Text.Encoding]::UTF8; {script}");
+    sh("powershell", &["-NoProfile", "-NonInteractive", "-Command", &script])
+}
+
 pub fn ram_gb() -> Option<f64> {
-    let mem = sh("sysctl", &["-n", "hw.memsize"]);
+    let mem = if cfg!(windows) { ps("(Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory") } else { sh("sysctl", &["-n", "hw.memsize"]) };
     if let Ok(bytes) = mem.parse::<f64>() {
         return Some((bytes / 1024f64.powi(3) * 10.0).round() / 10.0);
     }
@@ -24,7 +40,7 @@ pub fn ram_gb() -> Option<f64> {
 }
 
 fn chip() -> String {
-    let c = sh("sysctl", &["-n", "machdep.cpu.brand_string"]);
+    let c = if cfg!(windows) { ps("(Get-CimInstance Win32_Processor | Select-Object -First 1).Name") } else { sh("sysctl", &["-n", "machdep.cpu.brand_string"]) };
     if !c.is_empty() {
         return c;
     }
@@ -37,6 +53,9 @@ fn chip() -> String {
 fn os_name() -> String {
     if cfg!(target_os = "macos") {
         format!("macOS {}", sh("sw_vers", &["-productVersion"]))
+    } else if cfg!(windows) {
+        let caption = ps("(Get-CimInstance Win32_OperatingSystem).Caption");
+        if caption.is_empty() { "Windows".into() } else { caption }
     } else {
         std::env::consts::OS.to_string()
     }
@@ -49,6 +68,12 @@ pub fn free_gb(path: &Path) -> Option<f64> {
         if !p.pop() {
             return None;
         }
+    }
+    if cfg!(windows) {
+        // C:\Users\… → C: 드라이브의 남은 공간
+        let drive: String = p.display().to_string().chars().take(2).collect();
+        let bytes: f64 = ps(&format!("([System.IO.DriveInfo]'{drive}\\').AvailableFreeSpace")).parse().ok()?;
+        return Some((bytes / 1024f64.powi(3) * 10.0).round() / 10.0);
     }
     let out = sh("df", &["-Pk", &p.display().to_string()]);
     let kb: f64 = out.lines().nth(1)?.split_whitespace().nth(3)?.parse().ok()?;

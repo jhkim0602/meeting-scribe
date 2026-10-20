@@ -1,0 +1,6 @@
+-r requirements.txt
+# 윈도우(인텔·AMD, 내장 그래픽): CPU 음성인식(faster-whisper) + 화자 분리(pyannote community-1)
+faster-whisper>=1.1
+pyannote.audio>=4.0
+# ffmpeg를 따로 설치하지 않아도 되게
+imageio-ffmpeg>=0.5

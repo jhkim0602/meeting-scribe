@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { call, catalog, downloadGb, installer, recommend, type AppState, type ClaudeStatus, type DoctorItem, type HfCheck, type Machine } from './api'
+import { call, catalog, deviceName, downloadGb, installer, recommend, thisOs, type AppState, type ClaudeStatus, type DoctorItem, type HfCheck, type Machine } from './api'
 import { Install } from './Install'
 import { ExtLink, Field, Logo, ModelSelect, StatusIcon, shortPath } from './ui'
 
@@ -78,15 +78,16 @@ export function Wizard({ state, onFinish }: { state: AppState; onFinish: () => v
         <section className="page welcome">
           <Logo size={64} />
           <h1>회의 노트 설치</h1>
-          <p className="lead">회의를 들으며 받아 적고, 끝나면 문서로 정리하는 맥 앱이에요.<br />녹음과 받아쓰기는 모두 이 맥 안에서만 돌아가요.</p>
+          <p className="lead">회의를 들으며 받아 적고, 끝나면 문서로 정리하는 앱이에요.<br />녹음과 받아쓰기는 모두 이 {deviceName} 안에서만 돌아가요.</p>
           {machine && (
             <dl className="machine">
-              <div><dt>맥</dt><dd>{machine.chip} · {machine.os}</dd></div>
+              <div><dt>{deviceName}</dt><dd>{machine.chip} · {machine.os}</dd></div>
               <div><dt>메모리</dt><dd>{machine.ram_gb ?? '?'}GB</dd></div>
               <div><dt>남은 공간</dt><dd>{machine.free_gb ?? '?'}GB</dd></div>
             </dl>
           )}
-          {machine && !machine.apple_silicon && <p className="callout warn">이 앱은 Apple Silicon(M1 이상) 맥에 맞춰져 있어요. 이 기기에서는 받아쓰기가 느리거나 동작하지 않을 수 있어요.</p>}
+          {machine && thisOs === 'windows' && <p className="callout warn">윈도우 버전은 테스트 중이에요. 받아쓰기는 CPU로 돌아가서 맥보다 느려요. 회의 중에는 전원을 연결해 주세요.</p>}
+          {machine && thisOs === 'macos' && !machine.apple_silicon && <p className="callout warn">이 앱은 Apple Silicon(M1 이상) 맥에 맞춰져 있어요. 이 기기에서는 받아쓰기가 느리거나 동작하지 않을 수 있어요.</p>}
           <p className="muted small">설치는 처음 한 번, 10분 안팎이에요 (인터넷 속도에 따라).<br />필요한 것은 앱 전용 폴더에만 설치해요.</p>
           <div className="row end">
             <button className="btn primary big" onClick={() => setStep(1)} disabled={!machine}>시작하기</button>
@@ -97,7 +98,7 @@ export function Wizard({ state, onFinish }: { state: AppState; onFinish: () => v
       {step === 1 && (
         <section className="page">
           <h2>받아쓰기 모델</h2>
-          <p className="lead">이 맥{machine?.ram_gb ? `(메모리 ${machine.ram_gb}GB)` : ''}에 맞게 골라 두었어요. 나중에 설정에서 바꿀 수 있어요.</p>
+          <p className="lead">이 {deviceName}{machine?.ram_gb ? `(메모리 ${machine.ram_gb}GB)` : ''}에 맞게 골라 두었어요. 나중에 설정에서 바꿀 수 있어요.</p>
           <Field label="회의 중 받아쓰기" hint="말하는 동안 글자로 바꿔요.">
             <ModelSelect role="live" value={d.live} onChange={(live) => set({ live })} ram={machine?.ram_gb ?? null} recommended={rec.live} />
           </Field>

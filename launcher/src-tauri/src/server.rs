@@ -60,7 +60,7 @@ pub fn kill_tree(pid: u32, force: bool) {
         if force {
             args.push("/F".into());
         }
-        let _ = Command::new("taskkill").args(args).status();
+        let _ = crate::sys::no_window(&mut Command::new("taskkill")).args(args).status();
     }
 }
 
@@ -128,6 +128,7 @@ impl Server {
             use std::os::unix::process::CommandExt;
             cmd.process_group(0);
         }
+        crate::sys::no_window(&mut cmd);
         let child = cmd.spawn().map_err(|e| format!("서버를 켜지 못했어요: {e}"))?;
         self.child = Some(child);
         self.starting = true;

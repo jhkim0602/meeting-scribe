@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -35,12 +36,23 @@ def total_gb(repos: list[str]) -> float:
     return round(sum(CATALOG["sizes_gb"].get(r, 0.0) for r in repos), 2)
 
 
-def recommend(ram_gb: Optional[float]) -> dict:
-    """메모리에 맞는 기본 선택 {live, final}"""
-    for rule in CATALOG["recommend"]:
+def this_os() -> str:
+    """models.json의 os 값으로: macos | windows | linux"""
+    return {"darwin": "macos", "win32": "windows"}.get(sys.platform, "linux")
+
+
+def for_os(item: dict, os_name: Optional[str] = None) -> bool:
+    """os가 없는 항목은 맥(MLX) 전용"""
+    return (os_name or this_os()) in item.get("os", ["macos"])
+
+
+def recommend(ram_gb: Optional[float], os_name: Optional[str] = None) -> dict:
+    """이 기기와 메모리에 맞는 기본 선택 {live, final}"""
+    rules = [r for r in CATALOG["recommend"] if for_os(r, os_name)] or CATALOG["recommend"]
+    for rule in rules:
         if "max_ram_gb" not in rule or (ram_gb is not None and ram_gb <= rule["max_ram_gb"]):
             return {"live": rule["live"], "final": rule["final"]}
-    return {"live": CATALOG["recommend"][-1]["live"], "final": CATALOG["recommend"][-1]["final"]}
+    return {"live": rules[-1]["live"], "final": rules[-1]["final"]}
 
 
 def config_env(cfg: dict) -> dict[str, str]:

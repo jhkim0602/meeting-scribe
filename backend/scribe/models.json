@@ -1,5 +1,5 @@
 {
-  "_": "받아쓰기 모델 목록. 설치 도우미(launcher)와 서버가 같이 읽는다. 크기는 GB(1024^3), 내려받는 양 계산에 쓴다.",
+  "_": "받아쓰기 모델 목록. 설치 도우미(launcher)와 서버가 같이 읽는다. 크기는 GB(1024^3), 내려받는 양 계산에 쓴다. os가 없으면 맥(MLX) 전용, 있으면 그 기기에서만 보인다(macos | windows | linux).",
   "sizes_gb": {
     "moona3k/mlx-qwen3-asr-0.6b-8bit": 0.80,
     "moona3k/mlx-qwen3-asr-1.7b-8bit": 2.0,
@@ -7,6 +7,9 @@
     "Qwen/Qwen3-ASR-1.7B": 4.7,
     "Qwen/Qwen3-ForcedAligner-0.6B": 1.84,
     "mlx-community/whisper-large-v3-turbo": 1.6,
+    "Systran/faster-whisper-base": 0.14,
+    "Systran/faster-whisper-small": 0.45,
+    "mobiuslabsgmbh/faster-whisper-large-v3-turbo": 1.51,
     "pyannote/speaker-diarization-community-1": 0.03,
     "pyannote/wespeaker-voxceleb-resnet34-LM": 0.03
   },
@@ -28,6 +31,18 @@
       "label": "Whisper large-v3 turbo", "tag": "대안",
       "detail": "영어가 많이 섞인 회의에 맞을 수 있어요.",
       "repos": ["mlx-community/whisper-large-v3-turbo"], "memory_gb": 2.5
+    },
+    {
+      "id": "fw-small", "engine": "faster-whisper", "model": "Systran/faster-whisper-small",
+      "label": "Whisper small", "tag": "권장",
+      "detail": "CPU로 돌아가요. 말하고 2~3초 안에 글자가 올라와요.",
+      "repos": ["Systran/faster-whisper-small"], "memory_gb": 1, "os": ["windows", "linux"]
+    },
+    {
+      "id": "fw-base", "engine": "faster-whisper", "model": "Systran/faster-whisper-base",
+      "label": "Whisper base", "tag": "가볍게",
+      "detail": "오래된 CPU에서도 빨라요. 한국어는 자주 틀려요.",
+      "repos": ["Systran/faster-whisper-base"], "memory_gb": 0.5, "os": ["windows", "linux"]
     }
   ],
   "final": [
@@ -48,9 +63,22 @@
       "label": "Qwen3-ASR 1.7B 원본", "tag": "메모리 32GB 이상",
       "detail": "8bit와 결과가 거의 같고 두 배 넘게 커요. 메모리 32GB 이상에서만 권해요.",
       "repos": ["Qwen/Qwen3-ASR-1.7B", "Qwen/Qwen3-ForcedAligner-0.6B"], "memory_gb": 8, "min_ram_gb": 32
+    },
+    {
+      "id": "fw-large-v3-turbo", "engine": "faster-whisper", "model": "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
+      "label": "Whisper large-v3 turbo", "tag": "권장",
+      "detail": "정확해요. CPU로 1시간 녹음에 20~60분 걸려요 (CPU에 따라).",
+      "repos": ["mobiuslabsgmbh/faster-whisper-large-v3-turbo"], "memory_gb": 3, "os": ["windows", "linux"]
+    },
+    {
+      "id": "fw-small", "engine": "faster-whisper", "model": "Systran/faster-whisper-small",
+      "label": "Whisper small", "tag": "빠르게",
+      "detail": "빨리 끝나지만 정확도는 낮아요.",
+      "repos": ["Systran/faster-whisper-small"], "memory_gb": 1, "os": ["windows", "linux"]
     }
   ],
   "recommend": [
+    {"os": ["windows", "linux"], "live": "fw-small", "final": "fw-large-v3-turbo"},
     {"max_ram_gb": 12, "live": "qwen3-0.6b-8bit", "final": "qwen3-0.6b-8bit"},
     {"live": "qwen3-0.6b-8bit", "final": "qwen3-1.7b-8bit"}
   ],

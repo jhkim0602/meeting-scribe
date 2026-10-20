@@ -35,17 +35,25 @@ export type DoctorItem = { id: string; ok: boolean | null; label: string; detail
 export type HfCheck = { ok: boolean; valid: boolean | null; access: boolean | null; user?: string; message: string; terms_url?: string }
 export type ClaudeStatus = { ok: boolean; connected: boolean; installed: boolean; changed?: boolean; message: string; path: string }
 
-export type Choice = { id: string; engine: string; model: string; label: string; tag: string; detail: string; repos: string[]; memory_gb: number; min_ram_gb?: number }
+export type Choice = { id: string; engine: string; model: string; label: string; tag: string; detail: string; repos: string[]; memory_gb: number; min_ram_gb?: number; os?: string[] }
 export const catalog = catalogJson as unknown as {
   sizes_gb: Record<string, number>
   live: Choice[]
   final: Choice[]
-  recommend: { max_ram_gb?: number; live: string; final: string }[]
+  recommend: { max_ram_gb?: number; live: string; final: string; os?: string[] }[]
   speaker: { repos: string[]; terms_url: string; token_url: string }
 }
 
+/** 이 기기 (models.json의 os 값): macos | windows | linux */
+export const thisOs = typeof navigator !== 'undefined' && /Windows/i.test(navigator.userAgent) ? 'windows' : typeof navigator !== 'undefined' && /Mac/i.test(navigator.userAgent) ? 'macos' : 'linux'
+/** os가 없는 항목은 맥(MLX) 전용 */
+export const forThisOs = (item: { os?: string[] }) => (item.os ?? ['macos']).includes(thisOs)
+/** 이 기기를 부르는 말 */
+export const deviceName = thisOs === 'macos' ? '맥' : 'PC'
+
 export function recommend(ram: number | null): { live: string; final: string } {
-  const rule = catalog.recommend.find((r) => r.max_ram_gb === undefined || (ram !== null && ram <= r.max_ram_gb)) ?? catalog.recommend[catalog.recommend.length - 1]
+  const rules = catalog.recommend.filter(forThisOs)
+  const rule = rules.find((r) => r.max_ram_gb === undefined || (ram !== null && ram <= r.max_ram_gb)) ?? rules[rules.length - 1]
   return { live: rule.live, final: rule.final }
 }
 
