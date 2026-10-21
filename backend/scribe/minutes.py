@@ -504,12 +504,15 @@ def people_of(m: dict) -> list[dict]:
 
 
 def attendees_html(people: list[dict], label: str = "참석자") -> str:
-    """참석자: 소속·직무·메모가 하나라도 있으면 표로, 없으면 이름만 한 줄로"""
+    """참석자: 소속·직무·메모가 하나라도 있으면 표로, 없으면 이름만 한 줄로.
+    받은 파일에서도 참석자를 고칠 수 있게 원래 값을 data-people에 함께 넣는다 (FILE_EDIT_HTML이 같은 모양으로 다시 그린다)."""
+    plain = [{k: p.get(k) or "" for k in ("name", "org", "role", "note")} for p in people]
+    attrs = f' data-label="{_esc(label)}" data-people="{_esc(json.dumps(plain, ensure_ascii=False))}"'
     if not people:
-        return ""
+        return f'<div class="attendees"{attrs} hidden></div>'
     head = f'<span class="lbl">{label}<b>{len(people)}</b></span>'
     if not any(p.get("org") or p.get("role") or p.get("note") for p in people):
-        return f'<div class="attendees">{head}<span class="people">{"".join(_person(p["name"], i) for i, p in enumerate(people))}</span></div>'
+        return f'<div class="attendees"{attrs}>{head}<span class="people">{"".join(_person(p["name"], i) for i, p in enumerate(people))}</span></div>'
 
     def cell(v: str) -> str:
         return _esc(v) if v else '<span class="tbd">—</span>'
@@ -519,7 +522,7 @@ def attendees_html(people: list[dict], label: str = "참석자") -> str:
         f'<td class="pm">{cell(p.get("note", ""))}</td></tr>'
         for i, p in enumerate(people)
     )
-    return (f'<div class="attendees detail">{head}<table class="people-table"><colgroup><col class="c-pn"><col class="c-org"><col class="c-role"><col></colgroup>'
+    return (f'<div class="attendees detail"{attrs}>{head}<table class="people-table"><colgroup><col class="c-pn"><col class="c-org"><col class="c-role"><col></colgroup>'
             f'<thead><tr><th>이름</th><th>소속</th><th>직무</th><th>메모</th></tr></thead><tbody>{rows}</tbody></table></div>')
 
 
@@ -628,6 +631,7 @@ h1 { margin: 0 0 22px; font-size: 27px; line-height: 1.32; font-weight: 700; let
 .fact dd { margin: 0; font-size: 14.5px; font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
 .sub { margin-left: 8px; color: var(--muted); font-weight: 400; font-size: 13px; }
 .attendees { display: flex; align-items: baseline; gap: 18px; padding: 12px 0 13px; border-bottom: 1px solid var(--line); }
+.attendees[hidden] { display: none; }
 .lbl { flex: none; font-size: 11.5px; font-weight: 500; color: var(--muted); }
 .attendees .lbl b { margin-left: 5px; color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
 .attendees.detail { display: block; padding-bottom: 4px; }
@@ -826,11 +830,34 @@ FILE_EDIT_CSS = r"""
 body.fediting main :is(.s, .ann-body, h1, h2, h3, p, li, td, dd) { cursor: text; }
 body.fediting main :is(.s, .ann-body, h1, h2, h3, p, li, td, dd):hover { outline: 1px dashed #b8c2d1; outline-offset: 2px; border-radius: 3px; }
 [contenteditable="true"] { outline: 2px solid #2383e2 !important; background: #f3f8fe; border-radius: 3px; }
-@media print { .fedit { display: none !important; } }
+body.fediting main .attendees { cursor: pointer; border-radius: 3px; }
+body.fediting main .attendees:hover { outline: 1px dashed #b8c2d1; outline-offset: 2px; }
+body.fediting main .attendees :is(td, p):hover { outline: none; }
+body.fediting main .attendees[hidden] { display: flex; }
+body.fediting main .attendees[hidden]::after { content: "참석자 없음 · 더블클릭해서 추가"; font-size: 12.5px; color: var(--muted); }
+/* 참석자 고치기: 문서 속 표처럼 담백하게. 칸은 글자처럼 보이다가 올리거나 고칠 때만 옅은 바탕 */
+.pe { padding: 12px 0 10px; border-bottom: 1px solid var(--line); }
+.pe table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 13.5px; }
+.pe th { padding: 0 6px 6px; text-align: left; font-size: 11.5px; font-weight: 500; color: var(--faint); border-bottom: 1px solid var(--line-2); }
+.pe td { padding: 1px 0; border-bottom: 1px solid var(--line-2); }
+.pe th:last-child, .pe td:last-child { width: 28px; padding: 0; text-align: center; }
+.pe input { width: 100%; box-sizing: border-box; padding: 6px; border: 0; border-radius: 4px; outline: 0; font: inherit; color: var(--ink); background: transparent; }
+.pe input::placeholder { color: var(--faint); }
+.pe input:hover { background: rgba(55, 53, 47, 0.04); }
+.pe input:focus { background: rgba(35, 131, 226, 0.07); box-shadow: inset 0 0 0 1px rgba(35, 131, 226, 0.35); }
+.pe button { font: inherit; font-size: 12.5px; white-space: nowrap; border: 0; border-radius: 4px; background: none; color: var(--muted); cursor: pointer; padding: 4px 8px; }
+.pe button:hover { background: rgba(55, 53, 47, 0.06); color: var(--ink); }
+.pe .del { width: 22px; height: 22px; padding: 0; font-size: 15px; line-height: 1; color: var(--faint); opacity: 0; }
+.pe tr:hover .del, .pe .del:focus { opacity: 1; }
+.pe .pe-bar { display: flex; gap: 2px; align-items: center; margin-top: 6px; }
+.pe .pe-bar .sp { flex: 1; }
+.pe button.ok { color: #fff; background: var(--ink); padding: 4px 11px; }
+.pe button.ok:hover { background: var(--ink); opacity: 0.88; color: #fff; }
+@media print { .fedit, .pe, .attendees[hidden] { display: none !important; } }
 """
 
 FILE_EDIT_HTML = r"""<div class="fedit" id="fedit">
-<span class="hint" id="fe-hint" hidden>글자를 <b>더블클릭</b>해서 고치고 Enter (Esc는 취소). 고칠 때마다 저절로 저장돼요. <b>이 파일만 바뀌고 회의 노트 앱의 기록에는 반영되지 않아요.</b></span>
+<span class="hint" id="fe-hint" hidden>글자를 <b>더블클릭</b>해서 고치고 Enter (Esc는 취소). 참석자를 더블클릭하면 이름·소속·직무·메모를 고치고 더하거나 뺄 수 있어요. 고칠 때마다 저절로 저장돼요. <b>이 파일만 바뀌고 회의 노트 앱의 기록에는 반영되지 않아요.</b></span>
 <span class="state" id="fe-state"></span>
 <button type="button" id="fe-toggle" title="이 파일을 고쳐요. 회의 노트 앱의 기록은 바뀌지 않아요">고치기</button>
 <button type="button" class="save" id="fe-save" hidden>저장</button>
@@ -858,7 +885,10 @@ FILE_EDIT_HTML = r"""<div class="fedit" id="fedit">
   // 예전에 이 브라우저에서 고친 것이 있으면 되살린다 (파일에 저장하지 않고 닫았어도)
   var draft = store(KEY);
   if (draft && draft !== main.innerHTML) { main.innerHTML = draft; state('이 브라우저에 저장해 둔 고친 내용을 불러왔어요'); sv.hidden = false; }
-  tg.addEventListener('click', function () { on(!document.body.classList.contains('fediting')); });
+  tg.addEventListener('click', function () {
+    if (closePeople && !closePeople(true)) return;  // 참석자를 고치던 중이면 고친 대로 넣고 끝낸다
+    on(!document.body.classList.contains('fediting'));
+  });
   function html() {
     var doc = document.documentElement.cloneNode(true);
     var b = doc.querySelector('body'); if (b) b.classList.remove('fediting');
@@ -885,8 +915,10 @@ FILE_EDIT_HTML = r"""<div class="fedit" id="fedit">
     else state(picker ? '이 브라우저에 저장됨 · 파일에도 저장하려면 [저장할 파일 정하기]를 한 번 눌러 주세요' : '이 브라우저에 저장됨 · 파일로 남기려면 [고친 파일 내려받기]');
   }
   document.addEventListener('dblclick', function (e) {
-    if (!document.body.classList.contains('fediting')) return;
-    var el = e.target.closest && e.target.closest(SEL);
+    if (!document.body.classList.contains('fediting') || !e.target.closest || e.target.closest('.pe')) return;
+    var at = e.target.closest('.attendees');
+    if (at && main.contains(at)) { people(at); return; }
+    var el = e.target.closest(SEL);
     if (!el || bar.contains(el) || !el.closest('main') || el.isContentEditable) return;
     var orig = el.innerHTML;
     el.setAttribute('contenteditable', 'true');
@@ -904,6 +936,112 @@ FILE_EDIT_HTML = r"""<div class="fedit" id="fedit">
     function blur() { done(true); }
     el.addEventListener('keydown', key); el.addEventListener('blur', blur);
   });
+  // 참석자: 더블클릭하면 표로 고치고 [완료](또는 Enter)로 문서에 넣는다. Esc·[취소]는 그대로 둔다.
+  // 참석자 칸은 attendees_html(파이썬)과 같은 모양으로 다시 그리고, 이름을 바꾸면 본문의 화자 이름·담당자도 함께 바꾼다.
+  var closePeople = null;
+  function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+  function initials(n) { n = n.trim(); return /^[가-힣]{2,4}$/.test(n) ? n.slice(-2) : (n.slice(0, 1).toUpperCase() || '?'); }
+  function chip(n, i) { return '<span class="person p' + (i % 6) + '"><span class="av">' + esc(initials(n)) + '</span>' + esc(n) + '</span>'; }
+  function attendees(ps, label) {
+    var a = ' data-label="' + esc(label) + '" data-people="' + esc(JSON.stringify(ps)) + '"';
+    if (!ps.length) return '<div class="attendees"' + a + ' hidden></div>';
+    var head = '<span class="lbl">' + esc(label) + '<b>' + ps.length + '</b></span>';
+    if (!ps.some(function (p) { return p.org || p.role || p.note; }))
+      return '<div class="attendees"' + a + '>' + head + '<span class="people">' + ps.map(function (p, i) { return chip(p.name, i); }).join('') + '</span></div>';
+    function cell(v) { return v ? esc(v) : '<span class="tbd">—</span>'; }
+    return '<div class="attendees detail"' + a + '>' + head + '<table class="people-table"><colgroup><col class="c-pn"><col class="c-org"><col class="c-role"><col></colgroup>'
+      + '<thead><tr><th>이름</th><th>소속</th><th>직무</th><th>메모</th></tr></thead><tbody>'
+      + ps.map(function (p, i) {
+        return '<tr><td class="pn">' + chip(p.name, i) + '</td><td>' + cell(p.org) + '</td><td>' + cell(p.role) + '</td><td class="pm">' + cell(p.note) + '</td></tr>';
+      }).join('') + '</tbody></table></div>';
+  }
+  function rename(ren, ps) {
+    var by = {}; ps.forEach(function (p) { by[p.name] = p; });
+    // 회의록의 담당자 칩 (참석자 칸은 이미 새로 그렸다)
+    main.querySelectorAll('.person').forEach(function (s) {
+      var t = s.lastChild, to = t && t.nodeType === 3 && ren[t.nodeValue];
+      if (!to || s.closest('.attendees')) return;
+      t.nodeValue = to;
+      var av = s.querySelector('.av'); if (av) av.textContent = initials(to);
+    });
+    // 전사 기록의 발언자 줄: 이름·머리글자, 이름 옆 소속·직무
+    main.querySelectorAll('.who .name').forEach(function (n) {
+      var who = n.parentNode, to = ren[n.textContent];
+      if (to) {
+        n.textContent = to;
+        var av = who.querySelector('.av'); if (av && !av.classList.contains('anon')) av.textContent = initials(to);
+      }
+      var p = by[n.textContent], info = p ? [p.org, p.role].filter(Boolean).join(' · ') : '', r = who.querySelector('.role');
+      if (info && !r) { r = document.createElement('span'); r.className = 'role'; n.after(r); }
+      if (info) r.textContent = info; else if (r) r.remove();
+    });
+  }
+  function people(at) {
+    if (closePeople) return;
+    var label = at.getAttribute('data-label') || '참석자', orig = [];
+    try { orig = JSON.parse(at.getAttribute('data-people') || '[]'); } catch (e) { orig = []; }
+    var rows = orig.map(function (p) { return { name: p.name || '', org: p.org || '', role: p.role || '', note: p.note || '', from: p.name || '' }; });
+    if (!rows.length) rows.push({ name: '', org: '', role: '', note: '', from: '' });
+    var box = document.createElement('div');
+    box.className = 'pe';
+    function draw() {
+      box.innerHTML = '<table><thead><tr><th>이름</th><th>소속</th><th>직무</th><th>메모</th><th></th></tr></thead><tbody>'
+        + rows.map(function (p, i) {
+          return '<tr data-i="' + i + '">' + ['name', 'org', 'role', 'note'].map(function (k) {
+            return '<td><input data-k="' + k + '" value="' + esc(p[k]) + '" placeholder="' + (k === 'name' ? '이름' : '비어 있음') + '"></td>';
+          }).join('') + '<td><button type="button" class="del" data-del="' + i + '" title="빼기" aria-label="빼기">×</button></td></tr>';
+        }).join('')
+        + '</tbody></table><div class="pe-bar"><button type="button" data-act="add">+ 참석자 추가</button><span class="sp"></span>'
+        + '<button type="button" data-act="cancel">취소</button><button type="button" class="ok" data-act="ok">완료</button></div>';
+    }
+    function close(keep) {
+      if (keep) {
+        var seen = {}, out = [], ren = {};
+        for (var i = 0; i < rows.length; i++) {
+          var r = rows[i], n = r.name.trim();
+          if (!n) continue;
+          if (seen[n]) { alert("'" + n + "' 참석자가 이미 있어요. 다른 이름으로 적어 주세요."); return false; }
+          seen[n] = 1;
+          out.push({ name: n, org: r.org.trim(), role: r.role.trim(), note: r.note.trim() });
+          if (r.from && r.from !== n) ren[r.from] = n;
+        }
+        if (JSON.stringify(out) !== JSON.stringify(orig)) {
+          var tmp = document.createElement('div');
+          tmp.innerHTML = attendees(out, label);
+          box.replaceWith(tmp.firstChild);
+          rename(ren, out);
+          closePeople = null;
+          saved();
+          return true;
+        }
+      }
+      box.replaceWith(at);
+      closePeople = null;
+      return true;
+    }
+    box.addEventListener('input', function (e) {
+      var k = e.target.getAttribute('data-k'), tr = e.target.closest('tr');
+      if (k && tr) rows[+tr.getAttribute('data-i')][k] = e.target.value;
+    });
+    box.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') { e.preventDefault(); close(false); }
+      else if (e.key === 'Enter' && !e.isComposing && e.target.tagName === 'INPUT') { e.preventDefault(); close(true); }
+    });
+    box.addEventListener('click', function (e) {
+      var del = e.target.getAttribute('data-del'), act = e.target.getAttribute('data-act');
+      if (del !== null) { rows.splice(+del, 1); draw(); }
+      else if (act === 'add') {
+        rows.push({ name: '', org: '', role: '', note: '', from: '' }); draw();
+        var ins = box.querySelectorAll('input[data-k="name"]'); ins[ins.length - 1].focus();
+      }
+      else if (act === 'ok') close(true);
+      else if (act === 'cancel') close(false);
+    });
+    draw();
+    at.replaceWith(box);
+    closePeople = close;
+    var first = box.querySelector('input'); if (first) first.focus();
+  }
   function fileName() {
     var name = decodeURIComponent((location.pathname.split('/').pop() || 'meeting.html'));
     return /\.html?$/i.test(name) ? name : name + '.html';

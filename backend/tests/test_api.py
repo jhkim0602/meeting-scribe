@@ -713,6 +713,10 @@ def test_participant_details_are_kept_carried_over_and_shown(client):
     for doc in ("transcript", "minutes"):
         h = client.get(f"/api/meetings/{mid}/{doc}.html").text
         assert 'class="people-table"' in h and "<td>전략기획팀</td><td>팀장</td>" in h and "예산 &lt;승인&gt; 권한" in h, doc
+        # 받은 파일: 참석자 원래 값을 함께 넣어 두고, 더블클릭으로 표에서 고친다 (앱 기록에는 반영 안 됨)
+        d = client.get(f"/api/meetings/{mid}/{doc}.html?download=1").text
+        assert 'data-people="[{&quot;name&quot;: &quot;한지우&quot;, &quot;org&quot;: &quot;전략기획팀&quot;, &quot;role&quot;: &quot;팀장&quot;' in d, doc
+        assert "function people(at)" in d and "참석자를 더블클릭하면" in d, doc
 
     # 다음 회의: 같은 이름이면 소속·직무를 이어받는다 (메모는 회의마다)
     m2 = client.post("/api/meetings", json={}).json()["id"]
