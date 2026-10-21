@@ -286,6 +286,10 @@ pub fn run(paths: &Paths, cfg: &Config, cancel: &Cancel, emit: &dyn Fn(Event)) -
         .map_err(|e| fail(emit, "python", format!("파이썬을 준비하지 못했어요. 인터넷 연결을 확인해 주세요.\n{e}")))?;
         emit(Event::new("python", "done", Some(1.0), "파이썬을 준비했어요"));
     }
+    // 윈도우: C++ 런타임을 파이썬 옆에 (시스템의 오래된 런타임과 섞이면 PyTorch가 켜지지 않는다)
+    if let Err(e) = crate::vcrt::ensure(paths) {
+        emit(Event::new("python", "warn", Some(1.0), format!("C++ 런타임을 파이썬 폴더에 넣지 못했어요: {e}")));
+    }
 
     // 2) 패키지
     if config::get_str(cfg, "packages_rev") == Some(rev.as_str()) && config::get_bool(cfg, "setup_done", false) {

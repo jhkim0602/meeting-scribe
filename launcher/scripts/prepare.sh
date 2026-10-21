@@ -55,4 +55,21 @@ if [[ ! -x "$RES/bin/$UV" || "$("$RES/bin/$UV" --version 2>/dev/null | awk '{pri
   chmod +x "$RES/bin/$UV"
   rm -rf "$tmp"
 fi
+
+if [[ "$TARGET" == *windows* ]]; then
+  # 앱의 파이썬 옆에 둘 C++ 런타임 한 벌 (src-tauri/src/vcrt.rs). 시스템 런타임이 오래된 PC에서도 PyTorch가 켜지게.
+  # 윈도우 앱을 빌드하는 Visual Studio(Build Tools)의 재배포용 폴더에서 가장 새 것을 그대로 가져온다.
+  echo "· C++ 런타임 (msvcp140.dll 등)"
+  vswhere="/c/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe"
+  vs=""; [[ -x "$vswhere" ]] && vs="$("$vswhere" -latest -products '*' -property installationPath | tr -d '\r')"
+  crt=""; [[ -n "$vs" ]] && crt="$(ls -d "$(cygpath -u "$vs")"/VC/Redist/MSVC/[0-9]*/x64/Microsoft.VC*.CRT 2>/dev/null | sort -V | tail -1 || true)"
+  if [[ ! -f "$crt/msvcp140.dll" ]]; then
+    echo "C++ 런타임을 찾지 못했어요. Visual Studio Build Tools의 'MSVC v143 - VS 2022 C++ x64/x86 빌드 도구'를 설치해 주세요."
+    exit 1
+  fi
+  rm -rf "$RES/bin/vcrt"
+  mkdir -p "$RES/bin/vcrt"
+  cp "$crt"/*.dll "$RES/bin/vcrt/"
+  echo "  $crt"
+fi
 du -sh "$RES/app" "$RES/bin" | sed 's/^/  /'

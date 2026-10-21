@@ -24,8 +24,22 @@ impl Paths {
         self.resources.join("bin").join(if cfg!(windows) { "uv.exe" } else { "uv" })
     }
 
+    /// 윈도우: 파이썬 옆에 둘 C++ 런타임 한 벌 (launcher/scripts/prepare.sh가 모은다)
+    pub fn vcrt(&self) -> PathBuf {
+        self.resources.join("bin").join("vcrt")
+    }
+
     pub fn venv(&self) -> PathBuf {
         self.support.join("venv")
+    }
+
+    /// venv가 가리키는 진짜 파이썬 폴더 (pyvenv.cfg의 home). 윈도우에서는 python.exe가 실제로 여기서 돈다.
+    pub fn python_home(&self) -> Option<PathBuf> {
+        let cfg = std::fs::read_to_string(self.venv().join("pyvenv.cfg")).ok()?;
+        cfg.lines().find_map(|l| {
+            let (k, v) = l.split_once('=')?;
+            (k.trim() == "home").then(|| PathBuf::from(v.trim()))
+        })
     }
 
     pub fn python(&self) -> PathBuf {

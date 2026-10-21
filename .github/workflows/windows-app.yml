@@ -80,6 +80,9 @@ jobs:
           # 한글·띄어쓰기가 든 경로에서도 (예: 윈도우 사용자 이름이 한글일 때)
           support="$RUNNER_TEMP/한글 경로/support"
           "$bin" --headless install --support "$support" --resources "$res" --set "data_dir=$RUNNER_TEMP/한글 경로/회의 기록" | tee "$RUNNER_TEMP/install.jsonl"
+          # 앱의 파이썬 옆에 C++ 런타임이 들어갔는지, PyTorch가 실제로 켜지는지 (시연용 엔진은 torch를 불러오지 않는다)
+          ls "$support"/python/*/msvcp140.dll
+          "$support/venv/Scripts/python.exe" -c "import torch; print('torch', torch.__version__)"
           "$bin" --headless serve --support "$support" --resources "$res"
           "$bin" --headless doctor --support "$support" --resources "$res"
 
