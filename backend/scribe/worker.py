@@ -108,7 +108,7 @@ class Progress:
 
 class Checkpoints:
     """창별 받아쓰기 결과와 화자 구분 결과를 meetings/<id>/ckpt/ 에 저장한다.
-    모델·언어·용어집이 바뀌면 key가 달라져 모두 지운다."""
+    모델·언어가 바뀌면 key가 달라져 모두 지운다."""
 
     def __init__(self, mdir: Path, key: str):
         self.dir = mdir / WORK / "ckpt"
@@ -261,8 +261,7 @@ def run(job_id: str) -> int:
             duration = wav_info(wav).duration
         store.update_meeting(mid, duration=duration)
 
-        context = store.get_setting("vocabulary", "") or ""
-        key = hashlib.sha1(f"{CKPT_VERSION}|{describe_final()}|{settings.language}|{context}|{WINDOW_S}".encode()).hexdigest()
+        key = hashlib.sha1(f"{CKPT_VERSION}|{describe_final()}|{settings.language}|{WINDOW_S}".encode()).hexdigest()
         ck = Checkpoints(mdir, key)
         windows = plan_windows(wav)
         total = max(1, windows[-1][1] if windows else 1)
@@ -315,7 +314,7 @@ def run(job_id: str) -> int:
                 if hasattr(engine, "base_offset"):
                     engine.base_offset = a / SAMPLE_RATE  # 시연용 엔진이 대본 위치를 맞추는 데 쓴다
                 segs = engine.transcribe_long(
-                    audio, language=settings.language, context=context,
+                    audio, language=settings.language,
                     on_progress=lambda f, a=a, b=b: prog.set("transcribe", (done + f * (b - a)) / total),
                 )
                 del audio

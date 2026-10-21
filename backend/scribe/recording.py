@@ -117,8 +117,8 @@ class RecordingSession:
         self.ws = ws
         self.writer = WavAppender(settings.meeting_dir(meeting_id) / "audio.wav")
         self.start_s = self.writer.duration
-        context = store.get_setting("vocabulary", "") or ""
-        self.seg = LiveSegmenter(holder.engine, language=settings.language, context=context, start_s=self.start_s)
+        # 용어 목록은 모델에 넣지 않는다: 말이 없는 짧은 소리에서 목록을 그대로 받아 적는 일이 있었다
+        self.seg = LiveSegmenter(holder.engine, language=settings.language, start_s=self.start_s)
         self._task: Optional[asyncio.Task] = None
         self._send_lock = asyncio.Lock()
         self.closed = False

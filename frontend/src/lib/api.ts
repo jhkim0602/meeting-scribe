@@ -166,7 +166,6 @@ export interface Health {
 }
 
 export interface AppSettings {
-  vocabulary: string
   /** 실시간 받아쓰기 모델 (왼쪽 아래 모델 표시에서 바꾼다) */
   live_model?: string | null
   live_choices?: { id: string; label: string; tag: string; detail: string; memory_gb: number }[]

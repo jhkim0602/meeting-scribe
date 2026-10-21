@@ -221,7 +221,6 @@ def storage() -> dict:
 
 
 class SettingsIn(BaseModel):
-    vocabulary: Optional[str] = None
     break_prompt_minutes: Optional[float] = None
     live_model: Optional[str] = None  # 실시간 받아쓰기 모델 id (models.json live)
 
@@ -254,7 +253,6 @@ def _save_app_config(key: str, value: Any) -> None:
 @app.get("/api/settings")
 def get_settings() -> dict:
     return {
-        "vocabulary": store.get_setting("vocabulary", ""),
         # 이만큼 조용하면 '쉬는 시간인가요?'를 묻는다 (0이면 묻지 않음)
         "break_prompt_minutes": store.get_setting("break_prompt_minutes", 3),
         # 실시간 받아쓰기 모델: 이 기기에서 고를 수 있는 것과 지금 것 (왼쪽 아래 모델 표시에서 바꾼다)
@@ -266,8 +264,6 @@ def get_settings() -> dict:
 
 @app.put("/api/settings")
 def put_settings(body: SettingsIn) -> dict:
-    if body.vocabulary is not None:
-        store.set_setting("vocabulary", body.vocabulary.strip())
     if body.break_prompt_minutes is not None:
         store.set_setting("break_prompt_minutes", max(0.0, min(60.0, float(body.break_prompt_minutes))))
     if body.live_model and body.live_model != _live_choice_id():
