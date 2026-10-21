@@ -15,6 +15,7 @@ mod remove;
 mod server;
 mod sys;
 mod update;
+mod vcrt;
 
 use paths::Paths;
 use serde_json::{json, Value};

@@ -130,7 +130,11 @@ impl Server {
         if fs::metadata(&log_path).map(|m| m.len() > 20 * 1024 * 1024).unwrap_or(false) {
             let _ = fs::rename(&log_path, paths.logs().join("server.old.log"));
         }
-        let log = OpenOptions::new().create(true).append(true).open(&log_path).map_err(|e| e.to_string())?;
+        let mut log = OpenOptions::new().create(true).append(true).open(&log_path).map_err(|e| e.to_string())?;
+        // 윈도우: 파이썬 옆에 C++ 런타임을 맞춰 둔다 (앱을 업데이트했거나 파이썬을 새로 받았을 때)
+        if let Err(e) = crate::vcrt::ensure(paths) {
+            let _ = writeln!(log, "[실행기] C++ 런타임을 파이썬 폴더에 넣지 못했어요: {e}");
+        }
         let err = log.try_clone().map_err(|e| e.to_string())?;
         let mut cmd = Command::new(paths.python());
         cmd.args(["-m", "uvicorn", "scribe.main:app", "--host", "127.0.0.1", "--port", &self.port.to_string(), "--log-level", "warning"])
