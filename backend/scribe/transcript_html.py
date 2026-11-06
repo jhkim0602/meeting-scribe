@@ -14,6 +14,7 @@ import datetime as _dt
 import re
 from typing import Any, Optional
 
+from . import document_outline
 from .db import Store
 from .export import _local_ranges, divider_text, record_source
 from .minutes import _chip, _esc, _facts, _initials, page, people_of
@@ -99,7 +100,7 @@ class _Marks:
 
 def _memo_html(m: dict) -> str:
     t = float(m["anchor"].get("t", 0) or 0)
-    return f'<div class="memo" id="a-{_esc(m["id"])}" data-ann="{_esc(m["id"])}"><span class="memo-h"><span class="memo-tag">메모</span>{_chip(t)}</span><p class="ann-body">{_esc(m["body"])}</p></div>'
+    return f'<div class="memo" id="a-{_esc(m["id"])}" data-ann="{_esc(m["id"])}" data-t="{t}"><span class="memo-h"><span class="memo-tag">메모</span>{_chip(t)}</span><p class="ann-body">{_esc(m["body"])}</p></div>'
 
 
 def _divider_html(d: dict) -> str:
@@ -107,9 +108,10 @@ def _divider_html(d: dict) -> str:
 
 
 def _comment_html(c: dict) -> str:
+    t = float(c["anchor"].get("t0", 0) or 0)
     replies = "".join(f'<p class="reply">{_esc(r.get("text", ""))}</p>' for r in c.get("replies") or [])
     done = '<span class="tag ok">해결</span>' if c.get("status") == "resolved" else ""
-    return (f'<div class="cmt" id="c-{c["n"]}" data-ann="{_esc(c.get("id", ""))}"><span class="n">{c["n"]}</span>'
+    return (f'<div class="cmt" id="c-{c["n"]}" data-ann="{_esc(c.get("id", ""))}" data-t="{t}"><span class="n">{c["n"]}</span>'
             f'<div class="cb"><p class="body"><span class="ann-body">{_esc(c.get("body") or "")}</span>{done}</p>{replies}</div></div>')
 
 
@@ -240,7 +242,8 @@ def render(data: dict, audio_src: Optional[str] = None, generated: Optional[floa
             f'<div class="transcript">{"".join(blocks)}</div>')
     return page(
         data, brand=("전사 기록", "Transcript", "TR"), facts=_facts(data["start"], data["duration"], data["place"], [("기록", "파일 받아쓰기" if data.get("kind", "").startswith("파일") else "회의 중 기록")]),
-        body=body, audio_src=audio_src, generated=generated, tools=tools, extra_css=CSS, extra_js=JS,
+        body=body, audio_src=audio_src, generated=generated, tools=tools,
+        extra_css=CSS + document_outline.CSS, extra_js=JS + document_outline.JS,
     )
 
 
@@ -340,6 +343,7 @@ JS = r"""
   var spans = Array.prototype.slice.call(document.querySelectorAll('.s[data-t]'));
   var times = spans.map(function (s) { return parseFloat(s.dataset.t); });
   var cur = null;
+  spans.forEach(function (s) { s.classList.remove('now'); });
   au.addEventListener('timeupdate', function () {
     var t = au.currentTime, lo = 0, hi = times.length - 1, i = -1;
     while (lo <= hi) { var mid = (lo + hi) >> 1; if (times[mid] <= t + 0.05) { i = mid; lo = mid + 1; } else hi = mid - 1; }

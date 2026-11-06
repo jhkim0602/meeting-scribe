@@ -1,6 +1,6 @@
 """회의록 HTML: 회의 정보, 결정 사항, 할 일, 논의, 내 노트, 회의 중 메모·댓글을 한 장의 문서로.
 
-파일 하나로 열리고(글꼴은 인터넷이 있으면 Pretendard, 없으면 시스템 글꼴), 인쇄하면 A4에 맞는다.
+파일 하나로 인터넷 없이 열리고(시스템 글꼴), 인쇄하면 A4에 맞는다.
 같은 폴더에 녹음 파일이 있으면 시각을 눌러 그 부분을 들을 수 있다.
 받아 적은 기록 자체는 넣지 않는다 (요약과 사람이 쓴 것만, 기록은 전사 기록 문서에).
 """
@@ -555,6 +555,9 @@ def page(data: dict, *, brand: tuple[str, str, str], facts: str, body: str, audi
         player = (f'<div class="player" id="player" hidden><button type="button" class="pp" id="pp" aria-label="재생">{ICON["play"]}</button>'
                   f'<span class="pl-label">녹음</span><span class="pl-time" id="pt">00:00</span>'
                   f'<audio id="au" preload="metadata" src="{_esc(audio_src)}"></audio></div>')
+    font_links = (f'<link rel="stylesheet" media="print" onload="this.media=\'all\'" href="{FONT_CSS}">'
+                  f'<noscript><link rel="stylesheet" href="{FONT_CSS}"></noscript>') if tools else ""
+    document_kind = "transcript" if prefix == "TR" else "minutes"
     cls = " ".join(c for c in ("paper", "has-audio" if audio_src else "", "wide" if wide else "") if c)
     return f"""<!doctype html>
 <html lang="ko">
@@ -562,11 +565,10 @@ def page(data: dict, *, brand: tuple[str, str, str], facts: str, body: str, audi
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{_esc(data["title"])} · {ko}</title>
-<link rel="stylesheet" media="print" onload="this.media='all'" href="{FONT_CSS}">
-<noscript><link rel="stylesheet" href="{FONT_CSS}"></noscript>
+{font_links}
 <style>{CSS}{extra_css}{EDIT_CSS if tools else FILE_EDIT_CSS}</style>
 </head>
-<body{f' class="in-app" data-meeting="{_esc(data["id"])}"' if tools else ""}>
+<body data-document-kind="{document_kind}"{f' class="in-app" data-meeting="{_esc(data["id"])}"' if tools else ""}>
 {tools}
 <main class="{cls}">
   <div class="doc-top"><span class="brand">{ko}<span class="en">{en}</span></span><span class="doc-no">{doc_no}</span></div>
@@ -579,7 +581,15 @@ def page(data: dict, *, brand: tuple[str, str, str], facts: str, body: str, audi
   <footer class="foot"><span>회의 노트로 작성</span><span>{gen.year}. {gen.month}. {gen.day}. {gen:%H:%M} 생성</span></footer>
   {player}
 </main>
-<script>{JS}{extra_js}</script>
+<script>
+(function () {{
+  function initDocument() {{
+{JS}{extra_js}
+  }}
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initDocument, {{ once: true }});
+  else initDocument();
+}})();
+</script>
 {_edit_scripts(data) if tools else FILE_EDIT_HTML}
 </body>
 </html>
@@ -720,7 +730,7 @@ a { color: var(--accent); text-decoration: none; border-bottom: 1px solid rgba(4
   border: 1px solid var(--line); border-radius: 4px; background: var(--paper); color: var(--muted);
   font: 500 11px/1 var(--mono); letter-spacing: 0; cursor: default; white-space: nowrap;
 }
-.can-play .t { cursor: pointer; }
+.can-play .t, .can-play .memo[data-ann], .can-play .cmt[data-ann], .can-play .cm[data-c] { cursor: pointer; }
 .can-play .t::before { content: ""; border-left: 5px solid currentColor; border-top: 3.5px solid transparent; border-bottom: 3.5px solid transparent; opacity: 0.7; }
 .can-play .t:hover { border-color: var(--accent); background: var(--accent); color: #fff; }
 .ref .t { margin: 0; }
@@ -748,6 +758,11 @@ a { color: var(--accent); text-decoration: none; border-bottom: 1px solid rgba(4
   background: var(--ink); color: #fff; border-radius: 22px; box-shadow: 0 10px 28px rgba(15, 23, 42, 0.25); font-size: 13px;
 }
 .player[hidden] { display: none; }
+
+.player.audio-missing { width: max-content; max-width: calc(100vw - 32px); height: auto; min-height: 44px; padding: 8px 12px; }
+.player.audio-missing .pl-time { white-space: normal; line-height: 1.5; font-family: inherit; font-size: 12px; }
+.player.audio-missing .pp, .player.audio-missing .pl-label { display: none; }
+
 .pp { display: grid; place-items: center; width: 32px; height: 32px; border: 0; border-radius: 50%; background: #fff; cursor: pointer; }
 .pp svg { width: 13px; height: 13px; fill: var(--ink); margin-left: 2px; }
 .pp.on svg { margin-left: 0; }
@@ -793,22 +808,65 @@ a { color: var(--accent); text-decoration: none; border-bottom: 1px solid rgba(4
 
 JS = r"""
 (function () {
-  var au = document.getElementById('au'); if (!au) return;
+  var au = document.getElementById('au');
   var bar = document.getElementById('player'), pp = document.getElementById('pp'), pt = document.getElementById('pt');
   var play = '<svg viewBox="0 0 16 16"><path d="M5 3.5v9l7-4.5-7-4.5Z"/></svg>';
   var pause = '<svg viewBox="0 0 16 16"><path d="M4.5 3h2.5v10H4.5zM9 3h2.5v10H9z"/></svg>';
-  function fmt(s) { s = Math.max(0, Math.floor(s)); var h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), r = s % 60;
-    return (h ? h + ':' + String(m).padStart(2, '0') : String(m).padStart(2, '0')) + ':' + String(r).padStart(2, '0'); }
-  function ready() { bar.hidden = false; document.body.classList.add('can-play'); }
-  au.addEventListener('loadedmetadata', ready);
-  if (au.readyState >= 1) ready();  // 글꼴을 기다리는 사이에 이미 읽혔을 수 있다
-  au.addEventListener('timeupdate', function () { pt.textContent = fmt(au.currentTime); });
-  au.addEventListener('play', function () { pp.innerHTML = pause; pp.classList.add('on'); });
-  au.addEventListener('pause', function () { pp.innerHTML = play; pp.classList.remove('on'); });
-  pp.addEventListener('click', function () { au.paused ? au.play() : au.pause(); });
-  document.addEventListener('click', function (e) {
-    var b = e.target.closest && e.target.closest('.t'); if (!b || bar.hidden) return;
-    au.currentTime = parseFloat(b.dataset.t || '0'); au.play();
+  var pendingTime = null;
+  function fmt(s) {
+    s = Math.max(0, Math.floor(s)); var h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), r = s % 60;
+    return (h ? h + ':' + String(m).padStart(2, '0') : String(m).padStart(2, '0')) + ':' + String(r).padStart(2, '0');
+  }
+  function icon() {
+    pp.innerHTML = au.paused ? play : pause; pp.classList.toggle('on', !au.paused);
+    pp.setAttribute('aria-label', au.paused ? '재생' : '일시정지');
+  }
+  function start() {
+    if (au.error) return;
+    var started = au.play();
+    if (started && started.catch) started.catch(function () { pp.title = '재생 버튼을 눌러 주세요'; });
+  }
+  function ready() {
+    bar.hidden = false; bar.classList.remove('audio-missing'); pp.disabled = false;
+    document.body.classList.add('can-play');
+    if (pendingTime !== null) { au.currentTime = pendingTime; pendingTime = null; }
+    pt.textContent = fmt(au.currentTime); icon();
+  }
+  function failed() {
+    bar.hidden = false; bar.classList.add('audio-missing'); pp.disabled = true;
+    pt.textContent = '녹음 파일을 같은 폴더에 두고 다시 열어 주세요'; document.body.classList.remove('can-play');
+  }
+  if (au) {
+    au.addEventListener('loadedmetadata', ready);
+    au.addEventListener('error', failed);
+    au.addEventListener('timeupdate', function () { if (!au.error) pt.textContent = fmt(au.currentTime); });
+    au.addEventListener('play', icon); au.addEventListener('pause', icon);
+    pp.addEventListener('click', function () { if (au.paused) start(); else au.pause(); });
+    if (au.error) failed(); else if (au.readyState >= 1) ready();
+  }
+  document.addEventListener('click', function (event) {
+    if (!event.target.closest || event.target.isContentEditable) return;
+    var stamp = event.target.closest('.t[data-t]');
+    var link = event.target.closest('.jump[href^="#"], .cn[href^="#"]');
+    var note = event.target.closest('.memo[data-ann], .cmt[data-ann]');
+    var mark = event.target.closest('.cm[data-c]');
+    // A srcdoc fragment otherwise resolves against the outer file and reloads it in the frame.
+    if (link) {
+      event.preventDefault(); note = document.getElementById(link.getAttribute('href').slice(1));
+      if (note) note.scrollIntoView({ block: 'start' });
+    } else if (mark) note = document.getElementById('c-' + mark.dataset.c);
+    if (!au || ((document.body.classList.contains('fediting') || document.body.classList.contains('editing')) && !stamp)) return;
+    var time;
+    if (stamp) time = parseFloat(stamp.dataset.t);
+    else if (note) {
+      time = parseFloat(note.dataset.t);
+      if (!Number.isFinite(time)) {
+        stamp = note.querySelector('.t[data-t]'); if (stamp) time = parseFloat(stamp.dataset.t);
+      }
+    }
+    if (!Number.isFinite(time) || time < 0) return;
+    if (au.readyState >= 1) { au.currentTime = time; pendingTime = null; } else pendingTime = time;
+    start();
   });
 })();
 """
@@ -857,7 +915,7 @@ body.fediting main .attendees[hidden]::after { content: "참석자 없음 · 더
 """
 
 FILE_EDIT_HTML = r"""<div class="fedit" id="fedit">
-<span class="hint" id="fe-hint" hidden>글자를 <b>더블클릭</b>해서 고치고 Enter (Esc는 취소). 참석자를 더블클릭하면 이름·소속·직무·메모를 고치고 더하거나 뺄 수 있어요. 고칠 때마다 저절로 저장돼요. <b>이 파일만 바뀌고 회의 노트 앱의 기록에는 반영되지 않아요.</b></span>
+<span class="hint" id="fe-hint" hidden>글자를 <b>더블클릭</b>해서 고치고 Enter (Esc는 취소). 참석자를 더블클릭하면 이름·소속·직무·메모를 고치고 더하거나 뺄 수 있어요. 고칠 때마다 이 브라우저에 임시저장돼요. 파일로 보내려면 저장 버튼을 눌러 주세요. <b>이 파일만 바뀌고 회의 노트 앱의 기록에는 반영되지 않아요.</b></span>
 <span class="state" id="fe-state"></span>
 <button type="button" id="fe-toggle" title="이 파일을 고쳐요. 회의 노트 앱의 기록은 바뀌지 않아요">고치기</button>
 <button type="button" class="save" id="fe-save" hidden>저장</button>
@@ -872,14 +930,16 @@ FILE_EDIT_HTML = r"""<div class="fedit" id="fedit">
   var bar = document.getElementById('fedit'), tg = document.getElementById('fe-toggle'), sv = document.getElementById('fe-save'),
       hint = document.getElementById('fe-hint'), st = document.getElementById('fe-state'), main = document.querySelector('main');
   var SEL = '.s, .ann-body, h1, h2, h3, p, li, td, dd';
-  var KEY = 'scribe-file-edit:' + location.pathname;
-  var picker = !!window.showSaveFilePicker, handle = null, writing = Promise.resolve();
+  var fileWindow = window;
+  try { if (parent !== window && parent.document.getElementById('meeting-scribe-data')) fileWindow = parent; } catch (e) {}
+  var KEY = 'scribe-file-edit:v2:' + fileWindow.location.pathname + ':' + document.body.dataset.documentKind;
+  var picker = !!fileWindow.showSaveFilePicker, handle = null, writing = Promise.resolve(), memoryDraft = false;
   function state(t) { st.textContent = t; }
   function store(get, set) { try { return set === undefined ? localStorage.getItem(get) : (set === null ? localStorage.removeItem(get) : localStorage.setItem(get, set)); } catch (e) { return null; } }
   function on(v) {
     document.body.classList.toggle('fediting', v);
     tg.classList.toggle('on', v); tg.textContent = v ? '고치기 끝내기' : '고치기';
-    hint.hidden = !v; sv.hidden = !v && !store(KEY);
+    hint.hidden = !v; sv.hidden = !v && !store(KEY) && !memoryDraft;
     sv.textContent = handle ? '다른 이름으로 저장' : (picker ? '저장할 파일 정하기' : '고친 파일 내려받기');
   }
   // 예전에 이 브라우저에서 고친 것이 있으면 되살린다 (파일에 저장하지 않고 닫았어도)
@@ -889,14 +949,31 @@ FILE_EDIT_HTML = r"""<div class="fedit" id="fedit">
     if (closePeople && !closePeople(true)) return;  // 참석자를 고치던 중이면 고친 대로 넣고 끝낸다
     on(!document.body.classList.contains('fediting'));
   });
+  function clean(doc) {
+    var copy = doc.documentElement.cloneNode(true), body = copy.querySelector('body');
+    if (body) body.classList.remove('fediting', 'can-play', 'has-outline', 'outline-collapsed');
+    copy.querySelectorAll('[contenteditable]').forEach(function (node) { node.removeAttribute('contenteditable'); });
+    copy.querySelectorAll('.now').forEach(function (node) { node.classList.remove('now'); });
+    copy.querySelectorAll('.annotation-outline, .outline-toggle').forEach(function (node) { node.remove(); });
+    ['#fe-hint', '#fe-save', '#player'].forEach(function (selector) { var node = copy.querySelector(selector); if (node) node.hidden = true; });
+    var toggle = copy.querySelector('#fe-toggle'); if (toggle) { toggle.classList.remove('on'); toggle.textContent = '고치기'; }
+    var state = copy.querySelector('#fe-state'); if (state) state.textContent = '';
+    var player = copy.querySelector('#player'); if (player) player.classList.remove('audio-missing');
+    var pp = copy.querySelector('#pp');
+    if (pp) { pp.classList.remove('on'); pp.disabled = false; pp.removeAttribute('title'); pp.innerHTML = '<svg viewBox="0 0 16 16"><path d="M5 3.5v9l7-4.5-7-4.5Z"/></svg>'; }
+    var pt = copy.querySelector('#pt'); if (pt) pt.textContent = '00:00';
+    return copy;
+  }
   function html() {
-    var doc = document.documentElement.cloneNode(true);
-    var b = doc.querySelector('body'); if (b) b.classList.remove('fediting');
-    doc.querySelectorAll('[contenteditable]').forEach(function (n) { n.removeAttribute('contenteditable'); });
-    ['#fe-hint', '#fe-save'].forEach(function (q) { var n = doc.querySelector(q); if (n) n.hidden = true; });
-    var t = doc.querySelector('#fe-toggle'); if (t) { t.classList.remove('on'); t.textContent = '고치기'; }
-    var s = doc.querySelector('#fe-state'); if (s) s.textContent = '';
-    return '<!doctype html>\n' + doc.outerHTML;
+    if (fileWindow !== window) {
+      var whole = fileWindow.document.documentElement.cloneNode(true);
+      whole.querySelectorAll('iframe[srcdoc]').forEach(function (frame) {
+        var live = fileWindow.document.getElementById(frame.id);
+        if (live && live.contentDocument) frame.setAttribute('srcdoc', '<!doctype html>\n' + clean(live.contentDocument).outerHTML);
+      });
+      return '<!doctype html>\n' + whole.outerHTML;
+    }
+    return '<!doctype html>\n' + clean(document).outerHTML;
   }
   function blob() { return new Blob([html()], { type: 'text/html;charset=utf-8' }); }
   function writeFile() {
@@ -904,14 +981,15 @@ FILE_EDIT_HTML = r"""<div class="fedit" id="fedit">
     writing = writing.then(function () {
       return handle.createWritable().then(function (w) { return w.write(blob()).then(function () { return w.close(); }); });
     }).then(function () { state('저장됨 · ' + handle.name); return true; },
-            function (e) { state('파일에 저장하지 못했어요 (이 브라우저에는 저장해 뒀어요): ' + e.message); handle = null; on(true); return false; });
+            function (e) { state('파일에 저장하지 못했어요' + (memoryDraft ? ' · 현재 화면에만 남아 있어요: ' : ' (이 브라우저에는 저장해 뒀어요): ') + e.message); handle = null; on(true); return false; });
     return writing;
   }
   function saved() {
     // 고칠 때마다: 브라우저에 먼저, 고른 파일이 있으면 그 파일에도
-    store(KEY, main.innerHTML);
+    var cached = store(KEY, main.innerHTML) !== null; memoryDraft = !cached;
     sv.hidden = false;
     if (handle) { state('저장하는 중…'); writeFile(); }
+    else if (!cached) state('임시저장을 사용할 수 없어요 · 저장 버튼으로 파일을 저장해 주세요');
     else state(picker ? '이 브라우저에 저장됨 · 파일에도 저장하려면 [저장할 파일 정하기]를 한 번 눌러 주세요' : '이 브라우저에 저장됨 · 파일로 남기려면 [고친 파일 내려받기]');
   }
   document.addEventListener('dblclick', function (e) {
@@ -1043,12 +1121,13 @@ FILE_EDIT_HTML = r"""<div class="fedit" id="fedit">
     var first = box.querySelector('input'); if (first) first.focus();
   }
   function fileName() {
-    var name = decodeURIComponent((location.pathname.split('/').pop() || 'meeting.html'));
+    var name = decodeURIComponent((fileWindow.location.pathname.split('/').pop() || 'meeting.html'));
     return /\.html?$/i.test(name) ? name : name + '.html';
   }
   sv.addEventListener('click', function () {
+    if (closePeople && !closePeople(true)) return;
     if (picker) {
-      window.showSaveFilePicker({ suggestedName: fileName(), types: [{ description: 'HTML', accept: { 'text/html': ['.html'] } }] })
+      fileWindow.showSaveFilePicker({ suggestedName: fileName(), types: [{ description: 'HTML', accept: { 'text/html': ['.html'] } }] })
         .then(function (h) { handle = h; return writeFile(); })
         .then(function (ok) { if (ok) { store(KEY, null); on(document.body.classList.contains('fediting')); } })
         .catch(function (e) { if (e && e.name !== 'AbortError') download(); });

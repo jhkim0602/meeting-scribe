@@ -797,9 +797,9 @@ def test_meeting_export_import_roundtrip(client):
     day = time.strftime("%Y-%m-%d", time.localtime(m["created_at"]))
     name = f"{day}_주간 회의 기획 개발"  # 파일 이름에 못 쓰는 글자는 빼고
     zf = zipfile.ZipFile(io.BytesIO(r.content))
-    assert sorted(zf.namelist()) == [f"{name}/{name}.html", f"{name}/{name}.m4a"]
-    page = zf.read(f"{name}/{name}.html").decode()
-    assert "전사 기록" in page and "회의록" in page and f'{name}.m4a' in page
+    assert sorted(zf.namelist()) == [f"{name}/README.txt", f"{name}/meeting.html", f"{name}/recording.m4a"]
+    page = zf.read(f"{name}/meeting.html").decode()
+    assert "전사 기록" in page and "회의록" in page and 'recording.m4a' in page
 
     # zip 그대로 불러오기
     r = client.post("/api/import", files=[("files", (f"{name}.zip", r.content, "application/zip"))])

@@ -1,8 +1,9 @@
 """회의 파일: 회의 하나를 '날짜_제목' 폴더(HTML 하나 + 녹음)로 내보내고, 그 파일을 다시 불러온다.
 
   2026-10-20_주간회의/
-    2026-10-20_주간회의.html   전사 기록·회의록 탭 + 불러오기용 원본 데이터(보이지 않는 JSON)
-    2026-10-20_주간회의.m4a    같은 폴더에 있으면 HTML에서 시각을 눌러 들을 수 있다
+    meeting.html             전사 기록·회의록 탭 + 불러오기용 원본 데이터(보이지 않는 JSON)
+    recording.m4a            같은 폴더에 있으면 HTML에서 시각을 눌러 들을 수 있다
+    README.txt               압축 해제·재생·수정 파일 전달 안내
 
 브라우저로 열면 보기만 하고, 앱에서 불러오면 보통 회의처럼 이어서 고칠 수 있다.
 불러올 때는 문장·메모 id를 새로 만들어, 같은 파일을 여러 번 불러와도 서로 섞이지 않는다.
@@ -14,6 +15,7 @@ import html
 import json
 import re
 import time
+import unicodedata
 import zipfile
 from pathlib import Path
 from typing import Any, Iterator, Optional
@@ -45,7 +47,8 @@ class MeetingFileError(ValueError):
 def base_name(m: dict) -> str:
     """2026-10-20_주간회의 (파일 이름에 못 쓰는 글자는 빼고)"""
     day = time.strftime("%Y-%m-%d", time.localtime(m["created_at"]))
-    title = " ".join(_UNSAFE.sub(" ", m.get("title") or "").split()).strip(".")[:80] or "회의"
+    title = unicodedata.normalize("NFC", m.get("title") or "")
+    title = " ".join(_UNSAFE.sub(" ", title).split())[:80].strip(" .") or "회의"
     return f"{day}_{title}"
 
 
@@ -121,22 +124,7 @@ def render(store: Store, views: Views, meeting_id: str, audio_name: Optional[str
 {frames}
 <script type="application/json" id="{DATA_ID}">{payload}</script>
 <script>
-(function () {{
-  var tabs = document.querySelectorAll('nav [data-tab]');
-  tabs.forEach(function (b) {{
-    b.addEventListener('click', function () {{
-      tabs.forEach(function (o) {{
-        var on = o === b;
-        o.setAttribute('aria-pressed', on ? 'true' : 'false');
-        document.getElementById('f-' + o.dataset.tab).hidden = !on;
-      }});
-    }});
-  }});
-  document.getElementById('print').addEventListener('click', function () {{
-    var f = document.querySelector('iframe:not([hidden])');
-    if (f && f.contentWindow) f.contentWindow.print();
-  }});
-}})();
+{TABS_JS}
 </script>
 </body>
 </html>
@@ -144,16 +132,29 @@ def render(store: Store, views: Views, meeting_id: str, audio_name: Optional[str
 
 
 def iter_zip(store: Store, views: Views, meeting_id: str, name: str) -> Iterator[bytes]:
-    """name/name.html + name/name.m4a 를 zip으로 흘려보낸다 (녹음은 이미 압축돼 있어 그대로)"""
+    """한글 폴더 안의 고정 파일명: Windows의 문자 정규화·경로 길이 차이에도 녹음을 찾는다."""
+    name = unicodedata.normalize("NFC", name)
     audio = audio_file(settings.meeting_path(meeting_id))
-    page = render(store, views, meeting_id, f"{name}{audio.suffix}" if audio else None) or ""
+    audio_name = f"recording{audio.suffix}" if audio else None
+    page = render(store, views, meeting_id, audio_name) or ""
+    recording_help = f"meeting.html과 {audio_name}를 같은 폴더에 두세요." if audio else "이 회의에는 녹음 파일이 포함되어 있지 않습니다."
+    readme = ("회의 노트 — 전달받은 파일 열기\n\n"
+              "1. ZIP의 [모두 추출]로 폴더 전체를 먼저 풉니다.\n"
+              "2. 폴더 안의 meeting.html을 Edge 또는 Chrome으로 엽니다.\n"
+              f"3. {recording_help}\n\n"
+              "오른쪽 메모·댓글 목차를 누르면 해당 위치로 이동하고 녹음이 그 시간부터 재생됩니다.\n"
+              "인터넷이나 회의 노트 앱 설치 없이 볼 수 있습니다.\n"
+              "수정한 내용은 브라우저에 임시저장됩니다. 다른 사람에게 보내려면 저장 버튼으로 HTML을 저장하고 녹음도 함께 보내세요.\n"
+              "파일에서 고친 내용은 앱의 기존 기록과 불러오기용 원본 데이터에 자동 반영되지 않습니다.\n")
     sink = _Sink()
     with zipfile.ZipFile(sink, "w", allowZip64=True) as zf:
-        zf.writestr(zipfile.ZipInfo(f"{name}/{name}.html", date_time=time.localtime()[:6]), page.encode("utf-8"),
+        zf.writestr(zipfile.ZipInfo(f"{name}/meeting.html", date_time=time.localtime()[:6]), page.encode("utf-8"),
                     compress_type=zipfile.ZIP_DEFLATED)
         yield sink.take()
+        zf.writestr(f"{name}/README.txt", readme.encode("utf-8-sig"), compress_type=zipfile.ZIP_DEFLATED)
+        yield sink.take()
         if audio is not None:
-            yield from _add_file(zf, sink, audio, f"{name}/{name}{audio.suffix}", compress=False)
+            yield from _add_file(zf, sink, audio, f"{name}/{audio_name}", compress=audio.suffix == ".wav")
     yield sink.take()
 
 
@@ -254,3 +255,38 @@ def import_meeting(store: Store, data: dict, audio: Optional[tuple[str, Any]] = 
             while chunk := f.read(1 << 20):
                 out.write(chunk)
     return store.get_meeting(mid)  # type: ignore[return-value]
+
+
+TABS_JS = r"""
+(function () {
+  var tabs = document.querySelectorAll('nav [data-tab]');
+  var switchVersion = 0;
+  function audio(frame) { return frame && frame.contentDocument && frame.contentDocument.getElementById('au'); }
+  tabs.forEach(function (button) {
+    button.addEventListener('click', function () {
+      if (button.getAttribute('aria-pressed') === 'true') return;
+      var previous = document.querySelector('iframe:not([hidden])');
+      var oldAudio = audio(previous);
+      var time = oldAudio ? oldAudio.currentTime : 0, playing = oldAudio && !oldAudio.paused;
+      var version = ++switchVersion;
+      tabs.forEach(function (other) {
+        var on = other === button, frame = document.getElementById('f-' + other.dataset.tab);
+        other.setAttribute('aria-pressed', String(on)); frame.hidden = !on;
+        var au = audio(frame); if (!on && au) au.pause();
+      });
+      var next = document.getElementById('f-' + button.dataset.tab), au = audio(next);
+      if (!au) return;
+      function resume() {
+        if (version !== switchVersion || next.hidden) return;
+        au.currentTime = Math.min(time, Number.isFinite(au.duration) ? au.duration : time);
+        if (playing) { var started = au.play(); if (started && started.catch) started.catch(function () {}); }
+      }
+      if (au.readyState >= 1) resume(); else au.addEventListener('loadedmetadata', resume, { once: true });
+    });
+  });
+  document.getElementById('print').addEventListener('click', function () {
+    var frame = document.querySelector('iframe:not([hidden])');
+    if (frame && frame.contentWindow) frame.contentWindow.print();
+  });
+})();
+"""

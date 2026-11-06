@@ -14,7 +14,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-14, ubuntu-latest]
+        include:
+          - os: windows-latest
+            browser: chrome
+          - os: windows-latest
+            browser: msedge
+          - os: macos-14
+            browser: chrome
+          - os: ubuntu-latest
+            browser: chrome
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     defaults:
@@ -23,6 +31,7 @@ jobs:
         working-directory: backend
     env:
       PYTHONUTF8: "1"
+      SCRIBE_BROWSER_CHANNEL: ${{ matrix.browser }}
     steps:
       - uses: actions/checkout@v6
 
@@ -44,6 +53,9 @@ jobs:
 
       - name: 패키지
         run: pip install -r requirements-dev.txt
+
+      - name: HTML 내보내기 브라우저 시험 준비
+        run: python -m playwright install --with-deps ${{ matrix.browser }}
 
       - name: 시험
         run: python -m pytest -q
