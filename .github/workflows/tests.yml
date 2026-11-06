@@ -19,7 +19,7 @@ jobs:
             browser: chrome
           - os: windows-latest
             browser: msedge
-          - os: macos-14
+          - os: macos-15
             browser: chrome
           - os: ubuntu-latest
             browser: chrome
